@@ -1,0 +1,28 @@
+{
+  "VALIDATION_ERROR": "Certaines informations saisies sont invalides.",
+  "RATE_LIMITED": "Trop de tentatives. Veuillez réessayer plus tard.",
+  "OTP_INVALID": "Code invalide ou expiré.",
+  "OTP_TICKET_INVALID": "Impossible de poursuivre. Veuillez recommencer la vérification.",
+  "PHONE_ALREADY_REGISTERED": "Impossible de poursuivre la création du compte.",
+  "PIN_TOO_WEAK": "Ce code est trop simple. Choisissez une combinaison moins prévisible.",
+  "INVALID_CREDENTIALS": "Impossible de poursuivre la connexion. Vérifiez vos informations.",
+  "ACCOUNT_LOCKED": "Compte temporairement bloqué suite à plusieurs tentatives infructueuses.",
+  "REFRESH_INVALID": "Votre session a expiré. Veuillez vous reconnecter.",
+  "REFRESH_REUSE_DETECTED": "Une activité inhabituelle a été détectée. Veuillez vous reconnecter sur tous vos appareils.",
+  "DEVICE_NOT_FOUND": "Appareil introuvable.",
+  "TRANSACTION_PIN_NOT_SET": "Vous devez d'abord définir un code de transaction.",
+  "UNAUTHORIZED": "Veuillez vous reconnecter.",
+  "FORBIDDEN": "Action non autorisée.",
+  "INTERNAL_ERROR": "Une erreur est survenue. Veuillez réessayer.",
+
+  "TRANSACTION_NOT_FOUND": "Transaction introuvable.",
+  "BUDGET_NOT_FOUND": "Budget introuvable.",
+  "SAVINGS_GOAL_NOT_FOUND": "Objectif d'épargne introuvable.",
+  "TONTINE_NOT_FOUND": "Tontine introuvable.",
+  "TONTINE_MEMBER_NOT_FOUND": "Membre de la tontine introuvable.",
+  "PLANNER_EVENT_NOT_FOUND": "Événement du planner introuvable.",
+  "TONTINE_ROUND_NOT_READY": "Tous les membres n'ont pas encore cotisé pour ce tour.",
+
+  "otp_sent": "Un code de vérification a été envoyé si ce numéro peut recevoir des SMS.",
+  "new_device_notification": "Nouvelle connexion détectée sur votre compte POOSSER."
+}

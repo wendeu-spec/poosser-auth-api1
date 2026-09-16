@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>POOSSER Auth — Console de test</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #171e2e;
+    --panel-2: #1e2740;
+    --border: #2a3450;
+    --text: #e8ecf5;
+    --muted: #8b97b5;
+    --accent: #4f8cff;
+    --accent-2: #2ecf88;
+    --danger: #ff5d6c;
+    --warn: #ffb648;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .apibar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .apibar input {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 230px;
+  }
+  .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .status-dot.ok { background: var(--accent-2); }
+  .status-dot.bad { background: var(--danger); }
+
+  .layout { display: grid; grid-template-columns: 220px 1fr 380px; gap: 0; min-height: calc(100vh - 60px); }
+  nav {
+    border-right: 1px solid var(--border);
+    padding: 16px 10px;
+  }
+  nav button {
+    display: block; width: 100%; text-align: left; padding: 10px 12px; margin-bottom: 4px;
+    background: transparent; border: none; color: var(--muted); border-radius: 8px;
+    font-size: 13.5px; cursor: pointer;
+  }
+  nav button:hover { background: var(--panel-2); color: var(--text); }
+  nav button.active { background: var(--accent); color: white; }
+
+  main { padding: 22px 26px; overflow-y: auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .panel h2 { margin-top: 0; font-size: 16px; }
+  .panel p.desc { color: var(--muted); font-size: 13px; margin-top: -6px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 12px 0; font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 160px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field input, .field select {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 9px 10px; font-size: 13.5px;
+  }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  button.btn {
+    background: var(--accent); color: white; border: none; border-radius: 6px;
+    padding: 9px 14px; font-size: 13.5px; cursor: pointer; font-weight: 600;
+  }
+  button.btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.btn.danger { background: var(--danger); }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  button.btn:hover:not(:disabled) { filter: brightness(1.08); }
+
+  .hint { font-size: 12px; color: var(--warn); background: rgba(255,182,72,.08); border: 1px solid rgba(255,182,72,.25); padding: 8px 10px; border-radius: 6px; margin-top: 6px; }
+
+  .session-box {
+    border-left: 1px solid var(--border);
+    padding: 18px 20px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .session-box h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .kv { font-size: 12.5px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { word-break: break-all; font-family: ui-monospace, monospace; font-size: 11px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill.connected { background: rgba(46,207,136,.15); color: var(--accent-2); }
+  .pill.anon { background: rgba(139,151,181,.15); color: var(--muted); }
+
+  #log {
+    flex: 1; overflow-y: auto; background: #0a0e17; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; font-family: ui-monospace, monospace; font-size: 11px; max-height: 46vh;
+  }
+  .log-entry { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
+  .log-entry .meta { color: var(--muted); margin-bottom: 3px; }
+  .log-entry .meta.ok { color: var(--accent-2); }
+  .log-entry .meta.err { color: var(--danger); }
+  .log-entry pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .badge.active { background: rgba(46,207,136,.15); color: var(--accent-2); }
+  .badge.revoked { background: rgba(255,93,108,.15); color: var(--danger); }
+  .badge.critical { background: rgba(255,93,108,.2); color: var(--danger); }
+  .badge.warning { background: rgba(255,182,72,.2); color: var(--warn); }
+  .badge.info { background: rgba(79,140,255,.18); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>POOSSER Auth — Console de test</h1>
+    <div class="sub">Interface manuelle pour essayer chaque endpoint de l'API réelle — aucune simulation, tout appel touche le vrai serveur.</div>
+  </div>
+  <div class="apibar">
+    <span class="status-dot" id="statusDot"></span>
+    <input id="apiBase" value="http://localhost:4000" />
+    <button class="btn secondary" id="pingBtn" type="button">Vérifier /health</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav>
+    <button data-panel="p-register" class="active">1. Inscription</button>
+    <button data-panel="p-login">2. Connexion</button>
+    <button data-panel="p-devices">3. Appareils</button>
+    <button data-panel="p-pin">4. PIN &amp; step-up</button>
+    <button data-panel="p-recovery">5. Récupération</button>
+    <button data-panel="p-session">6. Session</button>
+    <button data-panel="p-events">7. Journal sécurité</button>
+  </nav>
+
+  <main>
+
+    <div class="panel active" id="p-register">
+      <h2>1. Inscription</h2>
+      <p class="desc">Cycle complet : demande d'OTP → vérification → création de compte.</p>
+
+      <div class="card">
+        <h3>Étape 1 — Demander un code OTP</h3>
+        <div class="row">
+          <div class="field"><label>Téléphone (E.164)</label><input id="reg-phone" placeholder="+237670000001" /></div>
+        </div>
+        <div class="actions"><button class="btn" id="reg-requestOtp">Envoyer la demande</button></div>
+        <div class="hint">En mode développement (SMS_PROVIDER=console), le code n'est pas envoyé par vrai SMS : il apparaît dans les logs du serveur (terminal où tourne <code>npm run dev</code>), sous le champ <code>otpDevOnly</code>. Va le chercher là puis reviens le saisir ci-dessous.</div>
+      </div>
+
+      <div class="card">
+        <h3>Étape 2 — Vérifier le code</h3>
+        <div class="row">
+          <div class="field"><label>Code reçu (6 chiffres)</label><input id="reg-code" placeholder="123456" /></div>
+        </div>
+        <div class="actions"><button class="btn" id="reg-verify">Vérifier le code</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Étape 3 — Créer le compte</h3>
+        <div class="row">
+          <div class="field"><label>Prénom</label><input id="reg-first" value="Yannis" /></div>
+          <div class="field"><label>Nom</label><input id="reg-last" value="Test" /></div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Type de profil</label>
+            <select id="reg-profile">
+              <option value="salarie">salarie</option>
+              <option value="commercant">commercant</option>
+              <option value="entrepreneur">entrepreneur</option>
+              <option value="etudiant">etudiant</option>
+              <option value="autre">autre</option>
+            </select>
+          </div>
+          <div class="field"><label>PIN (6 chiffres)</label><input id="reg-pin" value="482913" /></div>
+          <div class="field"><label>Confirmation PIN</label><input id="reg-pinConfirm" value="482913" /></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Empreinte d'appareil</label><input id="reg-fingerprint" /></div>
+          <div class="field"><label>Nom d'appareil</label><input id="reg-deviceName" value="Console de test" /></div>
+          <div class="field">
+            <label>Plateforme</label>
+            <select id="reg-platform"><option>web</option><option>android</option><option>ios</option><option>other</option></select>
+          </div>
+        </div>
+        <div class="actions"><button class="btn" id="reg-register">Créer le compte (auto-connexion)</button></div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-login">
+      <h2>2. Connexion</h2>
+      <p class="desc">Connexion directe par téléphone + PIN, sur un compte déjà inscrit.</p>
+      <div class="card">
+        <div class="row">
+          <div class="field"><label>Téléphone (E.164)</label><input id="login-phone" placeholder="+237670000001" /></div>
+          <div class="field"><label>PIN</label><input id="login-pin" placeholder="482913" /></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Empreinte d'appareil</label><input id="login-fingerprint" /></div>
+          <div class="field"><label>Nom d'appareil</label><input id="login-deviceName" value="Console de test" /></div>
+          <div class="field">
+            <label>Plateforme</label>
+            <select id="login-platform"><option>web</option><option>android</option><option>ios</option><option>other</option></select>
+          </div>
+        </div>
+        <div class="actions"><button class="btn" id="login-submit">Se connecter</button></div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-devices">
+      <h2>3. Appareils</h2>
+      <p class="desc">Nécessite une session active (connecte-toi d'abord). Liste, révoque un appareil précis, ou révoque tous les autres.</p>
+      <div class="card">
+        <div class="actions">
+          <button class="btn" id="dev-list">Lister mes appareils</button>
+          <button class="btn secondary" id="dev-revokeOthers">Révoquer tous les autres appareils</button>
+        </div>
+        <table id="dev-table">
+          <thead><tr><th>Nom</th><th>Plateforme</th><th>Statut</th><th>Courant</th><th>Primaire</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="p-pin">
+      <h2>4. PIN de connexion, PIN transactionnel &amp; step-up</h2>
+      <p class="desc">Le PIN transactionnel est un secret totalement distinct du PIN de connexion (§10 du cahier des charges).</p>
+
+      <div class="card">
+        <h3>Changer le PIN de connexion</h3>
+        <div class="row">
+          <div class="field"><label>PIN actuel</label><input id="pin-current" /></div>
+          <div class="field"><label>Nouveau PIN</label><input id="pin-new" /></div>
+          <div class="field"><label>Confirmation</label><input id="pin-newConfirm" /></div>
+        </div>
+        <div class="actions"><button class="btn" id="pin-change">Changer le PIN</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Définir le PIN transactionnel</h3>
+        <div class="row">
+          <div class="field"><label>Nouveau PIN transactionnel</label><input id="txpin-new" /></div>
+          <div class="field"><label>Confirmation</label><input id="txpin-newConfirm" /></div>
+        </div>
+        <div class="actions"><button class="btn" id="txpin-set">Définir</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Step-up (élévation de privilège)</h3>
+        <div class="row">
+          <div class="field"><label>PIN transactionnel</label><input id="stepup-pin" /></div>
+        </div>
+        <div class="actions"><button class="btn" id="stepup-submit">Demander un jeton d'élévation</button></div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-recovery">
+      <h2>5. Récupération de compte</h2>
+      <p class="desc">Scénario « PIN oublié » ou « téléphone perdu ». Même OTP-en-log qu'à l'inscription (SMS_PROVIDER=console).</p>
+
+      <div class="card">
+        <h3>Étape 1 — Demander la récupération</h3>
+        <div class="row"><div class="field"><label>Téléphone</label><input id="rec-phone" /></div></div>
+        <div class="actions"><button class="btn" id="rec-request">Demander (forgot-pin)</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Étape 2 — Vérifier le code</h3>
+        <div class="row"><div class="field"><label>Code reçu</label><input id="rec-code" /></div></div>
+        <div class="actions"><button class="btn" id="rec-verify">Vérifier</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Étape 3 — Nouveau PIN</h3>
+        <div class="row">
+          <div class="field"><label>Nouveau PIN</label><input id="rec-newPin" /></div>
+          <div class="field"><label>Confirmation</label><input id="rec-newPinConfirm" /></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Empreinte du nouvel appareil</label><input id="rec-fingerprint" /></div>
+          <div class="field"><label>Nom</label><input id="rec-deviceName" value="Appareil de récupération" /></div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label><input type="checkbox" id="rec-revokeOthers" checked style="width:auto;margin-right:6px;" />Révoquer tous les autres appareils (téléphone perdu)</label>
+          </div>
+        </div>
+        <div class="actions"><button class="btn" id="rec-reset">Réinitialiser le PIN (auto-connexion)</button></div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-session">
+      <h2>6. Session</h2>
+      <p class="desc">Rotation de refresh token, déconnexion simple ou globale.</p>
+      <div class="card">
+        <div class="actions">
+          <button class="btn" id="sess-refresh">Rafraîchir la session (rotation)</button>
+          <button class="btn secondary" id="sess-logout">Se déconnecter (cet appareil)</button>
+          <button class="btn danger" id="sess-logoutAll">Se déconnecter partout</button>
+        </div>
+        <div class="hint">Astuce : après une rotation, essaie de rafraîchir une seconde fois avec le <em>même</em> ancien jeton (recopie-le depuis le journal à droite) pour observer la détection de réutilisation en action.</div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-events">
+      <h2>7. Journal de sécurité</h2>
+      <p class="desc">Événements réellement écrits en base pour le compte connecté.</p>
+      <div class="card">
+        <div class="actions"><button class="btn" id="ev-list">Charger le journal</button></div>
+        <table id="ev-table">
+          <thead><tr><th>Type</th><th>Sévérité</th><th>Appareil</th><th>Date</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <div class="session-box">
+    <div>
+      <h3>Session en mémoire</h3>
+      <div id="sessPill" class="pill anon" style="margin-top:8px;">Non connecté</div>
+      <div class="kv" style="margin-top:10px;">
+        <div><span class="k">Utilisateur : </span><span class="v" id="kv-user">—</span></div>
+        <div><span class="k">Access token : </span><span class="v" id="kv-access">—</span></div>
+        <div><span class="k">Refresh token : </span><span class="v" id="kv-refresh">—</span></div>
+        <div><span class="k">Step-up token : </span><span class="v" id="kv-stepup">—</span></div>
+      </div>
+      <div class="actions" style="margin-top:10px;"><button class="btn secondary" id="clearSession">Effacer la session</button></div>
+    </div>
+    <div>
+      <h3>Journal des appels API</h3>
+      <div id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Aucune donnée sensible n'est stockée en localStorage/sessionStorage : tout
+// vit en variables JS, en mémoire, effacé à la fermeture de l'onglet — cohérent
+// avec le principe du cahier des charges de ne jamais persister un secret côté
+// client sans nécessité explicite.
+const state = {
+  accessToken: null,
+  refreshToken: null,
+  stepUpToken: null,
+  user: null,
+};
+
+function apiBase() { return document.getElementById('apiBase').value.replace(/\/$/, ''); }
+
+function randomFingerprint(prefix) {
+  return `${prefix}-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+}
+['reg-fingerprint', 'login-fingerprint', 'rec-fingerprint'].forEach((id) => {
+  document.getElementById(id).value = randomFingerprint('console-test');
+});
+
+function renderSession() {
+  document.getElementById('kv-user').textContent = state.user ? `${state.user.firstName} ${state.user.lastName} (${state.user.phone})` : '—';
+  document.getElementById('kv-access').textContent = state.accessToken || '—';
+  document.getElementById('kv-refresh').textContent = state.refreshToken || '—';
+  document.getElementById('kv-stepup').textContent = state.stepUpToken || '—';
+  const pill = document.getElementById('sessPill');
+  if (state.accessToken) {
+    pill.textContent = 'Connecté';
+    pill.className = 'pill connected';
+  } else {
+    pill.textContent = 'Non connecté';
+    pill.className = 'pill anon';
+  }
+}
+
+function logCall(method, path, status, ok, body) {
+  const log = document.getElementById('log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const time = new Date().toLocaleTimeString('fr-FR');
+  entry.innerHTML = `
+    <div class="meta ${ok ? 'ok' : 'err'}">${time} · ${method} ${path} → ${status}</div>
+    <pre>${escapeHtml(JSON.stringify(body, null, 2))}</pre>
+  `;
+  log.prepend(entry);
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+async function api(method, path, body, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (opts.auth && state.accessToken) headers['Authorization'] = `Bearer ${state.accessToken}`;
+  if (opts.stepUp && state.stepUpToken) headers['x-step-up-token'] = state.stepUpToken;
+  let res, json;
+  try {
+    res = await fetch(apiBase() + path, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    json = await res.json().catch(() => ({}));
+  } catch (err) {
+    logCall(method, path, 'réseau', false, { error: String(err) });
+    throw err;
+  }
+  logCall(method, path, res.status, res.ok, json);
+  if (!res.ok) {
+    const err = new Error(json?.error?.message || 'Erreur API');
+    err.body = json;
+    err.status = res.status;
+    throw err;
+  }
+  return json;
+}
+
+// --- Navigation -------------------------------------------------------------
+document.querySelectorAll('nav button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.panel).classList.add('active');
+  });
+});
+
+// --- Ping ---------------------------------------------------------------
+document.getElementById('pingBtn').addEventListener('click', async () => {
+  const dot = document.getElementById('statusDot');
+  try {
+    const res = await fetch(apiBase() + '/health');
+    dot.className = res.ok ? 'status-dot ok' : 'status-dot bad';
+  } catch {
+    dot.className = 'status-dot bad';
+  }
+});
+
+// --- Inscription --------------------------------------------------------
+document.getElementById('reg-requestOtp').addEventListener('click', async () => {
+  const phone = document.getElementById('reg-phone').value.trim();
+  await api('POST', '/auth/request-otp', { phone, purpose: 'registration' }).catch(() => {});
+});
+document.getElementById('reg-verify').addEventListener('click', async () => {
+  const phone = document.getElementById('reg-phone').value.trim();
+  const code = document.getElementById('reg-code').value.trim();
+  try {
+    const res = await api('POST', '/auth/verify-otp', { phone, purpose: 'registration', code });
+    window.__regTicket = res.otpVerificationTicket;
+  } catch {}
+});
+document.getElementById('reg-register').addEventListener('click', async () => {
+  if (!window.__regTicket) { alert("Vérifie d'abord le code OTP (étape 2)."); return; }
+  const pin = document.getElementById('reg-pin').value.trim();
+  const pinConfirmation = document.getElementById('reg-pinConfirm').value.trim();
+  try {
+    const res = await api('POST', '/auth/register', {
+      otpVerificationTicket: window.__regTicket,
+      firstName: document.getElementById('reg-first').value.trim(),
+      lastName: document.getElementById('reg-last').value.trim(),
+      profileTypeCode: document.getElementById('reg-profile').value,
+      pin, pinConfirmation,
+      device: {
+        fingerprint: document.getElementById('reg-fingerprint').value.trim(),
+        name: document.getElementById('reg-deviceName').value.trim(),
+        platform: document.getElementById('reg-platform').value,
+      },
+    });
+    state.accessToken = res.accessToken;
+    state.refreshToken = res.refreshToken;
+    state.user = res.user;
+    renderSession();
+  } catch {}
+});
+
+// --- Connexion ------------------------------------------------------------
+document.getElementById('login-submit').addEventListener('click', async () => {
+  try {
+    const res = await api('POST', '/auth/login', {
+      phone: document.getElementById('login-phone').value.trim(),
+      pin: document.getElementById('login-pin').value.trim(),
+      device: {
+        fingerprint: document.getElementById('login-fingerprint').value.trim(),
+        name: document.getElementById('login-deviceName').value.trim(),
+        platform: document.getElementById('login-platform').value,
+      },
+    });
+    state.accessToken = res.accessToken;
+    state.refreshToken = res.refreshToken;
+    state.user = res.user;
+    renderSession();
+  } catch {}
+});
+
+// --- Appareils --------------------------------------------------------
+function renderDevices(devices) {
+  const tbody = document.querySelector('#dev-table tbody');
+  tbody.innerHTML = '';
+  devices.forEach((d) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${d.name}</td>
+      <td>${d.platform}</td>
+      <td><span class="badge ${d.status === 'active' ? 'active' : 'revoked'}">${d.status}</span></td>
+      <td>${d.isCurrent ? '✓' : ''}</td>
+      <td>${d.isPrimary ? '✓' : ''}</td>
+      <td>${d.status === 'active' && !d.isCurrent ? `<button class="btn secondary" data-revoke="${d.id}">Révoquer</button>` : ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-revoke]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await api('DELETE', `/auth/devices/${btn.dataset.revoke}`, null, { auth: true }).catch(() => {});
+      loadDevices();
+    });
+  });
+}
+async function loadDevices() {
+  try {
+    const res = await api('GET', '/auth/devices', null, { auth: true });
+    renderDevices(res.devices);
+  } catch {}
+}
+document.getElementById('dev-list').addEventListener('click', loadDevices);
+document.getElementById('dev-revokeOthers').addEventListener('click', async () => {
+  await api('POST', '/auth/devices/revoke-others', null, { auth: true }).catch(() => {});
+  loadDevices();
+});
+
+// --- PIN & step-up ----------------------------------------------------
+document.getElementById('pin-change').addEventListener('click', async () => {
+  await api('POST', '/auth/change-pin', {
+    currentPin: document.getElementById('pin-current').value.trim(),
+    newPin: document.getElementById('pin-new').value.trim(),
+    newPinConfirmation: document.getElementById('pin-newConfirm').value.trim(),
+  }, { auth: true }).catch(() => {});
+});
+document.getElementById('txpin-set').addEventListener('click', async () => {
+  await api('POST', '/auth/transaction-pin', {
+    newTransactionPin: document.getElementById('txpin-new').value.trim(),
+    newTransactionPinConfirmation: document.getElementById('txpin-newConfirm').value.trim(),
+  }, { auth: true }).catch(() => {});
+});
+document.getElementById('stepup-submit').addEventListener('click', async () => {
+  try {
+    const res = await api('POST', '/auth/step-up', {
+      transactionPin: document.getElementById('stepup-pin').value.trim(),
+    }, { auth: true });
+    state.stepUpToken = res.stepUpToken;
+    renderSession();
+  } catch {}
+});
+
+// --- Récupération -------------------------------------------------------
+document.getElementById('rec-request').addEventListener('click', async () => {
+  await api('POST', '/auth/forgot-pin', { phone: document.getElementById('rec-phone').value.trim() }).catch(() => {});
+});
+document.getElementById('rec-verify').addEventListener('click', async () => {
+  try {
+    const res = await api('POST', '/auth/verify-otp', {
+      phone: document.getElementById('rec-phone').value.trim(),
+      purpose: 'account_recovery',
+      code: document.getElementById('rec-code').value.trim(),
+    });
+    window.__recTicket = res.otpVerificationTicket;
+  } catch {}
+});
+document.getElementById('rec-reset').addEventListener('click', async () => {
+  if (!window.__recTicket) { alert("Vérifie d'abord le code (étape 2)."); return; }
+  try {
+    const res = await api('POST', '/auth/reset-pin', {
+      otpVerificationTicket: window.__recTicket,
+      newPin: document.getElementById('rec-newPin').value.trim(),
+      newPinConfirmation: document.getElementById('rec-newPinConfirm').value.trim(),
+      revokeOtherDevices: document.getElementById('rec-revokeOthers').checked,
+      device: {
+        fingerprint: document.getElementById('rec-fingerprint').value.trim(),
+        name: document.getElementById('rec-deviceName').value.trim(),
+        platform: 'web',
+      },
+    });
+    state.accessToken = res.accessToken;
+    state.refreshToken = res.refreshToken;
+    state.user = res.user;
+    renderSession();
+  } catch {}
+});
+
+// --- Session --------------------------------------------------------------
+document.getElementById('sess-refresh').addEventListener('click', async () => {
+  if (!state.refreshToken) { alert('Aucun refresh token en mémoire.'); return; }
+  try {
+    const res = await api('POST', '/auth/refresh', { refreshToken: state.refreshToken });
+    state.accessToken = res.accessToken;
+    state.refreshToken = res.refreshToken;
+    renderSession();
+  } catch {}
+});
+document.getElementById('sess-logout').addEventListener('click', async () => {
+  if (!state.refreshToken) { alert('Aucun refresh token en mémoire.'); return; }
+  await api('POST', '/auth/logout', { refreshToken: state.refreshToken }, { auth: true }).catch(() => {});
+  state.accessToken = null; state.refreshToken = null; state.stepUpToken = null; state.user = null;
+  renderSession();
+});
+document.getElementById('sess-logoutAll').addEventListener('click', async () => {
+  await api('POST', '/auth/logout-all', null, { auth: true }).catch(() => {});
+  state.accessToken = null; state.refreshToken = null; state.stepUpToken = null; state.user = null;
+  renderSession();
+});
+document.getElementById('clearSession').addEventListener('click', () => {
+  state.accessToken = null; state.refreshToken = null; state.stepUpToken = null; state.user = null;
+  renderSession();
+});
+
+// --- Journal de sécurité ------------------------------------------------
+document.getElementById('ev-list').addEventListener('click', async () => {
+  try {
+    const res = await api('GET', '/auth/security-events', null, { auth: true });
+    const tbody = document.querySelector('#ev-table tbody');
+    tbody.innerHTML = '';
+    res.events.forEach((e) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${e.type}</td>
+        <td><span class="badge ${e.severity}">${e.severity}</span></td>
+        <td>${e.deviceName || '—'}</td>
+        <td>${new Date(e.createdAt).toLocaleString('fr-FR')}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch {}
+});
+
+renderSession();
+document.getElementById('pingBtn').click();
+</script>
+</body>
+</html>

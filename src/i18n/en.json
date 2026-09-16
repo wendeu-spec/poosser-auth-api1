@@ -1,0 +1,28 @@
+{
+  "VALIDATION_ERROR": "Some of the information provided is invalid.",
+  "RATE_LIMITED": "Too many attempts. Please try again later.",
+  "OTP_INVALID": "Invalid or expired code.",
+  "OTP_TICKET_INVALID": "Unable to continue. Please restart the verification.",
+  "PHONE_ALREADY_REGISTERED": "Unable to continue creating this account.",
+  "PIN_TOO_WEAK": "This code is too simple. Please choose a less predictable combination.",
+  "INVALID_CREDENTIALS": "Unable to sign in. Please check your details.",
+  "ACCOUNT_LOCKED": "Account temporarily locked after several failed attempts.",
+  "REFRESH_INVALID": "Your session has expired. Please sign in again.",
+  "REFRESH_REUSE_DETECTED": "Unusual activity was detected. Please sign in again on all your devices.",
+  "DEVICE_NOT_FOUND": "Device not found.",
+  "TRANSACTION_PIN_NOT_SET": "You must set a transaction code first.",
+  "UNAUTHORIZED": "Please sign in again.",
+  "FORBIDDEN": "This action is not allowed.",
+  "INTERNAL_ERROR": "Something went wrong. Please try again.",
+
+  "TRANSACTION_NOT_FOUND": "Transaction not found.",
+  "BUDGET_NOT_FOUND": "Budget not found.",
+  "SAVINGS_GOAL_NOT_FOUND": "Savings goal not found.",
+  "TONTINE_NOT_FOUND": "Tontine not found.",
+  "TONTINE_MEMBER_NOT_FOUND": "Tontine member not found.",
+  "PLANNER_EVENT_NOT_FOUND": "Planner event not found.",
+  "TONTINE_ROUND_NOT_READY": "Not all members have contributed for this round yet.",
+
+  "otp_sent": "A verification code has been sent if this number can receive SMS.",
+  "new_device_notification": "New sign-in detected on your POOSSER account."
+}
