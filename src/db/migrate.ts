@@ -13,7 +13,7 @@ import { pool } from "./pool.js";
  * tierce pour un projet dont la sécurité est justement l'objet.
  */
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = join(__dirname, "..", "..", "migrations");
+const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 
 async function ensureMigrationsTable() {
   await pool.query(`
