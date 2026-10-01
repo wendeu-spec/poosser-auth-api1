@@ -104,6 +104,15 @@ curl -X POST http://localhost:4000/auth/login \
   -d '{"phone":"+237690000099","pin":"246813","device":{"fingerprint":"any-client-fingerprint","name":"Mon appareil","platform":"web"}}'
 ```
 
+## 8bis. Application installable (PWA) — `/app`
+
+Le serveur sert aussi le prototype front-end lui-même, en tant qu'application web installable, sous `/app` (`public/app/index.html` + `manifest.json` + `sw.js` + icônes) :
+
+- en local : http://localhost:4000/app/
+- en production : https://poosser-backend.onrender.com/app/
+
+Ouvert avec `?demo=1` (c'est la valeur portée par `start_url` dans le manifest, donc automatique une fois l'app installée), l'appli se connecte toute seule avec le compte de test ci-dessus — pratique pour tester sur un téléphone sans ressaisir d'identifiants à chaque lancement. Sans ce paramètre, le comportement est inchangé : écran de connexion normal. C'est aussi ce point d'entrée (`/app/`) qui sert de base pour générer un fichier `.apk` installable via un outil externe type PWABuilder.
+
 ## 9. Résumé de l'architecture
 
 - **Identifiant primaire** : numéro de téléphone (E.164, aucun pays supposé).
