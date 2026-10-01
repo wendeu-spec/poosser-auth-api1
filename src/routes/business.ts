@@ -6,6 +6,7 @@ import {
   createTransactionSchema, updateTransactionSchema,
   upsertBudgetSchema,
   createSavingsGoalSchema, updateSavingsGoalSchema,
+  createProjectSchema, updateProjectSchema,
   createTontineSchema, markContributionSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
 } from "../validators/businessSchemas.js";
@@ -13,6 +14,7 @@ import {
 import * as transactions from "../services/transactionService.js";
 import * as budgets from "../services/budgetService.js";
 import * as savingsGoals from "../services/savingsGoalService.js";
+import * as projects from "../services/projectService.js";
 import * as tontines from "../services/tontineService.js";
 import * as plannerEvents from "../services/plannerEventService.js";
 
@@ -31,7 +33,8 @@ function requireParamId(id: string | string[] | undefined): string {
 // Transactions
 // ---------------------------------------------------------------------------
 businessRouter.get("/transactions", async (req, res) => {
-  res.json({ transactions: await transactions.listTransactions(req.auth!.userId) });
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+  res.json({ transactions: await transactions.listTransactions(req.auth!.userId, projectId) });
 });
 businessRouter.post("/transactions", validateBody(createTransactionSchema), async (req, res) => {
   const tx = await transactions.createTransaction(req.auth!.userId, req.body);
@@ -80,6 +83,33 @@ businessRouter.patch("/savings-goals/:id", validateBody(updateSavingsGoalSchema)
 businessRouter.delete("/savings-goals/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await savingsGoals.deleteSavingsGoal(req.auth!.userId, id);
+  res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Projets — chaque projet renvoie ses totaux calculés depuis les
+// transactions rattachées (total_in, total_out, balance, transaction_count).
+// Le détail des transactions d'un projet se récupère via
+// GET /transactions?projectId=... (déjà filtrable ci-dessus).
+// ---------------------------------------------------------------------------
+businessRouter.get("/projects", async (req, res) => {
+  res.json({ projects: await projects.listProjects(req.auth!.userId) });
+});
+businessRouter.get("/projects/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  res.json({ project: await projects.getProject(req.auth!.userId, id) });
+});
+businessRouter.post("/projects", validateBody(createProjectSchema), async (req, res) => {
+  const project = await projects.createProject(req.auth!.userId, req.body);
+  res.status(201).json({ project });
+});
+businessRouter.patch("/projects/:id", validateBody(updateProjectSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  res.json({ project: await projects.updateProject(req.auth!.userId, id, req.body) });
+});
+businessRouter.delete("/projects/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  await projects.deleteProject(req.auth!.userId, id);
   res.status(204).send();
 });
 

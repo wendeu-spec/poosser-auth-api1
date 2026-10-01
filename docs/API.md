@@ -243,6 +243,25 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
 - `DELETE /api/savings-goals/:id` → `204`.
 - Erreurs : `404 SAVINGS_GOAL_NOT_FOUND`.
 
+## Projets
+
+- `GET /api/projects` → `{ projects: [...] }`, chaque projet incluant ses totaux
+  calculés depuis les transactions rattachées : `total_in`, `total_out`, `balance`,
+  `transaction_count`.
+- `GET /api/projects/:id` → `{ project }` (mêmes totaux).
+- `POST /api/projects` → `{ name, icon?, targetAmount?, targetDate? }` → `201 { project }`
+  (statut initial `actif`, `icon` par défaut `📁`).
+- `PATCH /api/projects/:id` → champs partiels, y compris `status: "actif" | "termine" |
+  "archive"` → `200 { project }`.
+- `DELETE /api/projects/:id` → `204` — détache (`project_id = NULL`) les transactions du
+  projet sans les supprimer, elles restent dans le budget général.
+- `GET /api/transactions?projectId=...` filtre la liste des transactions pour un projet
+  donné (détail / feuille de dépenses-encaissements).
+- `POST /api/transactions` et `PATCH /api/transactions/:id` acceptent un champ optionnel
+  `projectId` pour rattacher la transaction à un projet — **vision consolidée** : elle
+  reste comptée normalement dans le budget et la liste générale des transactions.
+- Erreurs : `404 PROJECT_NOT_FOUND`.
+
 ## Tontines
 
 - `GET /api/tontines` → `{ tontines: [...] }`, chaque tontine incluant ses membres, le
@@ -281,6 +300,6 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
 `REFRESH_INVALID`, `REFRESH_REUSE_DETECTED`, `DEVICE_NOT_FOUND`,
 `TRANSACTION_PIN_NOT_SET`, `UNAUTHORIZED` (access token manquant/expiré/invalide),
 `FORBIDDEN` (step-up manquant sur un endpoint qui l'exige), `INTERNAL_ERROR`,
-`TRANSACTION_NOT_FOUND`, `BUDGET_NOT_FOUND`, `SAVINGS_GOAL_NOT_FOUND`,
+`TRANSACTION_NOT_FOUND`, `BUDGET_NOT_FOUND`, `SAVINGS_GOAL_NOT_FOUND`, `PROJECT_NOT_FOUND`,
 `TONTINE_NOT_FOUND`, `TONTINE_MEMBER_NOT_FOUND`, `TONTINE_ROUND_NOT_READY`,
 `PLANNER_EVENT_NOT_FOUND`.

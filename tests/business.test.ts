@@ -14,6 +14,7 @@ describe("routes métier — exigent toutes un access token", () => {
     await request(app).get("/api/transactions").expect(401);
     await request(app).get("/api/budgets").expect(401);
     await request(app).get("/api/savings-goals").expect(401);
+    await request(app).get("/api/projects").expect(401);
     await request(app).get("/api/tontines").expect(401);
     await request(app).get("/api/planner-events").expect(401);
   });
@@ -136,6 +137,92 @@ describe("Épargne", () => {
       .send({ currentAmount: 150000 })
       .expect(200);
     expect(Number(updated.body.savingsGoal.current_amount)).toBe(150000);
+  });
+});
+
+describe("Projets", () => {
+  it("crée un projet, rattache des transactions, et calcule les totaux consolidés", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Construction maison", targetAmount: 5000000, targetDate: "2027-06-30" })
+      .expect(201);
+    const projectId = created.body.project.id;
+    expect(created.body.project.status).toBe("actif");
+    expect(created.body.project.icon).toBe("📁");
+
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "revenu", category: "Autres", amount: 200000, occurredOn: "2026-08-18", method: "Mobile Money", projectId })
+      .expect(201);
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 50000, occurredOn: "2026-08-19", method: "Espèces", projectId })
+      .expect(201);
+    // Une transaction hors projet ne doit pas polluer ses totaux.
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 9999, occurredOn: "2026-08-20", method: "Espèces" })
+      .expect(201);
+
+    const detail = await request(app).get(`/api/projects/${projectId}`).set("Authorization", `Bearer ${access}`).expect(200);
+    expect(Number(detail.body.project.total_in)).toBe(200000);
+    expect(Number(detail.body.project.total_out)).toBe(50000);
+    expect(Number(detail.body.project.balance)).toBe(150000);
+    expect(Number(detail.body.project.transaction_count)).toBe(2);
+
+    // Vision consolidée : les transactions du projet comptent aussi dans la liste générale.
+    const allTx = await request(app).get("/api/transactions").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(allTx.body.transactions).toHaveLength(3);
+
+    // Filtrage par projet : uniquement les 2 transactions rattachées.
+    const projectTx = await request(app)
+      .get(`/api/transactions?projectId=${projectId}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(200);
+    expect(projectTx.body.transactions).toHaveLength(2);
+  });
+
+  it("refuse d'accéder au projet d'un autre utilisateur (404, pas une fuite)", async () => {
+    const u1 = await authedUser();
+    const u2 = await authedUser();
+    const created = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .send({ name: "Privé" })
+      .expect(201);
+
+    const res = await request(app)
+      .get(`/api/projects/${created.body.project.id}`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .expect(404);
+    expect(res.body.error.code).toBe("PROJECT_NOT_FOUND");
+  });
+
+  it("supprimer un projet détache ses transactions sans les effacer", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Voyage" })
+      .expect(201);
+    const projectId = created.body.project.id;
+
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 10000, occurredOn: "2026-08-18", method: "Espèces", projectId })
+      .expect(201);
+
+    await request(app).delete(`/api/projects/${projectId}`).set("Authorization", `Bearer ${access}`).expect(204);
+
+    const list = await request(app).get("/api/transactions").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(list.body.transactions).toHaveLength(1);
+    expect(list.body.transactions[0].project_id).toBeNull();
   });
 });
 
