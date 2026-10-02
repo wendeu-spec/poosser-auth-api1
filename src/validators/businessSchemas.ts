@@ -59,9 +59,13 @@ export const updateProjectSchema = z.object({
 // Rubriques (postes de dépense à l'intérieur d'un projet, ex: "Transport",
 // "Hébergement" pour un voyage). Imbriquées sous un projet (voir routes
 // /projects/:projectId/rubriques) — pas de champ projectId ici, il vient de l'URL.
+// parentRubriqueId est nullable (et non juste optionnel) pour pouvoir
+// explicitement détacher une sous-rubrique de son parent lors d'une mise à
+// jour (absent = inchangé, null = retire le parent, uuid = rattache).
 export const createRubriqueSchema = z.object({
   name: z.string().trim().min(1).max(120),
   plannedAmount: amountSchema.optional(),
+  parentRubriqueId: z.string().uuid().nullable().optional(),
 });
 export const updateRubriqueSchema = createRubriqueSchema.partial();
 
