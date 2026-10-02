@@ -220,7 +220,11 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
 - `GET /api/transactions` → `{ transactions: [...] }`, triées par date décroissante.
 - `POST /api/transactions` → `{ type, category, amount, occurredOn, method, note? }` →
   `201 { transaction }`.
-- `PATCH /api/transactions/:id` → champs partiels → `200 { transaction }`.
+- `PATCH /api/transactions/:id` → champs partiels → `200 { transaction }`. `note`,
+  `projectId` et `rubriqueId` sont traités en **tri-état** : absent du body = inchangé,
+  `null` = effacé/détaché (ex : retirer la note, ou détacher le projet/la rubrique d'une
+  transaction), valeur = remplacé. Les autres champs (`type`, `category`, `amount`,
+  `occurredOn`, `method`) ne prennent qu'une valeur ou sont absents (jamais `null`).
 - `DELETE /api/transactions/:id` → `204`.
 - Erreurs : `404 TRANSACTION_NOT_FOUND`.
 
