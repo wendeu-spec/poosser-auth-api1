@@ -18,7 +18,15 @@ export const createTransactionSchema = z.object({
   projectId: z.string().uuid().optional(),
   rubriqueId: z.string().uuid().optional(),
 });
-export const updateTransactionSchema = createTransactionSchema.partial();
+// note/projectId/rubriqueId sont nullables (en plus d'optionnels) ici pour
+// pouvoir les effacer/détacher explicitement en modification (bouton
+// "Modifier" de l'historique) : absent = inchangé, null = efface/détache,
+// valeur = remplace. Même logique tri-état que parentRubriqueId plus haut.
+export const updateTransactionSchema = createTransactionSchema.partial().extend({
+  note: z.string().trim().max(280).nullable().optional(),
+  projectId: z.string().uuid().nullable().optional(),
+  rubriqueId: z.string().uuid().nullable().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Budgets — définir une limite sur une catégorie existante la met à jour (upsert).
