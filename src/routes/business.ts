@@ -7,6 +7,7 @@ import {
   upsertBudgetSchema,
   createSavingsGoalSchema, updateSavingsGoalSchema,
   createProjectSchema, updateProjectSchema,
+  createRubriqueSchema, updateRubriqueSchema,
   createTontineSchema, markContributionSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
 } from "../validators/businessSchemas.js";
@@ -15,6 +16,7 @@ import * as transactions from "../services/transactionService.js";
 import * as budgets from "../services/budgetService.js";
 import * as savingsGoals from "../services/savingsGoalService.js";
 import * as projects from "../services/projectService.js";
+import * as rubriques from "../services/rubriqueService.js";
 import * as tontines from "../services/tontineService.js";
 import * as plannerEvents from "../services/plannerEventService.js";
 
@@ -110,6 +112,36 @@ businessRouter.patch("/projects/:id", validateBody(updateProjectSchema), async (
 businessRouter.delete("/projects/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await projects.deleteProject(req.auth!.userId, id);
+  res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Rubriques — postes de dépense à l'intérieur d'un projet. Imbriquées sous
+// /projects/:projectId car une rubrique n'existe jamais hors de son projet.
+// GET sans :projectId renvoie toutes les rubriques de l'utilisateur (tous
+// projets confondus), pratique pour le chargement initial côté front.
+// ---------------------------------------------------------------------------
+businessRouter.get("/rubriques", async (req, res) => {
+  res.json({ rubriques: await rubriques.listRubriques(req.auth!.userId) });
+});
+businessRouter.get("/projects/:projectId/rubriques", async (req, res) => {
+  const projectId = requireParamId(req.params.projectId);
+  res.json({ rubriques: await rubriques.listRubriques(req.auth!.userId, projectId) });
+});
+businessRouter.post("/projects/:projectId/rubriques", validateBody(createRubriqueSchema), async (req, res) => {
+  const projectId = requireParamId(req.params.projectId);
+  const rubrique = await rubriques.createRubrique(req.auth!.userId, projectId, req.body);
+  res.status(201).json({ rubrique });
+});
+businessRouter.patch("/projects/:projectId/rubriques/:id", validateBody(updateRubriqueSchema), async (req, res) => {
+  const projectId = requireParamId(req.params.projectId);
+  const id = requireParamId(req.params.id);
+  res.json({ rubrique: await rubriques.updateRubrique(req.auth!.userId, projectId, id, req.body) });
+});
+businessRouter.delete("/projects/:projectId/rubriques/:id", async (req, res) => {
+  const projectId = requireParamId(req.params.projectId);
+  const id = requireParamId(req.params.id);
+  await rubriques.deleteRubrique(req.auth!.userId, projectId, id);
   res.status(204).send();
 });
 
