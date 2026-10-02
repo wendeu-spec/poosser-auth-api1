@@ -631,6 +631,10 @@
           <label>Projet (optionnel)</label>
           <select id="txProject"><option value="">Aucun projet</option></select>
         </div>
+        <div class="field" id="txRubriqueField" style="display:none;">
+          <label>Rubrique (optionnel)</label>
+          <select id="txRubrique"><option value="">Aucune rubrique</option></select>
+        </div>
         <div class="field" style="grid-column: span 2;">
           <label>Note (optionnel)</label>
           <input type="text" id="txNote" placeholder="Ex: Marché du dimanche">
@@ -688,6 +692,15 @@
             <label>Date cible (optionnel)</label>
             <input type="date" id="projTargetDate">
           </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Rubriques suggérées (optionnel)</label>
+            <div id="projRubriqueChips" class="filters" style="margin:0 0 8px;"></div>
+            <div style="display:flex; gap:8px;">
+              <input type="text" id="projRubriqueCustom" placeholder="Ou ajoutez une rubrique personnalisée" style="flex:1;">
+              <button type="button" class="btn btn-ghost" id="projRubriqueAddCustom" style="white-space:nowrap;">Ajouter</button>
+            </div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:6px;">Cliquez une suggestion pour l'ajouter au projet — vous pourrez en créer, modifier ou supprimer à tout moment depuis la page du projet.</div>
+          </div>
           <div class="field">
             <button type="submit" class="btn btn-primary">Créer le projet</button>
           </div>
@@ -704,10 +717,40 @@
       <div class="project-detail-tiles" id="projectDetailTiles"></div>
       <div id="projectDetailProgress" style="margin-bottom:18px;"></div>
       <div class="project-actions" id="projectDetailActions" style="margin-bottom:18px;"></div>
+
+      <div class="card" style="margin-bottom:18px;">
+        <div class="page-head" style="margin-bottom:4px;">
+          <div>
+            <h3 style="margin:0;">Répartition par rubrique</h3>
+            <div class="sub">Le coût total du projet = la somme des rubriques ci-dessous</div>
+          </div>
+          <button type="button" class="btn btn-ghost" id="openRubriqueForm" style="font-size:12.5px; padding:6px 12px;">+ Nouvelle rubrique</button>
+        </div>
+
+        <div id="rubriqueFormCard" style="display:none; margin:14px 0 4px;">
+          <form id="rubriqueForm" class="form-grid" style="grid-template-columns: 2fr 1.4fr auto; margin-bottom:0;">
+            <div class="field">
+              <label>Nom de la rubrique</label>
+              <input type="text" id="rubName" placeholder="Ex: Fondation" required>
+            </div>
+            <div class="field">
+              <label>Enveloppe (FCFA, optionnel)</label>
+              <input type="number" id="rubPlanned" min="1" placeholder="Ex: 2000000">
+            </div>
+            <div class="field">
+              <button type="submit" class="btn btn-primary" id="rubriqueFormSubmit">Ajouter</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="donut-wrap" id="rubriqueDonutWrap"></div>
+        <div id="rubriqueList" style="margin-top:14px;"></div>
+      </div>
+
       <div class="card">
         <h3>Mouvements du projet</h3>
         <div class="sub">Comptabilisés normalement dans le budget et l'historique général (étiquette "Projet")</div>
-        <table id="projectTxTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th></tr></thead><tbody></tbody></table>
+        <table id="projectTxTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Rubrique</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
   </section>
@@ -977,6 +1020,7 @@ let state = {
   budgets: [],
   goals: [],
   projects: [],
+  rubriques: [],
   tontines: [],
   plannerEvents: [],
   chatMessages: [],
@@ -1081,7 +1125,7 @@ function authErrorMessage(err){
 
 /* ---- adaptateurs API -> forme interne du prototype (inchangée pour le rendu) ---- */
 function mapTxFromApi(t){
-  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null };
+  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null };
 }
 function mapBudgetFromApi(b){
   return { id: b.id, category: b.category, limit: Number(b.monthly_limit) };
@@ -1110,6 +1154,52 @@ function projectStats(projectId){
   const totalOut = rows.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
   return { totalIn, totalOut, balance: totalIn - totalOut, count: rows.length };
 }
+
+// Ne garde QUE les champs stables d'une rubrique (nom, enveloppe) — même
+// raison que mapProjectFromApi : le montant réel dépensé n'est jamais mis en
+// cache ici, toujours recalculé en direct via rubriqueStats() pour ne jamais
+// se désynchroniser quand une transaction est ajoutée/modifiée/supprimée.
+function mapRubriqueFromApi(r){
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    name: r.name,
+    plannedAmount: r.planned_amount != null ? Number(r.planned_amount) : null,
+  };
+}
+function rubriqueById(id){ return state.rubriques.find(r=>r.id===id); }
+function rubriquesForProject(projectId){ return state.rubriques.filter(r=>r.projectId===projectId); }
+
+// Seules les DÉPENSES comptent dans le coût d'une rubrique (voir discussion
+// produit : "le total des rubriques fera le coût total du projet") — un
+// revenu peut en théorie être étiqueté avec une rubrique mais n'entre pas
+// dans ce calcul.
+function rubriqueStats(rubriqueId){
+  const rows = state.transactions.filter(t=>t.rubriqueId===rubriqueId && t.type==='depense');
+  const total = rows.reduce((a,t)=>a+t.amount,0);
+  return { total, count: rows.length };
+}
+
+// Palette cyclique (mêmes teintes que CAT_HEX, indépendante des catégories
+// puisque les rubriques sont des libellés libres définis par l'utilisateur).
+const RUBRIQUE_PALETTE = ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7','#e34948'];
+function rubriqueColor(index){ return RUBRIQUE_PALETTE[index % RUBRIQUE_PALETTE.length]; }
+const RUBRIQUE_UNCLASSIFIED_COLOR = '#9a988f';
+
+// Suggestions statiques de rubriques selon l'icône du projet — remplace une
+// liste vide pour éviter une page blanche à la création, et sert de point
+// d'ancrage pour brancher une vraie suggestion par IA plus tard (même
+// signature de fonction, il suffira de remplacer le corps par un appel API).
+const RUBRIQUE_SUGGESTIONS = {
+  '🏠': ['Fondation','Élévation','Toiture','Plomberie','Électricité','Finitions','Menuiserie','Main d’œuvre'],
+  '✈️': ['Transport','Hébergement','Repas','Activités','Visa / documents','Assurance voyage'],
+  '💍': ['Lieu de réception','Traiteur','Tenues','Décoration','Photo / vidéo','Invitations','Animation'],
+  '🎓': ['Frais de scolarité','Logement étudiant','Fournitures','Transport','Repas'],
+  '🛠️': ['Stock initial','Équipement','Local / loyer','Marketing','Main d’œuvre'],
+  '🚗': ['Achat du véhicule','Papiers / assurance','Entretien','Carburant'],
+  '❤️': ['Consultations','Médicaments','Hospitalisation','Transport médical'],
+};
+function suggestRubriquesFor(icon){ return RUBRIQUE_SUGGESTIONS[icon] || []; }
 function mapGoalFromApi(g){
   return { id: g.id, name: g.name, target: Number(g.target_amount), current: Number(g.current_amount), deadline: g.deadline };
 }
@@ -1145,13 +1235,14 @@ function mapTontineFromApi(t){
  */
 async function bootstrapAfterAuth(){
   try {
-    const [txRes, budRes, goalRes, tonRes, evRes, projRes] = await Promise.all([
+    const [txRes, budRes, goalRes, tonRes, evRes, projRes, rubRes] = await Promise.all([
       apiFetch('/api/transactions', { auth: true }),
       apiFetch('/api/budgets', { auth: true }),
       apiFetch('/api/savings-goals', { auth: true }),
       apiFetch('/api/tontines', { auth: true }),
       apiFetch('/api/planner-events', { auth: true }),
       apiFetch('/api/projects', { auth: true }),
+      apiFetch('/api/rubriques', { auth: true }),
     ]);
     state.transactions = txRes.transactions.map(mapTxFromApi);
     state.budgets = budRes.budgets.map(mapBudgetFromApi);
@@ -1159,6 +1250,7 @@ async function bootstrapAfterAuth(){
     state.tontines = tonRes.tontines.map(mapTontineFromApi);
     state.plannerEvents = evRes.plannerEvents.map(mapEventFromApi);
     state.projects = projRes.projects.map(mapProjectFromApi);
+    state.rubriques = rubRes.rubriques.map(mapRubriqueFromApi);
   } catch (err) {
     alert("Vos données n'ont pas pu être chargées : " + authErrorMessage(err) + " — vous pouvez continuer, mais certaines informations manqueront tant que le problème persiste.");
   }
@@ -1188,7 +1280,7 @@ async function onAuthenticated(data){
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
   session = { accessToken: null, refreshToken: null, user: null };
-  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = [];
+  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = [];
   chatInitialized = false;
   selectedProjectId = null;
   document.getElementById('appShell').hidden = true;
@@ -1648,7 +1740,30 @@ function populateProjectSelect(){
   sel.innerHTML = '<option value="">Aucun projet</option>' +
     state.projects.map(p=>`<option value="${p.id}">${p.icon} ${p.name}</option>`).join('');
   if([...sel.options].some(o=>o.value===current)) sel.value = current;
+  populateRubriqueSelectForProject(sel.value);
 }
+
+// La rubrique n'a de sens que si un projet est sélectionné : le champ reste
+// masqué sinon. Appelé au chargement, à chaque changement de "Projet", et
+// chaque fois que state.rubriques change (création/suppression de rubrique).
+function populateRubriqueSelectForProject(projectId, keepCurrent){
+  const field = document.getElementById('txRubriqueField');
+  const sel = document.getElementById('txRubrique');
+  const current = keepCurrent ? sel.value : '';
+  if(!projectId){
+    field.style.display = 'none';
+    sel.innerHTML = '<option value="">Aucune rubrique</option>';
+    return;
+  }
+  const options = rubriquesForProject(projectId);
+  field.style.display = '';
+  sel.innerHTML = '<option value="">Aucune rubrique</option>' +
+    options.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+  if([...sel.options].some(o=>o.value===current)) sel.value = current;
+}
+document.getElementById('txProject').addEventListener('change', (e)=>{
+  populateRubriqueSelectForProject(e.target.value);
+});
 
 function projectById(id){ return state.projects.find(p=>p.id===id); }
 function projectTag(projectId){
@@ -1656,6 +1771,12 @@ function projectTag(projectId){
   const p = projectById(projectId);
   if(!p) return '';
   return ` <span class="pill" title="Rattaché au projet">${p.icon} ${p.name}</span>`;
+}
+function rubriqueTag(rubriqueId){
+  if(!rubriqueId) return '';
+  const r = rubriqueById(rubriqueId);
+  if(!r) return '';
+  return ` <span class="pill" title="Rubrique du projet">🏷️ ${r.name}</span>`;
 }
 
 /**
@@ -1680,6 +1801,9 @@ function repeatTransaction(t){
   document.getElementById('txNote').value = t.note || '';
   const projSel = document.getElementById('txProject');
   if([...projSel.options].some(o=>o.value===(t.projectId||''))) projSel.value = t.projectId || '';
+  populateRubriqueSelectForProject(projSel.value);
+  const rubSel = document.getElementById('txRubrique');
+  if([...rubSel.options].some(o=>o.value===(t.rubriqueId||''))) rubSel.value = t.rubriqueId || '';
   document.getElementById('txForm').scrollIntoView({ behavior:'smooth', block:'start' });
   const amountInput = document.getElementById('txAmount');
   amountInput.focus();
@@ -1695,15 +1819,17 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const date = document.getElementById('txDate').value || todayISO(0);
   const note = document.getElementById('txNote').value;
   const projectId = document.getElementById('txProject').value || undefined;
+  const rubriqueId = document.getElementById('txRubrique').value || undefined;
   if(!amount || amount<=0) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId } });
+    const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId } });
     state.transactions.push(mapTxFromApi(transaction));
     e.target.reset();
     document.getElementById('txDate').value = todayISO(0);
     populateCategorySelect();
+    populateRubriqueSelectForProject('');
     renderAll();
   } catch(err){
     alert("Impossible d'enregistrer la transaction : " + authErrorMessage(err));
@@ -1728,7 +1854,7 @@ function renderTxTable(){
     <tr>
       <td>${t.date}</td>
       <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
-      <td>${t.category}${projectTag(t.projectId)}</td>
+      <td>${t.category}${projectTag(t.projectId)}${rubriqueTag(t.rubriqueId)}</td>
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
@@ -1905,8 +2031,72 @@ const PROJECT_STATUS_LABELS = { actif: 'Actif', termine: 'Terminé', archive: 'A
 
 document.getElementById('openProjectForm').addEventListener('click', ()=>{
   const card = document.getElementById('projectFormCard');
-  card.style.display = card.style.display==='none' ? 'block' : 'none';
+  const willShow = card.style.display === 'none';
+  if(willShow){
+    // Formulaire rouvert "propre" : on repart d'une sélection de rubriques
+    // vide à chaque nouvelle ouverture, pour ne pas recréer par erreur la
+    // sélection d'un projet précédent.
+    selectedRubriqueNames = [];
+    renderProjRubriqueChips();
+  }
+  card.style.display = willShow ? 'block' : 'none';
 });
+
+// ----- Suggestions de rubriques à la création d'un projet -----
+// Pour l'instant RUBRIQUE_SUGGESTIONS est une liste statique par icône (voir
+// plus haut) ; c'est le point d'entrée prévu pour qu'une IA propose plus tard
+// des rubriques personnalisées (ex: selon le nom du projet) sans toucher au
+// reste de ce flux — seule suggestRubriquesFor(icon) changerait.
+let selectedRubriqueNames = [];
+
+function renderProjRubriqueChips(){
+  const icon = document.getElementById('projIcon').value;
+  const suggestions = suggestRubriquesFor(icon);
+  const wrap = document.getElementById('projRubriqueChips');
+  const allNames = Array.from(new Set([...suggestions, ...selectedRubriqueNames]));
+  if(!allNames.length){
+    wrap.innerHTML = '<span style="font-size:12.5px; color:var(--text-muted);">Aucune suggestion pour cette icône — ajoutez vos propres rubriques ci-dessous si besoin.</span>';
+    return;
+  }
+  wrap.innerHTML = allNames.map(name=>{
+    const active = selectedRubriqueNames.includes(name);
+    const safe = name.replace(/"/g, '&quot;');
+    return `<button type="button" class="chip ${active?'active':''}" data-rub-chip="${safe}">${active?'✓ ':''}${name}</button>`;
+  }).join('');
+  wrap.querySelectorAll('[data-rub-chip]').forEach(chipBtn=>{
+    chipBtn.addEventListener('click', ()=>{
+      const name = chipBtn.dataset.rubChip;
+      const idx = selectedRubriqueNames.indexOf(name);
+      if(idx>=0) selectedRubriqueNames.splice(idx,1);
+      else selectedRubriqueNames.push(name);
+      renderProjRubriqueChips();
+    });
+  });
+}
+
+document.getElementById('projIcon').addEventListener('change', ()=>{
+  // Les suggestions dépendent de l'icône : on repart d'une sélection vide
+  // plutôt que de mélanger les suggestions de deux icônes différentes.
+  selectedRubriqueNames = [];
+  renderProjRubriqueChips();
+});
+
+function addCustomRubriqueChip(){
+  const input = document.getElementById('projRubriqueCustom');
+  const name = input.value.trim();
+  if(!name) return;
+  if(!selectedRubriqueNames.some(n=>n.toLowerCase()===name.toLowerCase())){
+    selectedRubriqueNames.push(name);
+  }
+  input.value = '';
+  renderProjRubriqueChips();
+}
+document.getElementById('projRubriqueAddCustom').addEventListener('click', addCustomRubriqueChip);
+document.getElementById('projRubriqueCustom').addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter'){ e.preventDefault(); addCustomRubriqueChip(); }
+});
+
+renderProjRubriqueChips();
 
 document.getElementById('projectForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -1921,7 +2111,23 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
   try {
     const { project } = await apiFetch('/api/projects', { method:'POST', auth:true, body:{ name, icon, targetAmount, targetDate } });
     state.projects.push(mapProjectFromApi(project)); // projet neuf : totaux à 0, mapProjectFromApi est donc sûr ici
+
+    // Création séquentielle des rubriques sélectionnées — pas d'endpoint
+    // batch : un projet démarre rarement avec plus de 5-6 rubriques, la
+    // simplicité prime ici. Un échec isolé sur une rubrique n'annule pas le
+    // projet déjà créé (l'utilisateur pourra toujours l'ajouter à la main).
+    for(const rubName of selectedRubriqueNames){
+      try {
+        const { rubrique } = await apiFetch(`/api/projects/${project.id}/rubriques`, { method:'POST', auth:true, body:{ name: rubName } });
+        state.rubriques.push(mapRubriqueFromApi(rubrique));
+      } catch(err){
+        console.error('Rubrique non créée à la création du projet :', rubName, err);
+      }
+    }
+
     e.target.reset();
+    selectedRubriqueNames = [];
+    renderProjRubriqueChips();
     document.getElementById('projectFormCard').style.display = 'none';
     populateProjectSelect();
     renderProjects();
@@ -2058,15 +2264,21 @@ function renderProjectDetail(){
   document.getElementById('projDelete').addEventListener('click', ()=> deleteProjectWithConfirm(p.id));
 
   const rows = state.transactions.filter(t=>t.projectId===p.id).sort((a,b)=> b.date.localeCompare(a.date));
-  document.querySelector('#projectTxTable tbody').innerHTML = rows.map(t=>`
+  document.querySelector('#projectTxTable tbody').innerHTML = rows.map(t=>{
+    const r = t.rubriqueId ? rubriqueById(t.rubriqueId) : null;
+    return `
     <tr>
       <td>${t.date}</td>
       <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
       <td>${t.category}</td>
+      <td>${r ? r.name : '<span class="empty-state" style="padding:0; display:inline;">Non classé</span>'}</td>
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
-    </tr>`).join('') || '<tr><td colspan="6" class="empty-state">Aucun mouvement rattaché à ce projet pour le moment.</td></tr>';
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" class="empty-state">Aucun mouvement rattaché à ce projet pour le moment.</td></tr>';
+
+  renderProjectRubriques(p);
 }
 
 // N'écrase QUE les champs renvoyés par PATCH /api/projects/:id (nom, icône,
@@ -2079,6 +2291,160 @@ function applyProjectPatch(p, apiRow){
   p.target = apiRow.target_amount != null ? Number(apiRow.target_amount) : null;
   p.targetDate = apiRow.target_date;
   p.status = apiRow.status;
+}
+
+/* ----- Rubriques (postes de dépense à l'intérieur d'un projet) ----- */
+// null quand le formulaire sert à CRÉER une rubrique, sinon l'id de celle en
+// cours de modification (le même formulaire sert aux deux cas — voir
+// openRubriqueEditForm / le submit handler de #rubriqueForm).
+let editingRubriqueId = null;
+
+document.getElementById('openRubriqueForm').addEventListener('click', ()=>{
+  editingRubriqueId = null;
+  const card = document.getElementById('rubriqueFormCard');
+  const willShow = card.style.display === 'none';
+  if(willShow){
+    document.getElementById('rubriqueForm').reset();
+    document.getElementById('rubriqueFormSubmit').textContent = 'Ajouter';
+  }
+  card.style.display = willShow ? 'block' : 'none';
+});
+
+function openRubriqueEditForm(r){
+  editingRubriqueId = r.id;
+  document.getElementById('rubName').value = r.name;
+  document.getElementById('rubPlanned').value = r.plannedAmount || '';
+  document.getElementById('rubriqueFormSubmit').textContent = 'Enregistrer';
+  document.getElementById('rubriqueFormCard').style.display = 'block';
+  document.getElementById('rubriqueFormCard').scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+document.getElementById('rubriqueForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const p = projectById(selectedProjectId);
+  if(!p) return;
+  const name = document.getElementById('rubName').value.trim();
+  const plannedRaw = document.getElementById('rubPlanned').value;
+  const plannedAmount = plannedRaw ? parseFloat(plannedRaw) : undefined;
+  if(!name) return;
+  const btn = e.target.querySelector('button[type="submit"]');
+  if(btn) btn.disabled = true;
+  try {
+    if(editingRubriqueId){
+      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques/${editingRubriqueId}`, { method:'PATCH', auth:true, body:{ name, plannedAmount } });
+      const existing = rubriqueById(editingRubriqueId);
+      Object.assign(existing, mapRubriqueFromApi(rubrique));
+    } else {
+      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques`, { method:'POST', auth:true, body:{ name, plannedAmount } });
+      state.rubriques.push(mapRubriqueFromApi(rubrique));
+    }
+    editingRubriqueId = null;
+    e.target.reset();
+    document.getElementById('rubriqueFormCard').style.display = 'none';
+    document.getElementById('rubriqueFormSubmit').textContent = 'Ajouter';
+    populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
+    renderProjectDetail();
+  } catch(err){
+    alert("Impossible d'enregistrer la rubrique : " + authErrorMessage(err));
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+});
+
+async function deleteRubriqueWithConfirm(id){
+  const p = projectById(selectedProjectId);
+  const r = rubriqueById(id);
+  if(!p || !r) return;
+  if(!confirm(`Supprimer la rubrique "${r.name}" ? Les dépenses déjà enregistrées resteront dans le projet, seule l'étiquette de rubrique sera retirée.`)) return;
+  try {
+    await apiFetch(`/api/projects/${p.id}/rubriques/${id}`, { method:'DELETE', auth:true });
+    state.rubriques = state.rubriques.filter(x=>x.id!==id);
+    state.transactions.forEach(t=>{ if(t.rubriqueId===id) t.rubriqueId = null; });
+    populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
+    renderProjectDetail();
+  } catch(err){
+    alert('Suppression impossible : ' + authErrorMessage(err));
+  }
+}
+
+// Donut + liste de répartition par rubrique, avec un segment "Non classé"
+// regroupant les dépenses du projet sans rubrique — ainsi la somme affichée
+// (rubriques + non classé) correspond toujours exactement au total dépensé
+// du projet (projectStats(p.id).totalOut), jamais de montant qui "disparaît".
+function renderProjectRubriques(p){
+  const rubriquesList = rubriquesForProject(p.id);
+  const stats = projectStats(p.id);
+  const classifiedTotal = rubriquesList.reduce((sum,r)=> sum + rubriqueStats(r.id).total, 0);
+  const unclassified = Math.max(stats.totalOut - classifiedTotal, 0);
+
+  const donutWrap = document.getElementById('rubriqueDonutWrap');
+  if(stats.totalOut <= 0){
+    donutWrap.innerHTML = '<div class="empty-state">Aucune dépense enregistrée pour ce projet pour le moment.</div>';
+  } else {
+    const segments = rubriquesList.map((r,i)=>({ label: r.name, val: rubriqueStats(r.id).total, color: rubriqueColor(i) }))
+      .filter(s=>s.val>0);
+    if(unclassified>0) segments.push({ label:'Non classé', val: unclassified, color: RUBRIQUE_UNCLASSIFIED_COLOR });
+
+    let acc = 0;
+    const stops = segments.map(s=>{
+      const start = acc/stats.totalOut*360;
+      acc += s.val;
+      const end = acc/stats.totalOut*360;
+      return `${s.color} ${start}deg ${end}deg`;
+    }).join(', ');
+    const legend = segments.slice().sort((a,b)=>b.val-a.val).map(s=>`
+      <div class="legend-row">
+        <span class="swatch" style="background:${s.color}"></span>
+        <span class="lname">${s.label}</span>
+        <span class="lpct">${Math.round(s.val/stats.totalOut*100)}%</span>
+        <span class="lval">${fmt(s.val)}</span>
+      </div>`).join('');
+    donutWrap.innerHTML = `
+      <div class="donut" style="background: conic-gradient(${stops});">
+        <div class="donut-center"><div class="t">Coût total</div><div class="v">${fmt(stats.totalOut)}</div></div>
+      </div>
+      <div class="legend">${legend}</div>
+    `;
+  }
+
+  const listEl = document.getElementById('rubriqueList');
+  if(!rubriquesList.length){
+    listEl.innerHTML = unclassified>0
+      ? `<div class="empty-state">Aucune rubrique créée — toutes les dépenses (${fmt(unclassified)}) sont pour l'instant "Non classées". Créez une rubrique pour commencer à les ventiler.</div>`
+      : '<div class="empty-state">Aucune rubrique créée pour ce projet pour le moment.</div>';
+    return;
+  }
+  listEl.innerHTML = rubriquesList.map((r,i)=>{
+    const spent = rubriqueStats(r.id).total;
+    const color = rubriqueColor(i);
+    const pct = r.plannedAmount ? Math.min(spent/r.plannedAmount, 1.4) : null;
+    const st = pct!==null ? statusForPct(spent/r.plannedAmount) : null;
+    return `
+    <div class="budget-item">
+      <div class="budget-top">
+        <div class="cat"><span class="swatch" style="background:${color}"></span>${r.name}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div class="nums">${fmt(spent)}${r.plannedAmount ? ' / ' + fmt(r.plannedAmount) : ''}</div>
+          <button type="button" class="btn btn-ghost" data-edit-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;">✎</button>
+          <button type="button" class="btn-danger" data-del-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;">Suppr.</button>
+        </div>
+      </div>
+      ${pct!==null ? `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct*100,100)}%; background:${st.color};"></div></div>` : ''}
+    </div>`;
+  }).join('') + (unclassified>0 ? `
+    <div class="budget-item">
+      <div class="budget-top">
+        <div class="cat"><span class="swatch" style="background:${RUBRIQUE_UNCLASSIFIED_COLOR}"></span>Non classé</div>
+        <div class="nums">${fmt(unclassified)}</div>
+      </div>
+    </div>` : '');
+
+  listEl.querySelectorAll('[data-edit-rubrique]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openRubriqueEditForm(rubriqueById(btn.dataset.editRubrique)));
+  });
+  listEl.querySelectorAll('[data-del-rubrique]').forEach(btn=>{
+    btn.addEventListener('click', ()=> deleteRubriqueWithConfirm(btn.dataset.delRubrique));
+  });
 }
 
 async function toggleProjectDone(id){
@@ -2157,12 +2523,55 @@ function exportProjectPDF(p, rows){
     footStyles: { fillColor: [245,245,245], textColor: 20, fontStyle: 'bold' },
   });
 
+  // Répartition par rubrique, même logique que renderProjectRubriques() (un
+  // segment "Non classé" absorbe les dépenses sans rubrique) — ainsi la somme
+  // de cette table correspond toujours exactement au total dépensé ci-dessus.
+  if(stats.totalOut > 0){
+    const rubriquesList = rubriquesForProject(p.id);
+    const classifiedTotal = rubriquesList.reduce((sum,r)=> sum + rubriqueStats(r.id).total, 0);
+    const unclassified = Math.max(stats.totalOut - classifiedTotal, 0);
+    const rubBody = rubriquesList.map(r=>{
+      const spent = rubriqueStats(r.id).total;
+      return [r.name, fmtPdf(spent), Math.round(spent/stats.totalOut*100)+'%', r.plannedAmount ? fmtPdf(r.plannedAmount) : '—'];
+    });
+    if(unclassified>0) rubBody.push(['Non classé', fmtPdf(unclassified), Math.round(unclassified/stats.totalOut*100)+'%', '—']);
+
+    const afterY = doc.lastAutoTable.finalY + 10;
+    doc.setFontSize(11);
+    doc.setTextColor(20);
+    doc.text('Répartition par rubrique', 14, afterY);
+    doc.autoTable({
+      startY: afterY + 4,
+      head: [['Rubrique','Dépensé','% du total','Enveloppe']],
+      body: rubBody,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [42, 120, 214] },
+    });
+  }
+
   doc.save(`POOSSER - ${p.name} - feuille.pdf`);
 }
 
 function exportProjectExcel(p, rows){
   if(!window.XLSX){ alert("Le générateur Excel n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
   const stats = projectStats(p.id);
+
+  // Même logique de "Non classé" que renderProjectRubriques()/exportProjectPDF
+  // : la somme de ce bloc correspond toujours exactement au total dépensé.
+  const rubriquesList = rubriquesForProject(p.id);
+  const classifiedTotal = rubriquesList.reduce((sum,r)=> sum + rubriqueStats(r.id).total, 0);
+  const unclassified = Math.max(stats.totalOut - classifiedTotal, 0);
+  const rubriqueRows = stats.totalOut > 0 ? [
+    [],
+    ['Répartition par rubrique'],
+    ['Rubrique','Dépensé','% du total','Enveloppe'],
+    ...rubriquesList.map(r=>{
+      const spent = rubriqueStats(r.id).total;
+      return [r.name, spent, Math.round(spent/stats.totalOut*100)+'%', r.plannedAmount || ''];
+    }),
+    ...(unclassified>0 ? [['Non classé', unclassified, Math.round(unclassified/stats.totalOut*100)+'%', '']] : []),
+  ] : [];
+
   const aoa = [
     ['POOSSER — Feuille de projet'],
     [`${p.icon} ${p.name}`],
@@ -2174,6 +2583,7 @@ function exportProjectExcel(p, rows){
     ['','','','','Total encaissé', stats.totalIn],
     ['','','','','Total dépensé', stats.totalOut],
     ['','','','','Solde', stats.balance],
+    ...rubriqueRows,
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:12},{wch:14},{wch:16},{wch:18},{wch:28},{wch:14}];
