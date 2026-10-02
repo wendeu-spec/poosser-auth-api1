@@ -423,6 +423,191 @@ describe("Rubriques", () => {
   });
 });
 
+describe("Rubriques — imbrication (sous-rubriques)", () => {
+  it("crée une sous-rubrique rattachée à une rubrique parente, à profondeur illimitée", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Voyage" })
+      .expect(201);
+    const projectId = project.body.project.id;
+
+    const transport = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const billets = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion", parentRubriqueId: transport.body.rubrique.id })
+      .expect(201);
+    expect(billets.body.rubrique.parent_rubrique_id).toBe(transport.body.rubrique.id);
+
+    // Profondeur illimitée : une sous-rubrique peut elle-même avoir un enfant.
+    const vol = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Vol long-courrier", parentRubriqueId: billets.body.rubrique.id })
+      .expect(201);
+    expect(vol.body.rubrique.parent_rubrique_id).toBe(billets.body.rubrique.id);
+  });
+
+  it("autorise une dépense directement sur une rubrique qui a des sous-rubriques (ex: taxi sur Transport)", async () => {
+    const { access } = await authedUser();
+    const project = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "Voyage 2" }).expect(201);
+    const projectId = project.body.project.id;
+    const transport = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion", parentRubriqueId: transport.body.rubrique.id })
+      .expect(201);
+
+    // Taxi tagué directement sur la rubrique parente "Transport", pas sur la sous-rubrique.
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Transport", amount: 5000, occurredOn: "2026-08-18", method: "Espèces", projectId, rubriqueId: transport.body.rubrique.id })
+      .expect(201);
+  });
+
+  it("refuse qu'une rubrique parente appartenant à un autre projet soit utilisée", async () => {
+    const { access } = await authedUser();
+    const projectA = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "A" }).expect(201);
+    const projectB = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "B" }).expect(201);
+    const rubriqueA = await request(app)
+      .post(`/api/projects/${projectA.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Rubrique A" })
+      .expect(201);
+
+    const res = await request(app)
+      .post(`/api/projects/${projectB.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Sous X", parentRubriqueId: rubriqueA.body.rubrique.id })
+      .expect(404);
+    expect(res.body.error.code).toBe("RUBRIQUE_NOT_FOUND");
+  });
+
+  it("refuse de déplacer une rubrique sous l'une de ses propres sous-rubriques (cycle)", async () => {
+    const { access } = await authedUser();
+    const project = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "Cycle" }).expect(201);
+    const projectId = project.body.project.id;
+    const parent = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const child = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion", parentRubriqueId: parent.body.rubrique.id })
+      .expect(201);
+
+    // Tenter de faire de "Transport" une sous-rubrique de son propre enfant "Billets d'avion".
+    const res = await request(app)
+      .patch(`/api/projects/${projectId}/rubriques/${parent.body.rubrique.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ parentRubriqueId: child.body.rubrique.id })
+      .expect(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("détache explicitement une sous-rubrique de son parent via parentRubriqueId: null", async () => {
+    const { access } = await authedUser();
+    const project = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "Détachement" }).expect(201);
+    const projectId = project.body.project.id;
+    const parent = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const child = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion", parentRubriqueId: parent.body.rubrique.id })
+      .expect(201);
+
+    const patched = await request(app)
+      .patch(`/api/projects/${projectId}/rubriques/${child.body.rubrique.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ parentRubriqueId: null })
+      .expect(200);
+    expect(patched.body.rubrique.parent_rubrique_id).toBeNull();
+
+    // Un PATCH qui ne mentionne pas parentRubriqueId ne doit pas y toucher.
+    const untouched = await request(app)
+      .patch(`/api/projects/${projectId}/rubriques/${child.body.rubrique.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion (renommé)" })
+      .expect(200);
+    expect(untouched.body.rubrique.parent_rubrique_id).toBeNull();
+  });
+
+  it("supprimer une rubrique intermédiaire ré-attache ses enfants à son propre parent (pas d'aplatissement complet)", async () => {
+    const { access } = await authedUser();
+    const project = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "Arbre profond" }).expect(201);
+    const projectId = project.body.project.id;
+    const transport = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const billets = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion", parentRubriqueId: transport.body.rubrique.id })
+      .expect(201);
+    const vol = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Vol long-courrier", parentRubriqueId: billets.body.rubrique.id })
+      .expect(201);
+
+    // Supprime le niveau intermédiaire "Billets d'avion" : "Vol long-courrier"
+    // doit remonter à SON grand-parent "Transport", pas directement en haut de l'arbre.
+    await request(app)
+      .delete(`/api/projects/${projectId}/rubriques/${billets.body.rubrique.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(204);
+
+    const list = await request(app).get(`/api/projects/${projectId}/rubriques`).set("Authorization", `Bearer ${access}`).expect(200);
+    const volAfter = list.body.rubriques.find((r: { id: string }) => r.id === vol.body.rubrique.id);
+    expect(volAfter.parent_rubrique_id).toBe(transport.body.rubrique.id);
+  });
+
+  it("supprimer une rubrique de premier niveau promeut ses enfants directs au premier niveau", async () => {
+    const { access } = await authedUser();
+    const project = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "Promotion" }).expect(201);
+    const projectId = project.body.project.id;
+    const transport = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const billets = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets d'avion", parentRubriqueId: transport.body.rubrique.id })
+      .expect(201);
+
+    await request(app)
+      .delete(`/api/projects/${projectId}/rubriques/${transport.body.rubrique.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(204);
+
+    const list = await request(app).get(`/api/projects/${projectId}/rubriques`).set("Authorization", `Bearer ${access}`).expect(200);
+    const billetsAfter = list.body.rubriques.find((r: { id: string }) => r.id === billets.body.rubrique.id);
+    expect(billetsAfter.parent_rubrique_id).toBeNull();
+  });
+});
+
 describe("Planner financier", () => {
   it("crée un événement puis valide sa réalisation", async () => {
     const { access } = await authedUser();
