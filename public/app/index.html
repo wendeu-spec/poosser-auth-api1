@@ -593,8 +593,12 @@
     </div>
 
     <div class="card" style="margin-bottom:18px;">
-      <h3>Ajouter un mouvement</h3>
-      <div class="sub">Renseignez les informations puis validez, ou dictez le mouvement à voix haute</div>
+      <h3 id="txFormTitle">Ajouter un mouvement</h3>
+      <div class="sub" id="txFormSub">Renseignez les informations puis validez, ou dictez le mouvement à voix haute</div>
+      <div class="sub" id="txEditBanner" style="display:none; color:var(--accent,#b8860b);">
+        ✏️ Modification du mouvement sélectionné — les changements remplacent l'ancienne saisie.
+        <button type="button" id="txCancelEdit" class="btn btn-ghost" style="padding:2px 10px; font-size:12px; margin-left:8px;">Annuler</button>
+      </div>
       <div class="voice-bar">
         <button type="button" class="btn btn-ghost mic-btn" id="txMicBtn">🎤 Dicter un mouvement</button>
         <div class="voice-status" id="txVoiceStatus">Ex : « Dépense de 15000 FCFA pour Alimentation, marché du dimanche, payé en mobile money »</div>
@@ -640,7 +644,7 @@
           <input type="text" id="txNote" placeholder="Ex: Marché du dimanche">
         </div>
         <div class="field">
-          <button type="submit" class="btn btn-primary">Ajouter le mouvement</button>
+          <button type="submit" class="btn btn-primary" id="txSubmitBtn">Ajouter le mouvement</button>
         </div>
       </form>
     </div>
@@ -1448,6 +1452,12 @@ document.getElementById('logoutBtn').addEventListener('click', async ()=>{
 });
 
 let txTypeFilter = 'all';
+// Transaction en cours de modification (bouton "Modifier" de l'historique) —
+// null quand le formulaire sert à AJOUTER un nouveau mouvement. Voir
+// enterTxEditMode()/exitTxEditMode() : le formulaire est partagé entre les
+// deux usages, seul ce flag (et le libellé du bouton) change le comportement
+// du submit (POST vs PATCH /api/transactions/:id).
+let editingTxId = null;
 let chatInitialized = false;
 let selectedProjectId = null;
 
@@ -1833,6 +1843,7 @@ function rubriqueTag(rubriqueId){
  * Ne crée rien tant que l'utilisateur n'a pas validé le formulaire.
  */
 function repeatTransaction(t){
+  exitTxEditMode(); // au cas où une autre modification était en cours
   const typeSel = document.getElementById('txType');
   if(typeSel.value !== t.type){
     typeSel.value = t.type;
@@ -1855,6 +1866,55 @@ function repeatTransaction(t){
   amountInput.select();
 }
 
+/**
+ * Ouvre le formulaire "Ajouter un mouvement" en mode MODIFICATION pour la
+ * transaction t (bouton "✏️ Modifier" de l'historique) — contrairement à
+ * repeatTransaction(), la date d'origine est conservée (on corrige le
+ * mouvement existant, on n'en crée pas un nouveau) et la soumission du
+ * formulaire fera un PATCH /api/transactions/:id au lieu d'un POST.
+ */
+function enterTxEditMode(t){
+  editingTxId = t.id;
+  const typeSel = document.getElementById('txType');
+  if(typeSel.value !== t.type){
+    typeSel.value = t.type;
+    typeSel.dispatchEvent(new Event('change'));
+  }
+  const catSel = document.getElementById('txCategory');
+  if([...catSel.options].some(o=>o.value===t.category)) catSel.value = t.category;
+  document.getElementById('txAmount').value = t.amount;
+  document.getElementById('txMethod').value = t.method;
+  document.getElementById('txDate').value = t.date;
+  document.getElementById('txNote').value = t.note || '';
+  const projSel = document.getElementById('txProject');
+  if([...projSel.options].some(o=>o.value===(t.projectId||''))) projSel.value = t.projectId || '';
+  populateRubriqueSelectForProject(projSel.value);
+  const rubSel = document.getElementById('txRubrique');
+  if([...rubSel.options].some(o=>o.value===(t.rubriqueId||''))) rubSel.value = t.rubriqueId || '';
+
+  document.getElementById('txEditBanner').style.display = '';
+  document.getElementById('txSubmitBtn').textContent = 'Enregistrer les modifications';
+  document.getElementById('txForm').scrollIntoView({ behavior:'smooth', block:'start' });
+  const amountInput = document.getElementById('txAmount');
+  amountInput.focus();
+  amountInput.select();
+}
+
+// Quitte le mode modification et remet le formulaire à l'état "ajouter un
+// mouvement" — appelé après un PATCH réussi, sur "Annuler", ou avant de
+// réutiliser le formulaire pour un autre usage (ex: "Répéter").
+function exitTxEditMode(){
+  editingTxId = null;
+  document.getElementById('txEditBanner').style.display = 'none';
+  document.getElementById('txSubmitBtn').textContent = 'Ajouter le mouvement';
+  document.getElementById('txForm').reset();
+  document.getElementById('txDate').value = todayISO(0);
+  populateCategorySelect();
+  populateRubriqueSelectForProject('');
+}
+
+document.getElementById('txCancelEdit').addEventListener('click', exitTxEditMode);
+
 document.getElementById('txForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const type = document.getElementById('txType').value;
@@ -1869,12 +1929,27 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId } });
-    state.transactions.push(mapTxFromApi(transaction));
-    e.target.reset();
-    document.getElementById('txDate').value = todayISO(0);
-    populateCategorySelect();
-    populateRubriqueSelectForProject('');
+    if(editingTxId){
+      // null explicite (et non undefined) pour pouvoir détacher un projet,
+      // une rubrique ou effacer la note en modification — voir le traitement
+      // tri-état de PATCH /api/transactions/:id côté serveur.
+      const { transaction } = await apiFetch('/api/transactions/' + editingTxId, { method:'PATCH', auth:true, body:{
+        type, category, amount, occurredOn: date, method,
+        note: note ? note : null,
+        projectId: projectId ?? null,
+        rubriqueId: rubriqueId ?? null,
+      }});
+      const idx = state.transactions.findIndex(x=>x.id===editingTxId);
+      if(idx !== -1) state.transactions[idx] = mapTxFromApi(transaction);
+      exitTxEditMode();
+    } else {
+      const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId } });
+      state.transactions.push(mapTxFromApi(transaction));
+      e.target.reset();
+      document.getElementById('txDate').value = todayISO(0);
+      populateCategorySelect();
+      populateRubriqueSelectForProject('');
+    }
     renderAll();
   } catch(err){
     alert("Impossible d'enregistrer la transaction : " + authErrorMessage(err));
@@ -1904,11 +1979,18 @@ function renderTxTable(){
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
       <td style="white-space:nowrap;">
+        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin-right:6px;" data-edit="${t.id}" title="Modifier ce mouvement">✏️ Modifier</button>
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin-right:6px;" data-repeat="${t.id}" title="Pré-remplir le formulaire avec ce mouvement">↻ Répéter</button>
         <button class="btn-danger" data-del="${t.id}">Suppr.</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="7" class="empty-state">Aucune transaction pour ce filtre</td></tr>';
 
+  document.querySelectorAll('[data-edit]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const t = state.transactions.find(x=>x.id===btn.dataset.edit);
+      if(t) enterTxEditMode(t);
+    });
+  });
   document.querySelectorAll('[data-repeat]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const t = state.transactions.find(x=>x.id===btn.dataset.repeat);
@@ -1922,6 +2004,7 @@ function renderTxTable(){
       try {
         await apiFetch('/api/transactions/' + id, { method:'DELETE', auth:true });
         state.transactions = state.transactions.filter(t=>t.id !== id);
+        if(editingTxId === id) exitTxEditMode();
         renderAll();
       } catch(err){
         alert('Suppression impossible : ' + authErrorMessage(err));
