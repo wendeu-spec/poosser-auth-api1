@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
+import { assertRubriqueBelongsToProject } from "./rubriqueService.js";
 
 export interface TransactionRow {
   id: string;
@@ -10,6 +11,7 @@ export interface TransactionRow {
   method: string;
   note: string | null;
   project_id: string | null;
+  rubrique_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -25,6 +27,33 @@ export interface TransactionInput {
   // reste par ailleurs comptée normalement dans le budget et les listes
   // générales (vision consolidée, voir migrations/019_projects.sql).
   projectId?: string;
+  // Rattachement optionnel à une rubrique DU projet ci-dessus (postes de
+  // dépense à l'intérieur d'un projet, voir migrations/020_rubriques.sql).
+  // N'a de sens que si projectId est aussi fourni — vérifié ci-dessous.
+  rubriqueId?: string;
+}
+
+// La rubrique n'a de sens qu'à l'intérieur d'un projet donné : on exige donc
+// projectId dès que rubriqueId est fourni, et on vérifie que la rubrique
+// appartient bien à CE projet (et à l'utilisateur) — jamais une rubrique
+// empruntée à un autre projet ou à un autre compte.
+async function assertProjectAndRubriqueConsistent(
+  userId: string,
+  projectId: string | null | undefined,
+  rubriqueId: string | null | undefined,
+): Promise<void> {
+  if (!rubriqueId) return;
+  if (!projectId) throw Errors.validation({ field: "rubriqueId", reason: "requires projectId" });
+  await assertRubriqueBelongsToProject(userId, rubriqueId, projectId);
+}
+
+// projectId n'a de garde-fou nulle part ailleurs : sans cette vérification,
+// un projectId appartenant à un autre utilisateur serait accepté tel quel et
+// fausserait silencieusement les totaux agrégés de SON projet (fuite de
+// données entre comptes via project_id, voir projectService.SUMMARY_SELECT).
+async function assertProjectOwnedByUser(userId: string, projectId: string): Promise<void> {
+  const { rows } = await pool.query(`SELECT id FROM projects WHERE id = $1 AND user_id = $2`, [projectId, userId]);
+  if (!rows[0]) throw Errors.projectNotFound();
 }
 
 // Toutes les requêtes filtrent systématiquement sur user_id : c'est la seule
@@ -47,10 +76,13 @@ export async function listTransactions(userId: string, projectId?: string): Prom
 }
 
 export async function createTransaction(userId: string, input: TransactionInput): Promise<TransactionRow> {
+  if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
+  await assertProjectAndRubriqueConsistent(userId, input.projectId, input.rubriqueId);
+
   const { rows } = await pool.query<TransactionRow>(
-    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null],
+    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null],
   );
   return rows[0]!;
 }
@@ -60,8 +92,17 @@ export async function updateTransaction(
   id: string,
   input: Partial<TransactionInput>,
 ): Promise<TransactionRow> {
-  const existing = await pool.query(`SELECT id FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
+  const existing = await pool.query<TransactionRow>(`SELECT * FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!existing.rows[0]) throw Errors.transactionNotFound();
+
+  if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
+  if (input.rubriqueId) {
+    // Le projet effectif après cette mise à jour : celui fourni dans ce PATCH,
+    // sinon celui déjà enregistré sur la transaction (COALESCE côté app plutôt
+    // que SQL, car on a besoin de sa valeur pour la validation ci-dessous).
+    const effectiveProjectId = input.projectId ?? existing.rows[0]!.project_id ?? undefined;
+    await assertProjectAndRubriqueConsistent(userId, effectiveProjectId, input.rubriqueId);
+  }
 
   const { rows } = await pool.query<TransactionRow>(
     `UPDATE transactions SET
@@ -71,10 +112,11 @@ export async function updateTransaction(
        occurred_on = COALESCE($6, occurred_on),
        method = COALESCE($7, method),
        note = COALESCE($8, note),
-       project_id = COALESCE($9, project_id)
+       project_id = COALESCE($9, project_id),
+       rubrique_id = COALESCE($10, rubrique_id)
      WHERE id = $1 AND user_id = $2
      RETURNING *`,
-    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, input.note ?? null, input.projectId ?? null],
+    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null],
   );
   return rows[0]!;
 }
