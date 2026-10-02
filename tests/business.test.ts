@@ -15,6 +15,7 @@ describe("routes métier — exigent toutes un access token", () => {
     await request(app).get("/api/budgets").expect(401);
     await request(app).get("/api/savings-goals").expect(401);
     await request(app).get("/api/projects").expect(401);
+    await request(app).get("/api/rubriques").expect(401);
     await request(app).get("/api/tontines").expect(401);
     await request(app).get("/api/planner-events").expect(401);
   });
@@ -223,6 +224,202 @@ describe("Projets", () => {
     const list = await request(app).get("/api/transactions").set("Authorization", `Bearer ${access}`).expect(200);
     expect(list.body.transactions).toHaveLength(1);
     expect(list.body.transactions[0].project_id).toBeNull();
+  });
+});
+
+describe("Rubriques", () => {
+  it("crée des rubriques dans un projet et rattache des dépenses, le réel se recalcule depuis les transactions", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Voyage Douala-Paris" })
+      .expect(201);
+    const projectId = project.body.project.id;
+
+    const transport = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport", plannedAmount: 500000 })
+      .expect(201);
+    const hebergement = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Hébergement" }) // enveloppe optionnelle : absente ici
+      .expect(201);
+    expect(transport.body.rubrique.planned_amount).toBe("500000.00");
+    expect(hebergement.body.rubrique.planned_amount).toBeNull();
+
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Transport", amount: 150000, occurredOn: "2026-08-18", method: "Mobile Money", projectId, rubriqueId: transport.body.rubrique.id })
+      .expect(201);
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Transport", amount: 80000, occurredOn: "2026-08-19", method: "Espèces", projectId, rubriqueId: transport.body.rubrique.id })
+      .expect(201);
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Logement", amount: 300000, occurredOn: "2026-08-20", method: "Virement bancaire", projectId, rubriqueId: hebergement.body.rubrique.id })
+      .expect(201);
+
+    const list = await request(app)
+      .get(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(200);
+    expect(list.body.rubriques).toHaveLength(2);
+    // Pas de total pré-calculé renvoyé par l'API — recalcul côté client depuis
+    // les transactions (même principe que les totaux de projet).
+    expect(list.body.rubriques[0]).not.toHaveProperty("total_out");
+
+    const txs = await request(app)
+      .get(`/api/transactions?projectId=${projectId}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(200);
+    const transportTotal = txs.body.transactions
+      .filter((t: { rubrique_id: string | null }) => t.rubrique_id === transport.body.rubrique.id)
+      .reduce((sum: number, t: { amount: string }) => sum + Number(t.amount), 0);
+    expect(transportTotal).toBe(230000);
+  });
+
+  it("exige projectId quand rubriqueId est fourni", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Mariage" })
+      .expect(201);
+    const rubrique = await request(app)
+      .post(`/api/projects/${project.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Traiteur" })
+      .expect(201);
+
+    const res = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 10000, occurredOn: "2026-08-18", method: "Espèces", rubriqueId: rubrique.body.rubrique.id })
+      .expect(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("refuse une rubrique empruntée à un autre projet", async () => {
+    const { access } = await authedUser();
+    const projectA = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Projet A" })
+      .expect(201);
+    const projectB = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Projet B" })
+      .expect(201);
+    const rubriqueA = await request(app)
+      .post(`/api/projects/${projectA.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Rubrique A" })
+      .expect(201);
+
+    const res = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 10000, occurredOn: "2026-08-18", method: "Espèces", projectId: projectB.body.project.id, rubriqueId: rubriqueA.body.rubrique.id })
+      .expect(404);
+    expect(res.body.error.code).toBe("RUBRIQUE_NOT_FOUND");
+  });
+
+  it("refuse d'accéder aux rubriques d'un projet d'un autre utilisateur (404, pas une fuite)", async () => {
+    const u1 = await authedUser();
+    const u2 = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .send({ name: "Privé" })
+      .expect(201);
+
+    const res = await request(app)
+      .get(`/api/projects/${project.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .expect(404);
+    expect(res.body.error.code).toBe("PROJECT_NOT_FOUND");
+
+    const createRes = await request(app)
+      .post(`/api/projects/${project.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .send({ name: "Intrusion" })
+      .expect(404);
+    expect(createRes.body.error.code).toBe("PROJECT_NOT_FOUND");
+  });
+
+  it("supprimer une rubrique détache ses transactions sans les effacer", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Construction" })
+      .expect(201);
+    const projectId = project.body.project.id;
+    const rubrique = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Fondation" })
+      .expect(201);
+
+    const tx = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 200000, occurredOn: "2026-08-18", method: "Espèces", projectId, rubriqueId: rubrique.body.rubrique.id })
+      .expect(201);
+
+    await request(app)
+      .delete(`/api/projects/${projectId}/rubriques/${rubrique.body.rubrique.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(204);
+
+    const list = await request(app).get("/api/transactions").set("Authorization", `Bearer ${access}`).expect(200);
+    const kept = list.body.transactions.find((t: { id: string }) => t.id === tx.body.transaction.id);
+    expect(kept).toBeTruthy();
+    expect(kept.rubrique_id).toBeNull();
+    expect(kept.project_id).toBe(projectId);
+  });
+
+  it("supprimer un projet supprime aussi ses rubriques (cascade)", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Activité" })
+      .expect(201);
+    const projectId = project.body.project.id;
+    await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Stock initial" })
+      .expect(201);
+
+    await request(app).delete(`/api/projects/${projectId}`).set("Authorization", `Bearer ${access}`).expect(204);
+
+    // Le projet n'existe plus : lister ses rubriques renvoie 404 (projet introuvable).
+    const res = await request(app)
+      .get(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(404);
+    expect(res.body.error.code).toBe("PROJECT_NOT_FOUND");
+  });
+
+  it("GET /api/rubriques renvoie les rubriques de tous les projets de l'utilisateur", async () => {
+    const { access } = await authedUser();
+    const p1 = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "P1" }).expect(201);
+    const p2 = await request(app).post("/api/projects").set("Authorization", `Bearer ${access}`).send({ name: "P2" }).expect(201);
+    await request(app).post(`/api/projects/${p1.body.project.id}/rubriques`).set("Authorization", `Bearer ${access}`).send({ name: "A" }).expect(201);
+    await request(app).post(`/api/projects/${p2.body.project.id}/rubriques`).set("Authorization", `Bearer ${access}`).send({ name: "B" }).expect(201);
+
+    const all = await request(app).get("/api/rubriques").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(all.body.rubriques).toHaveLength(2);
   });
 });
 
