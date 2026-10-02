@@ -728,7 +728,7 @@
         </div>
 
         <div id="rubriqueFormCard" style="display:none; margin:14px 0 4px;">
-          <form id="rubriqueForm" class="form-grid" style="grid-template-columns: 2fr 1.4fr auto; margin-bottom:0;">
+          <form id="rubriqueForm" class="form-grid" style="grid-template-columns: 1.6fr 1.6fr 1.2fr auto; margin-bottom:0;">
             <div class="field">
               <label>Nom de la rubrique</label>
               <input type="text" id="rubName" placeholder="Ex: Fondation" required>
@@ -736,6 +736,10 @@
             <div class="field">
               <label>Enveloppe (FCFA, optionnel)</label>
               <input type="number" id="rubPlanned" min="1" placeholder="Ex: 2000000">
+            </div>
+            <div class="field">
+              <label>Sous-rubrique de (optionnel)</label>
+              <select id="rubParent"><option value="">Aucune (rubrique principale)</option></select>
             </div>
             <div class="field">
               <button type="submit" class="btn btn-primary" id="rubriqueFormSubmit">Ajouter</button>
@@ -1155,29 +1159,60 @@ function projectStats(projectId){
   return { totalIn, totalOut, balance: totalIn - totalOut, count: rows.length };
 }
 
-// Ne garde QUE les champs stables d'une rubrique (nom, enveloppe) — même
-// raison que mapProjectFromApi : le montant réel dépensé n'est jamais mis en
-// cache ici, toujours recalculé en direct via rubriqueStats() pour ne jamais
-// se désynchroniser quand une transaction est ajoutée/modifiée/supprimée.
+// Ne garde QUE les champs stables d'une rubrique (nom, enveloppe, parent) —
+// même raison que mapProjectFromApi : le montant réel dépensé n'est jamais
+// mis en cache ici, toujours recalculé en direct via rubriqueOwnStats()/
+// rubriqueRollupStats() pour ne jamais se désynchroniser quand une
+// transaction est ajoutée/modifiée/supprimée. parentId est null pour une
+// rubrique de premier niveau.
 function mapRubriqueFromApi(r){
   return {
     id: r.id,
     projectId: r.project_id,
     name: r.name,
     plannedAmount: r.planned_amount != null ? Number(r.planned_amount) : null,
+    parentId: r.parent_rubrique_id || null,
   };
 }
 function rubriqueById(id){ return state.rubriques.find(r=>r.id===id); }
 function rubriquesForProject(projectId){ return state.rubriques.filter(r=>r.projectId===projectId); }
+// Rubriques de premier niveau d'un projet (racines de l'arborescence),
+// dans l'ordre renvoyé par l'API (position/date de création).
+function topLevelRubriquesForProject(projectId){ return rubriquesForProject(projectId).filter(r=>!r.parentId); }
+// Enfants DIRECTS d'une rubrique (profondeur illimitée : un enfant peut
+// lui-même avoir des enfants, voir rubriqueDescendantIds ci-dessous).
+function rubriqueChildren(rubriqueId){ return state.rubriques.filter(r=>r.parentId===rubriqueId); }
+// Tous les descendants (enfants, petits-enfants, ...) d'une rubrique, à
+// n'importe quelle profondeur — utilisé pour le cumul des montants et pour
+// empêcher de choisir un descendant comme nouveau parent (cycle).
+function rubriqueDescendantIds(rubriqueId){
+  const ids = [];
+  rubriqueChildren(rubriqueId).forEach(c=>{ ids.push(c.id); ids.push(...rubriqueDescendantIds(c.id)); });
+  return ids;
+}
 
 // Seules les DÉPENSES comptent dans le coût d'une rubrique (voir discussion
 // produit : "le total des rubriques fera le coût total du projet") — un
 // revenu peut en théorie être étiqueté avec une rubrique mais n'entre pas
-// dans ce calcul.
-function rubriqueStats(rubriqueId){
+// dans ce calcul. rubriqueOwnStats ne compte QUE les dépenses rattachées
+// directement à cette rubrique (ex: un taxi tagué sur "Transport" alors que
+// "Billets d'avion" est une sous-rubrique à part) ; rubriqueRollupStats
+// additionne en plus, récursivement, toutes les sous-rubriques à tout
+// niveau — c'est ce cumul qui doit être utilisé pour le donut et les totaux
+// affichés par rubrique de premier niveau.
+function rubriqueOwnStats(rubriqueId){
   const rows = state.transactions.filter(t=>t.rubriqueId===rubriqueId && t.type==='depense');
   const total = rows.reduce((a,t)=>a+t.amount,0);
   return { total, count: rows.length };
+}
+function rubriqueRollupStats(rubriqueId){
+  const own = rubriqueOwnStats(rubriqueId);
+  let total = own.total, count = own.count;
+  rubriqueDescendantIds(rubriqueId).forEach(id=>{
+    const s = rubriqueOwnStats(id);
+    total += s.total; count += s.count;
+  });
+  return { total, count };
 }
 
 // Palette cyclique (mêmes teintes que CAT_HEX, indépendante des catégories
@@ -1746,6 +1781,11 @@ function populateProjectSelect(){
 // La rubrique n'a de sens que si un projet est sélectionné : le champ reste
 // masqué sinon. Appelé au chargement, à chaque changement de "Projet", et
 // chaque fois que state.rubriques change (création/suppression de rubrique).
+// Liste à plat mais INDENTÉE selon la profondeur (parcours en profondeur de
+// l'arborescence) : une dépense peut être rattachée à n'importe quel niveau
+// (une rubrique principale ou l'une de ses sous-rubriques, voir
+// rubriqueRollupStats) — pas besoin d'un menu imbriqué, l'indentation suffit
+// à montrer la hiérarchie dans un <select> natif simple.
 function populateRubriqueSelectForProject(projectId, keepCurrent){
   const field = document.getElementById('txRubriqueField');
   const sel = document.getElementById('txRubrique');
@@ -1755,10 +1795,15 @@ function populateRubriqueSelectForProject(projectId, keepCurrent){
     sel.innerHTML = '<option value="">Aucune rubrique</option>';
     return;
   }
-  const options = rubriquesForProject(projectId);
   field.style.display = '';
-  sel.innerHTML = '<option value="">Aucune rubrique</option>' +
-    options.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+  const options = [];
+  (function walk(parentId, depth){
+    state.rubriques.filter(r=>r.projectId===projectId && r.parentId===parentId).forEach(r=>{
+      options.push(`<option value="${r.id}">${'　'.repeat(depth)}${depth>0?'↳ ':''}${r.name}</option>`);
+      walk(r.id, depth+1);
+    });
+  })(null, 0);
+  sel.innerHTML = '<option value="">Aucune rubrique</option>' + options.join('');
   if([...sel.options].some(o=>o.value===current)) sel.value = current;
 }
 document.getElementById('txProject').addEventListener('change', (e)=>{
@@ -2293,30 +2338,78 @@ function applyProjectPatch(p, apiRow){
   p.status = apiRow.status;
 }
 
-/* ----- Rubriques (postes de dépense à l'intérieur d'un projet) ----- */
+/* ----- Rubriques (postes de dépense à l'intérieur d'un projet, imbrication
+   à profondeur illimitée : Transport > Billets d'avion > ... ) ----- */
 // null quand le formulaire sert à CRÉER une rubrique, sinon l'id de celle en
 // cours de modification (le même formulaire sert aux deux cas — voir
 // openRubriqueEditForm / le submit handler de #rubriqueForm).
 let editingRubriqueId = null;
 
+// Remplit le sélecteur "Sous-rubrique de" avec l'arborescence du projet,
+// indentée selon la profondeur. excludeId (en édition) retire la rubrique
+// elle-même ET toutes ses descendantes de la liste : le serveur refuserait
+// de toute façon un parent qui créerait un cycle, mais autant ne pas
+// proposer un choix voué à échouer.
+function populateRubParentSelect(projectId, excludeId){
+  const sel = document.getElementById('rubParent');
+  const excluded = new Set(excludeId ? [excludeId, ...rubriqueDescendantIds(excludeId)] : []);
+  const options = ['<option value="">Aucune (rubrique principale)</option>'];
+  (function walk(parentId, depth){
+    state.rubriques.filter(r=>r.projectId===projectId && r.parentId===parentId).forEach(r=>{
+      if(excluded.has(r.id)) return; // ne descend pas non plus dans sa propre sous-arborescence exclue
+      options.push(`<option value="${r.id}">${'　'.repeat(depth)}${depth>0?'↳ ':''}${r.name}</option>`);
+      walk(r.id, depth+1);
+    });
+  })(null, 0);
+  sel.innerHTML = options.join('');
+}
+
 document.getElementById('openRubriqueForm').addEventListener('click', ()=>{
+  const p = projectById(selectedProjectId);
   editingRubriqueId = null;
   const card = document.getElementById('rubriqueFormCard');
   const willShow = card.style.display === 'none';
-  if(willShow){
+  if(willShow && p){
     document.getElementById('rubriqueForm').reset();
     document.getElementById('rubriqueFormSubmit').textContent = 'Ajouter';
+    populateRubParentSelect(p.id, null);
+    document.getElementById('rubParent').disabled = false;
   }
   card.style.display = willShow ? 'block' : 'none';
 });
 
 function openRubriqueEditForm(r){
+  const p = projectById(selectedProjectId);
   editingRubriqueId = r.id;
   document.getElementById('rubName').value = r.name;
   document.getElementById('rubPlanned').value = r.plannedAmount || '';
+  populateRubParentSelect(p.id, r.id);
+  document.getElementById('rubParent').value = r.parentId || '';
+  document.getElementById('rubParent').disabled = false;
   document.getElementById('rubriqueFormSubmit').textContent = 'Enregistrer';
   document.getElementById('rubriqueFormCard').style.display = 'block';
   document.getElementById('rubriqueFormCard').scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+// Ouvre le même formulaire pour ajouter directement une sous-rubrique d'une
+// rubrique précise (bouton "+ Sous-rub." sur chaque ligne) : le parent est
+// pré-sélectionné et verrouillé pour que l'intention soit sans ambiguïté —
+// l'utilisateur peut toujours choisir un autre parent via le bouton général
+// "+ Nouvelle rubrique" s'il préfère passer par le menu déroulant.
+function openAddSubRubriqueForm(parentId){
+  const p = projectById(selectedProjectId);
+  const parent = rubriqueById(parentId);
+  if(!p || !parent) return;
+  editingRubriqueId = null;
+  document.getElementById('rubriqueForm').reset();
+  populateRubParentSelect(p.id, null);
+  const sel = document.getElementById('rubParent');
+  sel.value = parentId;
+  sel.disabled = true;
+  document.getElementById('rubriqueFormSubmit').textContent = 'Ajouter';
+  document.getElementById('rubriqueFormCard').style.display = 'block';
+  document.getElementById('rubriqueFormCard').scrollIntoView({ behavior:'smooth', block:'center' });
+  document.getElementById('rubName').focus();
 }
 
 document.getElementById('rubriqueForm').addEventListener('submit', async (e)=>{
@@ -2326,20 +2419,25 @@ document.getElementById('rubriqueForm').addEventListener('submit', async (e)=>{
   const name = document.getElementById('rubName').value.trim();
   const plannedRaw = document.getElementById('rubPlanned').value;
   const plannedAmount = plannedRaw ? parseFloat(plannedRaw) : undefined;
+  // Toujours envoyé explicitement (contrairement à plannedAmount) : c'est ce
+  // qui permet de détacher une sous-rubrique (repasser à "Aucune") via ce
+  // même formulaire, pas seulement d'en fixer un.
+  const parentRubriqueId = document.getElementById('rubParent').value || null;
   if(!name) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
     if(editingRubriqueId){
-      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques/${editingRubriqueId}`, { method:'PATCH', auth:true, body:{ name, plannedAmount } });
+      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques/${editingRubriqueId}`, { method:'PATCH', auth:true, body:{ name, plannedAmount, parentRubriqueId } });
       const existing = rubriqueById(editingRubriqueId);
       Object.assign(existing, mapRubriqueFromApi(rubrique));
     } else {
-      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques`, { method:'POST', auth:true, body:{ name, plannedAmount } });
+      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques`, { method:'POST', auth:true, body:{ name, plannedAmount, parentRubriqueId } });
       state.rubriques.push(mapRubriqueFromApi(rubrique));
     }
     editingRubriqueId = null;
     e.target.reset();
+    document.getElementById('rubParent').disabled = false;
     document.getElementById('rubriqueFormCard').style.display = 'none';
     document.getElementById('rubriqueFormSubmit').textContent = 'Ajouter';
     populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
@@ -2355,9 +2453,15 @@ async function deleteRubriqueWithConfirm(id){
   const p = projectById(selectedProjectId);
   const r = rubriqueById(id);
   if(!p || !r) return;
-  if(!confirm(`Supprimer la rubrique "${r.name}" ? Les dépenses déjà enregistrées resteront dans le projet, seule l'étiquette de rubrique sera retirée.`)) return;
+  const children = rubriqueChildren(id);
+  const childNote = children.length
+    ? ` Ses ${children.length} sous-rubrique(s) (${children.map(c=>c.name).join(', ')}) remonteront d'un niveau au lieu d'être supprimées.`
+    : '';
+  if(!confirm(`Supprimer la rubrique "${r.name}" ? Les dépenses déjà enregistrées resteront dans le projet, seule l'étiquette de rubrique sera retirée.${childNote}`)) return;
   try {
     await apiFetch(`/api/projects/${p.id}/rubriques/${id}`, { method:'DELETE', auth:true });
+    const grandparentId = r.parentId;
+    children.forEach(c=>{ c.parentId = grandparentId; }); // reflète côté client le même "remonte d'un niveau" que le serveur
     state.rubriques = state.rubriques.filter(x=>x.id!==id);
     state.transactions.forEach(t=>{ if(t.rubriqueId===id) t.rubriqueId = null; });
     populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
@@ -2367,21 +2471,57 @@ async function deleteRubriqueWithConfirm(id){
   }
 }
 
+// Rendu récursif d'une rubrique et de ses descendantes, indenté selon la
+// profondeur. Le montant affiché en gras est le total "roulé" (cette
+// rubrique + toutes ses sous-rubriques à tout niveau) ; si elle a aussi des
+// dépenses tagées directement sur elle ET des sous-rubriques, le détail de
+// la part directe est précisé en petit pour ne rien cacher.
+function renderRubriqueRow(r, depth, topColor){
+  const ownSpent = rubriqueOwnStats(r.id).total;
+  const rollupSpent = rubriqueRollupStats(r.id).total;
+  const children = rubriqueChildren(r.id);
+  const pct = r.plannedAmount ? Math.min(rollupSpent/r.plannedAmount, 1.4) : null;
+  const st = pct!==null ? statusForPct(rollupSpent/r.plannedAmount) : null;
+  const prefix = depth>0 ? '<span style="opacity:.45; margin-right:4px;">↳</span>' : '';
+  const swatch = depth===0 ? `<span class="swatch" style="background:${topColor}"></span>` : '';
+  const directNote = (children.length>0 && ownSpent>0)
+    ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">dont ${fmt(ownSpent)} directement sur "${r.name}"</div>`
+    : '';
+  const row = `
+    <div class="budget-item" style="padding-left:${depth*22}px;">
+      <div class="budget-top">
+        <div class="cat">${prefix}${swatch}${r.name}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <div class="nums">${fmt(rollupSpent)}${r.plannedAmount ? ' / ' + fmt(r.plannedAmount) : ''}</div>
+          <button type="button" class="btn btn-ghost" data-add-sub-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;" title="Ajouter une sous-rubrique">+ Sous-rub.</button>
+          <button type="button" class="btn btn-ghost" data-edit-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;">✎</button>
+          <button type="button" class="btn-danger" data-del-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;">Suppr.</button>
+        </div>
+      </div>
+      ${pct!==null ? `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct*100,100)}%; background:${st.color};"></div></div>` : ''}
+      ${directNote}
+    </div>`;
+  return row + children.map(c=>renderRubriqueRow(c, depth+1, topColor)).join('');
+}
+
 // Donut + liste de répartition par rubrique, avec un segment "Non classé"
 // regroupant les dépenses du projet sans rubrique — ainsi la somme affichée
 // (rubriques + non classé) correspond toujours exactement au total dépensé
 // du projet (projectStats(p.id).totalOut), jamais de montant qui "disparaît".
+// Le donut n'affiche que les rubriques de PREMIER NIVEAU (avec leur total
+// roulé, sous-rubriques incluses) pour rester lisible ; le détail par
+// sous-rubrique est dans la liste en dessous, indentée.
 function renderProjectRubriques(p){
-  const rubriquesList = rubriquesForProject(p.id);
+  const topLevel = topLevelRubriquesForProject(p.id);
   const stats = projectStats(p.id);
-  const classifiedTotal = rubriquesList.reduce((sum,r)=> sum + rubriqueStats(r.id).total, 0);
+  const classifiedTotal = topLevel.reduce((sum,r)=> sum + rubriqueRollupStats(r.id).total, 0);
   const unclassified = Math.max(stats.totalOut - classifiedTotal, 0);
 
   const donutWrap = document.getElementById('rubriqueDonutWrap');
   if(stats.totalOut <= 0){
     donutWrap.innerHTML = '<div class="empty-state">Aucune dépense enregistrée pour ce projet pour le moment.</div>';
   } else {
-    const segments = rubriquesList.map((r,i)=>({ label: r.name, val: rubriqueStats(r.id).total, color: rubriqueColor(i) }))
+    const segments = topLevel.map((r,i)=>({ label: r.name, val: rubriqueRollupStats(r.id).total, color: rubriqueColor(i) }))
       .filter(s=>s.val>0);
     if(unclassified>0) segments.push({ label:'Non classé', val: unclassified, color: RUBRIQUE_UNCLASSIFIED_COLOR });
 
@@ -2408,30 +2548,13 @@ function renderProjectRubriques(p){
   }
 
   const listEl = document.getElementById('rubriqueList');
-  if(!rubriquesList.length){
+  if(!topLevel.length){
     listEl.innerHTML = unclassified>0
       ? `<div class="empty-state">Aucune rubrique créée — toutes les dépenses (${fmt(unclassified)}) sont pour l'instant "Non classées". Créez une rubrique pour commencer à les ventiler.</div>`
       : '<div class="empty-state">Aucune rubrique créée pour ce projet pour le moment.</div>';
     return;
   }
-  listEl.innerHTML = rubriquesList.map((r,i)=>{
-    const spent = rubriqueStats(r.id).total;
-    const color = rubriqueColor(i);
-    const pct = r.plannedAmount ? Math.min(spent/r.plannedAmount, 1.4) : null;
-    const st = pct!==null ? statusForPct(spent/r.plannedAmount) : null;
-    return `
-    <div class="budget-item">
-      <div class="budget-top">
-        <div class="cat"><span class="swatch" style="background:${color}"></span>${r.name}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <div class="nums">${fmt(spent)}${r.plannedAmount ? ' / ' + fmt(r.plannedAmount) : ''}</div>
-          <button type="button" class="btn btn-ghost" data-edit-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;">✎</button>
-          <button type="button" class="btn-danger" data-del-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;">Suppr.</button>
-        </div>
-      </div>
-      ${pct!==null ? `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct*100,100)}%; background:${st.color};"></div></div>` : ''}
-    </div>`;
-  }).join('') + (unclassified>0 ? `
+  listEl.innerHTML = topLevel.map((r,i)=> renderRubriqueRow(r, 0, rubriqueColor(i))).join('') + (unclassified>0 ? `
     <div class="budget-item">
       <div class="budget-top">
         <div class="cat"><span class="swatch" style="background:${RUBRIQUE_UNCLASSIFIED_COLOR}"></span>Non classé</div>
@@ -2439,6 +2562,9 @@ function renderProjectRubriques(p){
       </div>
     </div>` : '');
 
+  listEl.querySelectorAll('[data-add-sub-rubrique]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openAddSubRubriqueForm(btn.dataset.addSubRubrique));
+  });
   listEl.querySelectorAll('[data-edit-rubrique]').forEach(btn=>{
     btn.addEventListener('click', ()=> openRubriqueEditForm(rubriqueById(btn.dataset.editRubrique)));
   });
@@ -2484,6 +2610,30 @@ function exportProjectSheet(id, format){
   if(format === 'pdf') exportProjectPDF(p, rows); else exportProjectExcel(p, rows);
 }
 
+// Construit la liste plate (mais indentée selon la profondeur) de la
+// répartition par rubrique, réutilisée par les exports PDF et Excel : montant
+// ROULÉ par rubrique (elle + toutes ses sous-rubriques, voir
+// rubriqueRollupStats), puis une ligne "Non classé" si des dépenses du projet
+// ne sont rattachées à aucune rubrique — même logique que
+// renderProjectRubriques(), pour que les exports reflètent exactement l'écran.
+// Renvoie { name, depth, spent, planned } bruts (pas de mise en forme de
+// l'indentation ici) : chaque export choisit son propre préfixe selon ce
+// qu'il peut afficher (jsPDF n'est pas fiable avec des caractères hors
+// WinAnsi, voir fmtPdf plus haut pour le même souci avec l'espace insécable).
+function buildRubriqueBreakdownRows(p, totalOut){
+  const rows = [];
+  (function walk(parentId, depth){
+    state.rubriques.filter(r=>r.projectId===p.id && r.parentId===parentId).forEach(r=>{
+      rows.push({ name: r.name, depth, spent: rubriqueRollupStats(r.id).total, planned: r.plannedAmount || null });
+      walk(r.id, depth+1);
+    });
+  })(null, 0);
+  const classifiedTotal = topLevelRubriquesForProject(p.id).reduce((sum,r)=> sum + rubriqueRollupStats(r.id).total, 0);
+  const unclassified = Math.max(totalOut - classifiedTotal, 0);
+  if(unclassified>0) rows.push({ name: 'Non classé', depth: 0, spent: unclassified, planned: null });
+  return rows;
+}
+
 function exportProjectPDF(p, rows){
   if(!window.jspdf){ alert("Le générateur PDF n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
   const { jsPDF } = window.jspdf;
@@ -2523,18 +2673,20 @@ function exportProjectPDF(p, rows){
     footStyles: { fillColor: [245,245,245], textColor: 20, fontStyle: 'bold' },
   });
 
-  // Répartition par rubrique, même logique que renderProjectRubriques() (un
-  // segment "Non classé" absorbe les dépenses sans rubrique) — ainsi la somme
-  // de cette table correspond toujours exactement au total dépensé ci-dessus.
+  // Répartition par rubrique (arborescence indentée, montants roulés
+  // sous-rubriques incluses), même logique que renderProjectRubriques() — un
+  // segment "Non classé" absorbe les dépenses sans rubrique, donc la somme
+  // des lignes de PREMIER NIVEAU + "Non classé" correspond toujours
+  // exactement au total dépensé ci-dessus.
   if(stats.totalOut > 0){
-    const rubriquesList = rubriquesForProject(p.id);
-    const classifiedTotal = rubriquesList.reduce((sum,r)=> sum + rubriqueStats(r.id).total, 0);
-    const unclassified = Math.max(stats.totalOut - classifiedTotal, 0);
-    const rubBody = rubriquesList.map(r=>{
-      const spent = rubriqueStats(r.id).total;
-      return [r.name, fmtPdf(spent), Math.round(spent/stats.totalOut*100)+'%', r.plannedAmount ? fmtPdf(r.plannedAmount) : '—'];
-    });
-    if(unclassified>0) rubBody.push(['Non classé', fmtPdf(unclassified), Math.round(unclassified/stats.totalOut*100)+'%', '—']);
+    // Indentation en espaces ASCII simples ("- " pour une sous-rubrique) :
+    // les caractères comme ↳ ne sont pas fiables dans la police WinAnsi par
+    // défaut de jsPDF (même précaution que fmtPdf pour l'espace insécable).
+    const breakdown = buildRubriqueBreakdownRows(p, stats.totalOut);
+    const rubBody = breakdown.map(r=>[
+      '  '.repeat(r.depth) + (r.depth>0?'- ':'') + r.name,
+      fmtPdf(r.spent), Math.round(r.spent/stats.totalOut*100)+'%', r.planned ? fmtPdf(r.planned) : '—',
+    ]);
 
     const afterY = doc.lastAutoTable.finalY + 10;
     doc.setFontSize(11);
@@ -2556,20 +2708,17 @@ function exportProjectExcel(p, rows){
   if(!window.XLSX){ alert("Le générateur Excel n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
   const stats = projectStats(p.id);
 
-  // Même logique de "Non classé" que renderProjectRubriques()/exportProjectPDF
-  // : la somme de ce bloc correspond toujours exactement au total dépensé.
-  const rubriquesList = rubriquesForProject(p.id);
-  const classifiedTotal = rubriquesList.reduce((sum,r)=> sum + rubriqueStats(r.id).total, 0);
-  const unclassified = Math.max(stats.totalOut - classifiedTotal, 0);
+  // Même logique (arborescence indentée, montants roulés) que
+  // renderProjectRubriques()/exportProjectPDF : la somme des lignes de
+  // premier niveau + "Non classé" correspond toujours exactement au total dépensé.
   const rubriqueRows = stats.totalOut > 0 ? [
     [],
     ['Répartition par rubrique'],
     ['Rubrique','Dépensé','% du total','Enveloppe'],
-    ...rubriquesList.map(r=>{
-      const spent = rubriqueStats(r.id).total;
-      return [r.name, spent, Math.round(spent/stats.totalOut*100)+'%', r.plannedAmount || ''];
-    }),
-    ...(unclassified>0 ? [['Non classé', unclassified, Math.round(unclassified/stats.totalOut*100)+'%', '']] : []),
+    ...buildRubriqueBreakdownRows(p, stats.totalOut).map(r=>[
+      '　'.repeat(r.depth) + (r.depth>0?'↳ ':'') + r.name, // Excel gère l'unicode sans problème, contrairement à jsPDF
+      r.spent, Math.round(r.spent/stats.totalOut*100)+'%', r.planned || '',
+    ]),
   ] : [];
 
   const aoa = [
