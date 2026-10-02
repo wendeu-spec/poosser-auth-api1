@@ -67,6 +67,153 @@ describe("POST/GET /api/transactions", () => {
   });
 });
 
+// Couvre le bouton "✏️ Modifier" de l'historique (voir public/app/index.html,
+// enterTxEditMode) : note/projectId/rubriqueId doivent pouvoir être
+// explicitement effacés/détachés via null, pas seulement remplacés.
+describe("PATCH /api/transactions/:id — modification en place (tri-état)", () => {
+  it("modifie tous les champs de base d'une transaction existante", async () => {
+    const { access } = await authedUser();
+    const create = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Transport", amount: 5000, occurredOn: "2026-08-18", method: "Espèces", note: "Taxi" })
+      .expect(201);
+    const id = create.body.transaction.id;
+
+    const update = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "revenu", category: "Salaire", amount: 120000, occurredOn: "2026-08-20", method: "Virement bancaire", note: "Corrigé" })
+      .expect(200);
+    expect(update.body.transaction.type).toBe("revenu");
+    expect(update.body.transaction.category).toBe("Salaire");
+    expect(Number(update.body.transaction.amount)).toBe(120000);
+    expect(update.body.transaction.occurred_on).toContain("2026-08-20");
+    expect(update.body.transaction.method).toBe("Virement bancaire");
+    expect(update.body.transaction.note).toBe("Corrigé");
+  });
+
+  it("efface explicitement la note via note: null, sans la toucher si le champ est absent", async () => {
+    const { access } = await authedUser();
+    const create = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Alimentation", amount: 3000, occurredOn: "2026-08-18", method: "Espèces", note: "Marché" })
+      .expect(201);
+    const id = create.body.transaction.id;
+
+    // Un PATCH qui ne mentionne pas `note` ne doit pas y toucher.
+    const unrelated = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ amount: 3500 })
+      .expect(200);
+    expect(unrelated.body.transaction.note).toBe("Marché");
+
+    // `note: null` doit explicitement l'effacer.
+    const cleared = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ note: null })
+      .expect(200);
+    expect(cleared.body.transaction.note).toBeNull();
+  });
+
+  it("détache explicitement projectId et rubriqueId via null", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Voyage" })
+      .expect(201);
+    const projectId = project.body.project.id;
+    const rubrique = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const rubriqueId = rubrique.body.rubrique.id;
+
+    const create = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Transport", amount: 5000, occurredOn: "2026-08-18", method: "Espèces", projectId, rubriqueId })
+      .expect(201);
+    const id = create.body.transaction.id;
+
+    // Un PATCH qui ne mentionne ni l'un ni l'autre ne doit rien détacher.
+    const unrelated = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ amount: 5500 })
+      .expect(200);
+    expect(unrelated.body.transaction.project_id).toBe(projectId);
+    expect(unrelated.body.transaction.rubrique_id).toBe(rubriqueId);
+
+    // rubriqueId: null détache la rubrique sans toucher au projet.
+    const rubDetached = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ rubriqueId: null })
+      .expect(200);
+    expect(rubDetached.body.transaction.rubrique_id).toBeNull();
+    expect(rubDetached.body.transaction.project_id).toBe(projectId);
+
+    // projectId: null détache aussi le projet (vision "mouvement libre").
+    const projDetached = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ projectId: null })
+      .expect(200);
+    expect(projDetached.body.transaction.project_id).toBeNull();
+  });
+
+  it("refuse rubriqueId sans projectId effectif, et une rubrique d'un autre projet", async () => {
+    const { access } = await authedUser();
+    const projectA = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Projet A" })
+      .expect(201);
+    const projectB = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Projet B" })
+      .expect(201);
+    const rubriqueB = await request(app)
+      .post(`/api/projects/${projectB.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Hébergement" })
+      .expect(201);
+
+    const create = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Autres", amount: 1000, occurredOn: "2026-08-18", method: "Espèces", projectId: projectA.body.project.id })
+      .expect(201);
+    const id = create.body.transaction.id;
+
+    // La rubrique appartient au projet B, la transaction est sur le projet A
+    // → même traitement que "emprunter" une rubrique d'un autre projet à la
+    // création (404 RUBRIQUE_NOT_FOUND, pas une fuite d'info entre projets).
+    const crossProject = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ rubriqueId: rubriqueB.body.rubrique.id })
+      .expect(404);
+    expect(crossProject.body.error.code).toBe("RUBRIQUE_NOT_FOUND");
+
+    // Détacher le projet ET fournir une rubrique dans le même PATCH : la
+    // rubrique n'a alors plus de projet effectif auquel appartenir.
+    const noEffectiveProject = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ projectId: null, rubriqueId: rubriqueB.body.rubrique.id })
+      .expect(400);
+    expect(noEffectiveProject.body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
 describe("isolation stricte entre utilisateurs", () => {
   it("un utilisateur ne voit jamais les transactions d'un autre", async () => {
     const u1 = await authedUser();
