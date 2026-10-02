@@ -90,19 +90,25 @@ export async function createTransaction(userId: string, input: TransactionInput)
 export async function updateTransaction(
   userId: string,
   id: string,
-  input: Partial<TransactionInput>,
+  input: Partial<TransactionInput> & { note?: string | null; projectId?: string | null; rubriqueId?: string | null },
 ): Promise<TransactionRow> {
   const existing = await pool.query<TransactionRow>(`SELECT * FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!existing.rows[0]) throw Errors.transactionNotFound();
+  const current = existing.rows[0]!;
 
-  if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
-  if (input.rubriqueId) {
-    // Le projet effectif après cette mise à jour : celui fourni dans ce PATCH,
-    // sinon celui déjà enregistré sur la transaction (COALESCE côté app plutôt
-    // que SQL, car on a besoin de sa valeur pour la validation ci-dessous).
-    const effectiveProjectId = input.projectId ?? existing.rows[0]!.project_id ?? undefined;
-    await assertProjectAndRubriqueConsistent(userId, effectiveProjectId, input.rubriqueId);
-  }
+  // note/projectId/rubriqueId sont traités en tri-état (absent du body =
+  // inchangé, null = effacé/détaché, valeur = remplacé) plutôt qu'avec
+  // COALESCE côté SQL : COALESCE ne peut jamais mettre explicitement une
+  // colonne à NULL, ce qui empêcherait de retirer la note ou de détacher un
+  // projet/une rubrique lors d'une modification (bouton "Modifier" de
+  // l'historique). Même approche que parent_rubrique_id dans
+  // rubriqueService.updateRubrique().
+  const nextNote = "note" in input ? (input.note ?? null) : current.note;
+  const nextProjectId = "projectId" in input ? (input.projectId ?? null) : current.project_id;
+  const nextRubriqueId = "rubriqueId" in input ? (input.rubriqueId ?? null) : current.rubrique_id;
+
+  if (nextProjectId) await assertProjectOwnedByUser(userId, nextProjectId);
+  await assertProjectAndRubriqueConsistent(userId, nextProjectId, nextRubriqueId);
 
   const { rows } = await pool.query<TransactionRow>(
     `UPDATE transactions SET
@@ -111,12 +117,12 @@ export async function updateTransaction(
        amount = COALESCE($5, amount),
        occurred_on = COALESCE($6, occurred_on),
        method = COALESCE($7, method),
-       note = COALESCE($8, note),
-       project_id = COALESCE($9, project_id),
-       rubrique_id = COALESCE($10, rubrique_id)
+       note = $8,
+       project_id = $9,
+       rubrique_id = $10
      WHERE id = $1 AND user_id = $2
      RETURNING *`,
-    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null],
+    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId],
   );
   return rows[0]!;
 }
