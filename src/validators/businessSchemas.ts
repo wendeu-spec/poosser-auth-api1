@@ -16,6 +16,7 @@ export const createTransactionSchema = z.object({
   method: z.enum(TRANSACTION_METHODS),
   note: z.string().trim().max(280).optional(),
   projectId: z.string().uuid().optional(),
+  rubriqueId: z.string().uuid().optional(),
 });
 export const updateTransactionSchema = createTransactionSchema.partial();
 
@@ -54,6 +55,15 @@ export const updateProjectSchema = z.object({
   targetDate: dateSchema.optional(),
   status: z.enum(["actif", "termine", "archive"]).optional(),
 });
+
+// Rubriques (postes de dépense à l'intérieur d'un projet, ex: "Transport",
+// "Hébergement" pour un voyage). Imbriquées sous un projet (voir routes
+// /projects/:projectId/rubriques) — pas de champ projectId ici, il vient de l'URL.
+export const createRubriqueSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  plannedAmount: amountSchema.optional(),
+});
+export const updateRubriqueSchema = createRubriqueSchema.partial();
 
 // ---------------------------------------------------------------------------
 // Tontines
