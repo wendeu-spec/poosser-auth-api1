@@ -273,15 +273,34 @@ rubrique appartient à un seul projet — jamais partagée entre projets. Comme 
 totaux de projet, le montant réellement dépensé n'est pas stocké : à calculer côté
 client en sommant les transactions `type: "depense"` rattachées (`rubriqueId`).
 
+Une rubrique peut elle-même avoir une rubrique parente (`parentRubriqueId`), à
+profondeur illimitée (ex : Transport > Billets d'avion, voire plus profond si besoin).
+Une dépense peut être rattachée directement à une rubrique même si elle a des
+sous-rubriques (ex : un taxi tagué sur "Transport" alors que "Billets d'avion" est une
+sous-rubrique) — le total "roulé" d'une rubrique additionne alors sa propre dépense
+directe et celles de toutes ses descendantes, à tout niveau. Ce cumul, comme le reste,
+est toujours recalculé côté client, jamais stocké.
+
 - `GET /api/rubriques` → `{ rubriques: [...] }` — toutes les rubriques de l'utilisateur,
-  tous projets confondus (pratique pour le chargement initial).
+  tous projets confondus (pratique pour le chargement initial). Chaque rubrique inclut
+  `parentRubriqueId` (`null` si elle est de premier niveau) ; le front reconstruit
+  l'arborescence à partir de ce champ.
 - `GET /api/projects/:projectId/rubriques` → `{ rubriques: [...] }` filtrées sur un projet.
-- `POST /api/projects/:projectId/rubriques` → `{ name, plannedAmount? }` → `201 { rubrique }`
-  (`plannedAmount` est l'enveloppe prévisionnelle optionnelle, comparée au réel côté front).
+- `POST /api/projects/:projectId/rubriques` → `{ name, plannedAmount?, parentRubriqueId? }`
+  → `201 { rubrique }` (`plannedAmount` est l'enveloppe prévisionnelle optionnelle,
+  comparée au réel côté front ; `parentRubriqueId` doit référencer une rubrique du même
+  projet, sinon `404 RUBRIQUE_NOT_FOUND`).
 - `PATCH /api/projects/:projectId/rubriques/:id` → champs partiels → `200 { rubrique }`.
+  `parentRubriqueId` a une sémantique à 3 états : absent du corps = parent inchangé,
+  `null` = détache (la rubrique redevient de premier niveau), uuid = rattache à cette
+  rubrique. Refuse un parent qui créerait un cycle (déplacer une rubrique sous l'une de
+  ses propres sous-rubriques) avec `400 VALIDATION_ERROR`.
 - `DELETE /api/projects/:projectId/rubriques/:id` → `204` — détache (`rubrique_id = NULL`)
-  les transactions concernées sans les supprimer.
-- Erreurs : `404 PROJECT_NOT_FOUND` (projet introuvable/pas à vous), `404 RUBRIQUE_NOT_FOUND`.
+  les transactions concernées sans les supprimer. Si la rubrique supprimée avait des
+  sous-rubriques, elles sont ré-attachées à SON propre parent (remontent d'un seul
+  niveau, pas aplaties jusqu'en haut de l'arbre).
+- Erreurs : `404 PROJECT_NOT_FOUND` (projet introuvable/pas à vous), `404 RUBRIQUE_NOT_FOUND`,
+  `400 VALIDATION_ERROR` (parent invalide ou cycle).
 
 ## Tontines
 
