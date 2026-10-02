@@ -43,6 +43,7 @@ export const Errors = {
   transactionNotFound: () => new AppError("TRANSACTION_NOT_FOUND", 404),
   budgetNotFound: () => new AppError("BUDGET_NOT_FOUND", 404),
   projectNotFound: () => new AppError("PROJECT_NOT_FOUND", 404),
+  rubriqueNotFound: () => new AppError("RUBRIQUE_NOT_FOUND", 404),
   savingsGoalNotFound: () => new AppError("SAVINGS_GOAL_NOT_FOUND", 404),
   tontineNotFound: () => new AppError("TONTINE_NOT_FOUND", 404),
   tontineMemberNotFound: () => new AppError("TONTINE_MEMBER_NOT_FOUND", 404),
