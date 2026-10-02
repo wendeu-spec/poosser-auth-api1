@@ -260,7 +260,28 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
 - `POST /api/transactions` et `PATCH /api/transactions/:id` acceptent un champ optionnel
   `projectId` pour rattacher la transaction à un projet — **vision consolidée** : elle
   reste comptée normalement dans le budget et la liste générale des transactions.
+- `POST /api/transactions` et `PATCH /api/transactions/:id` acceptent aussi un champ
+  optionnel `rubriqueId` (voir section Rubriques ci-dessous) — exige `projectId` sur la
+  même transaction, et la rubrique doit appartenir à ce projet.
 - Erreurs : `404 PROJECT_NOT_FOUND`.
+
+## Rubriques
+
+Postes de dépense à l'intérieur d'un projet (ex : pour un voyage, "Transport" et
+"Hébergement" ; pour une construction, "Fondation", "Élévation", "Toiture"...). Une
+rubrique appartient à un seul projet — jamais partagée entre projets. Comme pour les
+totaux de projet, le montant réellement dépensé n'est pas stocké : à calculer côté
+client en sommant les transactions `type: "depense"` rattachées (`rubriqueId`).
+
+- `GET /api/rubriques` → `{ rubriques: [...] }` — toutes les rubriques de l'utilisateur,
+  tous projets confondus (pratique pour le chargement initial).
+- `GET /api/projects/:projectId/rubriques` → `{ rubriques: [...] }` filtrées sur un projet.
+- `POST /api/projects/:projectId/rubriques` → `{ name, plannedAmount? }` → `201 { rubrique }`
+  (`plannedAmount` est l'enveloppe prévisionnelle optionnelle, comparée au réel côté front).
+- `PATCH /api/projects/:projectId/rubriques/:id` → champs partiels → `200 { rubrique }`.
+- `DELETE /api/projects/:projectId/rubriques/:id` → `204` — détache (`rubrique_id = NULL`)
+  les transactions concernées sans les supprimer.
+- Erreurs : `404 PROJECT_NOT_FOUND` (projet introuvable/pas à vous), `404 RUBRIQUE_NOT_FOUND`.
 
 ## Tontines
 
