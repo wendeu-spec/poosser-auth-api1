@@ -14,6 +14,7 @@ describe("routes métier — exigent toutes un access token", () => {
     await request(app).get("/api/transactions").expect(401);
     await request(app).get("/api/budgets").expect(401);
     await request(app).get("/api/savings-goals").expect(401);
+    await request(app).get("/api/savings-goal-contributions").expect(401);
     await request(app).get("/api/projects").expect(401);
     await request(app).get("/api/rubriques").expect(401);
     await request(app).get("/api/transaction-favorites").expect(401);
@@ -432,6 +433,80 @@ describe("Épargne", () => {
       .send({ currentAmount: 150000 })
       .expect(200);
     expect(Number(updated.body.savingsGoal.current_amount)).toBe(150000);
+  });
+});
+
+describe("Versements d'épargne (/api/savings-goals/:id/contributions)", () => {
+  it("un versement augmente le solde et laisse une trace datée dans le journal", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/savings-goals")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Voyage", targetAmount: 500000, currentAmount: 100000, deadline: "2026-12-31" })
+      .expect(201);
+    const goalId = created.body.savingsGoal.id;
+
+    const contributed = await request(app)
+      .post(`/api/savings-goals/${goalId}/contributions`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ amount: 50000 })
+      .expect(201);
+    expect(Number(contributed.body.savingsGoal.current_amount)).toBe(150000);
+    expect(Number(contributed.body.contribution.amount)).toBe(50000);
+    expect(contributed.body.contribution.goal_id).toBe(goalId);
+    expect(contributed.body.contribution.goal_name).toBe("Voyage");
+    expect(contributed.body.contribution.created_at).toBeTruthy();
+
+    const list = await request(app)
+      .get("/api/savings-goal-contributions")
+      .set("Authorization", `Bearer ${access}`)
+      .expect(200);
+    expect(list.body.savingsGoalContributions).toHaveLength(1);
+    expect(Number(list.body.savingsGoalContributions[0].amount)).toBe(50000);
+  });
+
+  it("plafonne le solde affiché à l'objectif mais journalise le montant réellement versé", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/savings-goals")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Fonds urgence", targetAmount: 100000, currentAmount: 90000, deadline: "2026-12-31" })
+      .expect(201);
+    const goalId = created.body.savingsGoal.id;
+
+    const contributed = await request(app)
+      .post(`/api/savings-goals/${goalId}/contributions`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ amount: 50000 })
+      .expect(201);
+    // Solde plafonné à l'objectif (100000), mais le versement réel (50000) est
+    // bien celui qui apparaît dans le journal, pas un delta recalculé.
+    expect(Number(contributed.body.savingsGoal.current_amount)).toBe(100000);
+    expect(Number(contributed.body.contribution.amount)).toBe(50000);
+  });
+
+  it("refuse de verser vers l'objectif d'un autre utilisateur (404, pas une fuite)", async () => {
+    const u1 = await authedUser();
+    const u2 = await authedUser();
+    const created = await request(app)
+      .post("/api/savings-goals")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .send({ name: "Fonds urgence", targetAmount: 500000, currentAmount: 0, deadline: "2026-12-31" })
+      .expect(201);
+
+    const attempt = await request(app)
+      .post(`/api/savings-goals/${created.body.savingsGoal.id}/contributions`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .send({ amount: 10000 })
+      .expect(404);
+    expect(attempt.body.error.code).toBe("SAVINGS_GOAL_NOT_FOUND");
+
+    // Le journal de u2 reste vide, et le solde de u1 n'a pas bougé.
+    const listU2 = await request(app)
+      .get("/api/savings-goal-contributions")
+      .set("Authorization", `Bearer ${u2.access}`)
+      .expect(200);
+    expect(listU2.body.savingsGoalContributions).toHaveLength(0);
   });
 });
 
@@ -957,11 +1032,16 @@ describe("Tontine — cycle complet", () => {
     expect(blocked.body.error.code).toBe("TONTINE_ROUND_NOT_READY");
 
     // Deux membres sur trois cotisent : toujours refusé.
-    await request(app)
+    const firstPaid = await request(app)
       .post(`/api/tontines/${tontine.id}/contributions`)
       .set("Authorization", `Bearer ${access}`)
       .send({ memberId: tontine.members[0].id, paid: true })
       .expect(200);
+    // paidAtThisRound horodate le paiement (nécessaire au résumé hebdomadaire
+    // pour compter les cotisations payées "cette semaine") et reste null pour
+    // les membres qui n'ont pas encore payé.
+    expect(firstPaid.body.tontine.paidAtThisRound[tontine.members[0].id]).not.toBeNull();
+    expect(firstPaid.body.tontine.paidAtThisRound[tontine.members[1].id]).toBeNull();
     await request(app)
       .post(`/api/tontines/${tontine.id}/contributions`)
       .set("Authorization", `Bearer ${access}`)
@@ -989,6 +1069,7 @@ describe("Tontine — cycle complet", () => {
     expect(closed.body.tontine.history[0].totalAmount).toBe(60000); // 20000 x 3 membres
     // Le nouveau tour repart avec tout le monde à "non payé".
     expect(Object.values(closed.body.tontine.paidThisRound).every((p) => p === false)).toBe(true);
+    expect(Object.values(closed.body.tontine.paidAtThisRound).every((p) => p === null)).toBe(true);
   });
 
   it("refuse d'accéder à la tontine d'un autre utilisateur (404, pas une fuite)", async () => {
