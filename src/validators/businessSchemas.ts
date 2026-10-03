@@ -69,6 +69,12 @@ export const createSavingsGoalSchema = z.object({
 });
 export const updateSavingsGoalSchema = createSavingsGoalSchema.partial();
 
+// Versement vers un objectif existant — voir savingsGoalService.addContribution
+// et migrations/023_savings_goal_contributions.sql.
+export const addSavingsGoalContributionSchema = z.object({
+  amount: amountSchema,
+});
+
 // ---------------------------------------------------------------------------
 // Projets (onglet Projets — suivi des entrées/sorties d'un projet donné)
 // ---------------------------------------------------------------------------
