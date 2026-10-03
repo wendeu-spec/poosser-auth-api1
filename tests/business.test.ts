@@ -1012,6 +1012,146 @@ describe("Planner financier", () => {
   });
 });
 
+describe("Planner financier — paiements récurrents", () => {
+  it("valider un événement récurrent crée automatiquement la prochaine occurrence", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/planner-events")
+      .set("Authorization", `Bearer ${access}`)
+      .send({
+        title: "Loyer", eventDate: "2026-08-25", eventTime: "09:00", durationMinutes: 30,
+        type: "depense", category: "Logement", amount: 60000, recurrence: "mensuelle",
+      })
+      .expect(201);
+    expect(created.body.plannerEvent.recurrence).toBe("mensuelle");
+
+    const validated = await request(app)
+      .post(`/api/planner-events/${created.body.plannerEvent.id}/status`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ status: "realise" })
+      .expect(200);
+    expect(validated.body.plannerEvent.status).toBe("realise");
+    expect(validated.body.nextPlannerEvent).toBeTruthy();
+    expect(validated.body.nextPlannerEvent.event_date).toBe("2026-09-25");
+    expect(validated.body.nextPlannerEvent.status).toBe("a_venir");
+    expect(validated.body.nextPlannerEvent.recurrence).toBe("mensuelle");
+    expect(validated.body.nextPlannerEvent.title).toBe("Loyer");
+    expect(Number(validated.body.nextPlannerEvent.amount)).toBe(60000);
+
+    // La nouvelle occurrence apparaît bien dans la liste (2 événements au total).
+    const list = await request(app).get("/api/planner-events").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(list.body.plannerEvents).toHaveLength(2);
+  });
+
+  it("plafonne au dernier jour du mois cible plutôt que de déborder (31 janvier + mensuelle → 28/29 février)", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/planner-events")
+      .set("Authorization", `Bearer ${access}`)
+      .send({
+        title: "Abonnement", eventDate: "2026-01-31", eventTime: "08:00", durationMinutes: 10,
+        type: "depense", category: "Autres", amount: 5000, recurrence: "mensuelle",
+      })
+      .expect(201);
+
+    const validated = await request(app)
+      .post(`/api/planner-events/${created.body.plannerEvent.id}/status`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ status: "realise" })
+      .expect(200);
+    // 2026 n'est pas bissextile : février s'arrête au 28.
+    expect(validated.body.nextPlannerEvent.event_date).toBe("2026-02-28");
+  });
+
+  it("ne crée pas de prochaine occurrence pour un événement non récurrent", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/planner-events")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ title: "Achat ponctuel", eventDate: "2026-08-25", eventTime: "09:00", durationMinutes: 30, type: "depense", category: "Autres", amount: 15000 })
+      .expect(201);
+    expect(created.body.plannerEvent.recurrence).toBeNull();
+
+    const validated = await request(app)
+      .post(`/api/planner-events/${created.body.plannerEvent.id}/status`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ status: "realise" })
+      .expect(200);
+    expect(validated.body.nextPlannerEvent).toBeNull();
+
+    const list = await request(app).get("/api/planner-events").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(list.body.plannerEvents).toHaveLength(1);
+  });
+
+  it("ne crée pas de prochaine occurrence si le statut n'est pas 'realise' (ex: non_realise)", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/planner-events")
+      .set("Authorization", `Bearer ${access}`)
+      .send({
+        title: "Cotisation club", eventDate: "2026-08-25", eventTime: "09:00", durationMinutes: 30,
+        type: "depense", category: "Autres", amount: 3000, recurrence: "hebdomadaire",
+      })
+      .expect(201);
+
+    const validated = await request(app)
+      .post(`/api/planner-events/${created.body.plannerEvent.id}/status`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ status: "non_realise" })
+      .expect(200);
+    expect(validated.body.nextPlannerEvent).toBeNull();
+  });
+
+  it("PATCH peut retirer la récurrence (tri-état : absent = inchangé, null = retire, valeur = remplace)", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/planner-events")
+      .set("Authorization", `Bearer ${access}`)
+      .send({
+        title: "Internet", eventDate: "2026-08-25", eventTime: "09:00", durationMinutes: 10,
+        type: "depense", category: "Autres", amount: 20000, recurrence: "mensuelle",
+      })
+      .expect(201);
+
+    // PATCH sans le champ recurrence : inchangé.
+    const untouched = await request(app)
+      .patch(`/api/planner-events/${created.body.plannerEvent.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ amount: 21000 })
+      .expect(200);
+    expect(untouched.body.plannerEvent.recurrence).toBe("mensuelle");
+
+    // PATCH avec recurrence: null : retire la récurrence.
+    const cleared = await request(app)
+      .patch(`/api/planner-events/${created.body.plannerEvent.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ recurrence: null })
+      .expect(200);
+    expect(cleared.body.plannerEvent.recurrence).toBeNull();
+
+    // Valider ne crée donc plus de prochaine occurrence.
+    const validated = await request(app)
+      .post(`/api/planner-events/${created.body.plannerEvent.id}/status`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ status: "realise" })
+      .expect(200);
+    expect(validated.body.nextPlannerEvent).toBeNull();
+  });
+
+  it("refuse une fréquence de récurrence inconnue", async () => {
+    const { access } = await authedUser();
+    const res = await request(app)
+      .post("/api/planner-events")
+      .set("Authorization", `Bearer ${access}`)
+      .send({
+        title: "X", eventDate: "2026-08-25", eventTime: "09:00", durationMinutes: 10,
+        type: "depense", category: "Autres", amount: 1000, recurrence: "quotidienne",
+      })
+      .expect(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
 describe("Tontine — cycle complet", () => {
   it("crée un groupe, refuse la clôture tant que tous n'ont pas cotisé, puis clôture et fait tourner le bénéficiaire", async () => {
     const { access } = await authedUser();
@@ -1022,6 +1162,7 @@ describe("Tontine — cycle complet", () => {
       .expect(201);
     const tontine = created.body.tontine;
     expect(tontine.currentRound).toBe(1);
+    expect(tontine.currentRoundStartedAt).toBeTruthy(); // date de début du tour 1 (= création)
     expect(tontine.members).toHaveLength(3);
 
     // Personne n'a cotisé : la clôture doit être refusée.
@@ -1064,6 +1205,10 @@ describe("Tontine — cycle complet", () => {
       .expect(200);
 
     expect(closed.body.tontine.currentRound).toBe(2);
+    // La clôture du tour fait repartir "le début du tour en cours" à
+    // maintenant (sert de base au calcul d'échéance de la prochaine cotisation).
+    expect(new Date(closed.body.tontine.currentRoundStartedAt).getTime())
+      .toBeGreaterThan(new Date(tontine.currentRoundStartedAt).getTime());
     expect(closed.body.tontine.history).toHaveLength(1);
     expect(closed.body.tontine.history[0].beneficiaryName).toBe("Awa"); // position 1 = premier bénéficiaire
     expect(closed.body.tontine.history[0].totalAmount).toBe(60000); // 20000 x 3 membres
