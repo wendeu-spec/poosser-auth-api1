@@ -864,7 +864,11 @@
     </div>
 
     <div class="card" id="tontineFormCard" style="margin-bottom:18px; display:none;">
-      <h3>Nouveau groupe de tontine</h3>
+      <h3 id="tontineFormTitle">Nouveau groupe de tontine</h3>
+      <div class="sub" id="tontineEditBanner" style="display:none; color:var(--accent,#b8860b);">
+        ✏️ Modification du groupe sélectionné.
+        <button type="button" id="tontineCancelEdit" class="btn btn-ghost" style="padding:2px 10px; font-size:12px; margin-left:8px;">Annuler</button>
+      </div>
       <form id="tontineForm" class="form-grid">
         <div class="field">
           <label>Nom du groupe</label>
@@ -883,11 +887,11 @@
           </select>
         </div>
         <div class="field">
-          <label>Membres (séparés par une virgule)</label>
+          <label id="tonMembersLabel">Membres (séparés par une virgule)</label>
           <input type="text" id="tonMembers" placeholder="Ex: Awa, Bella, Cyrille, Djamila" required>
         </div>
         <div class="field">
-          <button type="submit" class="btn btn-primary">Créer le groupe</button>
+          <button type="submit" class="btn btn-primary" id="tontineSubmitBtn">Créer le groupe</button>
         </div>
       </form>
     </div>
@@ -912,7 +916,11 @@
     <div class="planner-tiles" id="plannerTiles"></div>
 
     <div class="card" id="plannerFormCard" style="margin-bottom:18px; display:none;">
-      <h3>Nouvel événement financier</h3>
+      <h3 id="plannerFormTitle">Nouvel événement financier</h3>
+      <div class="sub" id="plannerEditBanner" style="display:none; color:var(--accent,#b8860b);">
+        ✏️ Modification de l'événement sélectionné — les changements remplacent l'ancienne saisie.
+        <button type="button" id="plannerCancelEdit" class="btn btn-ghost" style="padding:2px 10px; font-size:12px; margin-left:8px;">Annuler</button>
+      </div>
       <div class="voice-bar">
         <button type="button" class="btn btn-ghost mic-btn" id="evMicBtn">🎤 Dicter un événement</button>
         <div class="voice-status" id="evVoiceStatus">Ex : « Paiement du loyer, dépense de 60000 FCFA pour Logement »</div>
@@ -968,7 +976,7 @@
           </select>
         </div>
         <div class="field">
-          <button type="submit" class="btn btn-primary">Ajouter à l'agenda</button>
+          <button type="submit" class="btn btn-primary" id="plannerSubmitBtn">Ajouter à l'agenda</button>
         </div>
       </form>
     </div>
@@ -3152,8 +3160,47 @@ function exportProjectExcel(p, rows){
 /* ===================== TONTINE VIEW ===================== */
 document.getElementById('openTontineForm').addEventListener('click', ()=>{
   const card = document.getElementById('tontineFormCard');
+  if(editingTontineId){ exitTontineEditMode(); return; }
   card.style.display = card.style.display==='none' ? 'block' : 'none';
 });
+
+let editingTontineId = null;
+
+/**
+ * Ouvre le formulaire en mode MODIFICATION pour la tontine t (bouton
+ * "✏️ Modifier" de la carte groupe) — nom, cotisation et fréquence sont
+ * librement modifiables ; les membres ne peuvent être que renommés (même
+ * nombre, même ordre de passage) car en ajouter/retirer changerait l'ordre
+ * des bénéficiaires et le sens des cotisations déjà enregistrées pour le
+ * tour en cours (voir tontineService.updateTontine côté serveur).
+ */
+function enterTontineEditMode(t){
+  editingTontineId = t.id;
+  document.getElementById('tonName').value = t.name;
+  document.getElementById('tonAmount').value = t.amount;
+  document.getElementById('tonFreq').value = t.freq;
+  document.getElementById('tonMembers').value = t.members.join(', ');
+
+  document.getElementById('tontineFormTitle').textContent = 'Modifier le groupe de tontine';
+  document.getElementById('tontineEditBanner').style.display = '';
+  document.getElementById('tontineSubmitBtn').textContent = 'Enregistrer les modifications';
+  document.getElementById('tonMembersLabel').textContent = `Membres (renommer uniquement — garder ${t.members.length} noms séparés par une virgule)`;
+  const card = document.getElementById('tontineFormCard');
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function exitTontineEditMode(){
+  editingTontineId = null;
+  document.getElementById('tontineFormTitle').textContent = 'Nouveau groupe de tontine';
+  document.getElementById('tontineEditBanner').style.display = 'none';
+  document.getElementById('tontineSubmitBtn').textContent = 'Créer le groupe';
+  document.getElementById('tonMembersLabel').textContent = 'Membres (séparés par une virgule)';
+  document.getElementById('tontineForm').reset();
+  document.getElementById('tontineFormCard').style.display = 'none';
+}
+
+document.getElementById('tontineCancelEdit').addEventListener('click', exitTontineEditMode);
 
 document.getElementById('tontineForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -3165,13 +3212,21 @@ document.getElementById('tontineForm').addEventListener('submit', async (e)=>{
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { tontine } = await apiFetch('/api/tontines', { method:'POST', auth:true, body:{ name, contributionAmount: amount, frequency: FREQ_CODES[freqLabel] || freqLabel.toLowerCase(), members } });
-    state.tontines.push(mapTontineFromApi(tontine));
-    e.target.reset();
-    document.getElementById('tontineFormCard').style.display = 'none';
+    const frequency = FREQ_CODES[freqLabel] || freqLabel.toLowerCase();
+    if(editingTontineId){
+      const { tontine } = await apiFetch('/api/tontines/' + editingTontineId, { method:'PATCH', auth:true, body:{ name, contributionAmount: amount, frequency, memberNames: members } });
+      const idx = state.tontines.findIndex(x=>x.id===editingTontineId);
+      if(idx !== -1) state.tontines[idx] = mapTontineFromApi(tontine);
+      exitTontineEditMode();
+    } else {
+      const { tontine } = await apiFetch('/api/tontines', { method:'POST', auth:true, body:{ name, contributionAmount: amount, frequency, members } });
+      state.tontines.push(mapTontineFromApi(tontine));
+      e.target.reset();
+      document.getElementById('tontineFormCard').style.display = 'none';
+    }
     renderAll();
   } catch(err){
-    alert('Impossible de créer la tontine : ' + authErrorMessage(err));
+    alert("Impossible d'enregistrer la tontine : " + authErrorMessage(err));
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -3221,6 +3276,7 @@ function renderTontines(){
             <div class="t">Bénéficiaire de ce tour</div>
             <div class="n">${beneficiary}</div>
           </div>
+          <button class="btn btn-ghost" data-edit-tontine="${t.id}" title="Modifier ce groupe" style="padding:5px 10px; font-size:12px;">✏️ Modifier</button>
           <button class="btn-danger" data-del-tontine="${t.id}" title="Supprimer définitivement ce groupe" style="padding:5px 10px; font-size:12px;">🗑️ Supprimer</button>
         </div>
       </div>
@@ -3265,6 +3321,12 @@ function renderTontines(){
       }
     });
   });
+  document.querySelectorAll('[data-edit-tontine]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const t = state.tontines.find(x=>x.id===btn.dataset.editTontine);
+      if(t) enterTontineEditMode(t);
+    });
+  });
   document.querySelectorAll('[data-del-tontine]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const t = state.tontines.find(x=>x.id===btn.dataset.delTontine);
@@ -3273,6 +3335,7 @@ function renderTontines(){
       try {
         await apiFetch('/api/tontines/' + t.id, { method:'DELETE', auth:true });
         state.tontines = state.tontines.filter(x=>x.id !== t.id);
+        if(editingTontineId === t.id) exitTontineEditMode();
         renderTontines();
       } catch(err){
         alert('Suppression impossible : ' + authErrorMessage(err));
@@ -3298,8 +3361,51 @@ function populateEventCategorySelect(){
 
 document.getElementById('openPlannerForm').addEventListener('click', ()=>{
   const card = document.getElementById('plannerFormCard');
+  if(editingPlannerEventId){ exitPlannerEditMode(); return; }
   card.style.display = card.style.display==='none' ? 'block' : 'none';
 });
+
+let editingPlannerEventId = null;
+
+/**
+ * Ouvre le formulaire d'événement en mode MODIFICATION pour l'événement ev
+ * (bouton "✏️ Modifier" sur un événement à venir) — la soumission du
+ * formulaire fera un PATCH /api/planner-events/:id au lieu d'un POST.
+ * Réservé aux événements "à venir" : un événement déjà réalisé a déjà
+ * généré sa propre transaction (voir markEventRealise), que modifier
+ * l'événement ne toucherait pas — c'est la transaction qu'il faut corriger
+ * dans ce cas, pas l'événement planner.
+ */
+function enterPlannerEditMode(ev){
+  editingPlannerEventId = ev.id;
+  document.getElementById('evTitle').value = ev.title;
+  document.getElementById('evDate').value = ev.date;
+  document.getElementById('evTime').value = ev.time;
+  document.getElementById('evDuration').value = String(ev.durationMinutes);
+  document.getElementById('evType').value = ev.type;
+  document.getElementById('evType').dispatchEvent(new Event('change'));
+  document.getElementById('evCategory').value = ev.category;
+  document.getElementById('evAmount').value = ev.amount;
+  document.getElementById('evRecurrence').value = ev.recurrence || '';
+
+  document.getElementById('plannerFormTitle').textContent = "Modifier l'événement";
+  document.getElementById('plannerEditBanner').style.display = '';
+  document.getElementById('plannerSubmitBtn').textContent = 'Enregistrer les modifications';
+  document.getElementById('plannerFormCard').style.display = 'block';
+  document.getElementById('plannerFormCard').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function exitPlannerEditMode(){
+  editingPlannerEventId = null;
+  document.getElementById('plannerFormTitle').textContent = 'Nouvel événement financier';
+  document.getElementById('plannerEditBanner').style.display = 'none';
+  document.getElementById('plannerSubmitBtn').textContent = "Ajouter à l'agenda";
+  document.getElementById('plannerForm').reset();
+  populateEventCategorySelect();
+  document.getElementById('plannerFormCard').style.display = 'none';
+}
+
+document.getElementById('plannerCancelEdit').addEventListener('click', exitPlannerEditMode);
 
 document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -3310,19 +3416,32 @@ document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
   const type = document.getElementById('evType').value;
   const category = document.getElementById('evCategory').value;
   const amount = parseFloat(document.getElementById('evAmount').value);
-  const recurrence = document.getElementById('evRecurrence').value || undefined;
+  const recurrenceValue = document.getElementById('evRecurrence').value;
   if(!title || !date || !amount) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{ title, eventDate: date, eventTime: time, durationMinutes, type, category, amount, recurrence } });
-    state.plannerEvents.push(mapEventFromApi(plannerEvent));
-    e.target.reset();
-    populateEventCategorySelect();
-    document.getElementById('plannerFormCard').style.display = 'none';
+    if(editingPlannerEventId){
+      // null explicite (et non undefined) pour pouvoir retirer la récurrence
+      // en modification — même sémantique tri-état que côté transactions.
+      const { plannerEvent } = await apiFetch('/api/planner-events/' + editingPlannerEventId, { method:'PATCH', auth:true, body:{
+        title, eventDate: date, eventTime: time, durationMinutes, type, category, amount,
+        recurrence: recurrenceValue || null,
+      }});
+      const idx = state.plannerEvents.findIndex(x=>x.id===editingPlannerEventId);
+      if(idx !== -1) state.plannerEvents[idx] = mapEventFromApi(plannerEvent);
+      exitPlannerEditMode();
+    } else {
+      const recurrence = recurrenceValue || undefined;
+      const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{ title, eventDate: date, eventTime: time, durationMinutes, type, category, amount, recurrence } });
+      state.plannerEvents.push(mapEventFromApi(plannerEvent));
+      e.target.reset();
+      populateEventCategorySelect();
+      document.getElementById('plannerFormCard').style.display = 'none';
+    }
     renderAll();
   } catch(err){
-    alert("Impossible de créer l'événement : " + authErrorMessage(err));
+    alert("Impossible d'enregistrer l'événement : " + authErrorMessage(err));
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -3542,6 +3661,7 @@ function renderPlanner(){
         <button class="btn btn-ghost" style="padding:6px 10px; font-size:12px;" data-realise="${ev.id}">✅ Réalisé</button>
         <button class="btn btn-ghost" style="padding:6px 10px; font-size:12px;" data-non-realise="${ev.id}">✖ Non réalisé</button>
         <button class="btn btn-ghost" style="padding:6px 10px; font-size:12px;" data-preview="${ev.id}" data-phase="${nextPhase}" title="Prévisualiser le rappel 15 min avant ${nextPhase==='start'?'le début':'la fin'} sans attendre">🔔 Tester le rappel</button>
+        <button class="btn btn-ghost" style="padding:6px 10px; font-size:12px;" data-edit-event="${ev.id}" title="Modifier cet événement">✏️ Modifier</button>
         <button class="btn-danger" data-del-event="${ev.id}">Suppr.</button>
       </div>
     </div>`;
@@ -3582,6 +3702,12 @@ function renderPlanner(){
       sendBrowserNotification(ev, btn.dataset.phase);
     });
   });
+  document.querySelectorAll('[data-edit-event]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const ev = state.plannerEvents.find(e=>e.id===btn.dataset.editEvent);
+      if(ev) enterPlannerEditMode(ev);
+    });
+  });
   document.querySelectorAll('[data-del-event]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const id = btn.dataset.delEvent;
@@ -3590,6 +3716,7 @@ function renderPlanner(){
         await apiFetch('/api/planner-events/' + id, { method:'DELETE', auth:true });
         clearEventTimers(id);
         state.plannerEvents = state.plannerEvents.filter(e=>e.id !== id);
+        if(editingPlannerEventId === id) exitPlannerEditMode();
         renderAll();
       } catch(err){
         alert('Suppression impossible : ' + authErrorMessage(err));
