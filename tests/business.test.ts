@@ -1087,4 +1087,44 @@ describe("Tontine — cycle complet", () => {
       .expect(404);
     expect(res.body.error.code).toBe("TONTINE_NOT_FOUND");
   });
+
+  it("supprime un groupe de tontine : il disparaît de la liste (membres/cotisations/historique partent avec, via CASCADE)", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/tontines")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "À supprimer", contributionAmount: 10000, frequency: "mensuelle", members: ["A", "B"] })
+      .expect(201);
+    const id = created.body.tontine.id;
+
+    await request(app)
+      .delete(`/api/tontines/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(204);
+
+    const getAfter = await request(app).get(`/api/tontines/${id}`).set("Authorization", `Bearer ${access}`).expect(404);
+    expect(getAfter.body.error.code).toBe("TONTINE_NOT_FOUND");
+
+    const list = await request(app).get("/api/tontines").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(list.body.tontines).toHaveLength(0);
+  });
+
+  it("refuse de supprimer la tontine d'un autre utilisateur (404, pas une fuite) et ne la supprime pas", async () => {
+    const u1 = await authedUser();
+    const u2 = await authedUser();
+    const created = await request(app)
+      .post("/api/tontines")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .send({ name: "Privée", contributionAmount: 10000, frequency: "mensuelle", members: ["A", "B"] })
+      .expect(201);
+
+    const del = await request(app)
+      .delete(`/api/tontines/${created.body.tontine.id}`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .expect(404);
+    expect(del.body.error.code).toBe("TONTINE_NOT_FOUND");
+
+    const stillThere = await request(app).get("/api/tontines").set("Authorization", `Bearer ${u1.access}`).expect(200);
+    expect(stillThere.body.tontines).toHaveLength(1);
+  });
 });
