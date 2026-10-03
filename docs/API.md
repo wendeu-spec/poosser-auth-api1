@@ -344,7 +344,12 @@ est toujours recalculé côté client, jamais stocké.
 - `GET /api/tontines` → `{ tontines: [...] }`, chaque tontine incluant ses membres, le
   statut de cotisation du tour en cours (`paidThisRound`) avec sa date (`paidAtThisRound`,
   `null` si pas encore payé — utilisé par le résumé hebdomadaire pour compter les
-  cotisations payées "cette semaine") et l'historique des tours clôturés.
+  cotisations payées "cette semaine"), l'historique des tours clôturés, et
+  `currentRoundStartedAt` (date de début du tour en cours — en réalité
+  `tontines.updated_at`, qui est déjà retouché à la création et à chaque clôture de
+  tour, donc fiable sans colonne dédiée). Le client calcule l'échéance de cotisation en
+  ajoutant la fréquence du groupe à cette date, pour afficher un rappel ("cotisation due
+  dans N jours" / "en retard") sans aucun champ supplémentaire à saisir.
 - `GET /api/tontines/:id` → `{ tontine }`.
 - `POST /api/tontines` → `{ name, contributionAmount, frequency, members: string[] }`
   (2 à 50 membres, dans l'ordre de passage) → `201 { tontine }`.
@@ -367,11 +372,23 @@ est toujours recalculé côté client, jamais stocké.
 
 - `GET /api/planner-events` → `{ plannerEvents: [...] }`, triés par date/heure.
 - `POST /api/planner-events` → `{ title, eventDate, eventTime, durationMinutes, type,
-  category, amount }` → `201 { plannerEvent }` (statut initial `a_venir`).
+  category, amount, recurrence? }` → `201 { plannerEvent }` (statut initial `a_venir`).
+  `recurrence` est optionnel : `"hebdomadaire" | "mensuelle" | "trimestrielle"` pour un
+  paiement qui revient régulièrement (loyer, abonnement...), absent/`null` pour un
+  événement ponctuel.
 - `PATCH /api/planner-events/:id` → champs partiels → `200 { plannerEvent }`.
+  `recurrence` a une sémantique tri-état comme `note`/`projectId`/`rubriqueId` sur les
+  transactions : absent du corps = inchangée, `null` = retire la récurrence (redevient
+  ponctuel), valeur = la remplace.
 - `POST /api/planner-events/:id/status` → `{ status: "a_venir" | "realise" |
   "non_realise" }` — c'est l'action déclenchée par les boutons de validation de la
-  notification de rappel (15 min avant début/fin) → `200 { plannerEvent }`.
+  notification de rappel (15 min avant début/fin) → `200 { plannerEvent, nextPlannerEvent
+  }`. Si l'événement validé (`status: "realise"`) a une `recurrence`, la prochaine
+  occurrence est créée automatiquement à la date suivante (même titre, heure, durée,
+  catégorie, montant et récurrence — seule la date avance, plafonnée au dernier jour du
+  mois cible pour une récurrence mensuelle/trimestrielle plutôt que de déborder sur le
+  mois suivant) et renvoyée dans `nextPlannerEvent` ; sinon `nextPlannerEvent` vaut
+  `null`.
 - `DELETE /api/planner-events/:id` → `204`.
 - Erreurs : `404 PLANNER_EVENT_NOT_FOUND`.
 
