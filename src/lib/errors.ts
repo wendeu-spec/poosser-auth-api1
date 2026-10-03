@@ -49,4 +49,5 @@ export const Errors = {
   tontineMemberNotFound: () => new AppError("TONTINE_MEMBER_NOT_FOUND", 404),
   plannerEventNotFound: () => new AppError("PLANNER_EVENT_NOT_FOUND", 404),
   tontineRoundNotReady: () => new AppError("TONTINE_ROUND_NOT_READY", 409),
+  transactionFavoriteNotFound: () => new AppError("TRANSACTION_FAVORITE_NOT_FOUND", 404),
 };
