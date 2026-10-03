@@ -16,6 +16,7 @@ describe("routes métier — exigent toutes un access token", () => {
     await request(app).get("/api/savings-goals").expect(401);
     await request(app).get("/api/projects").expect(401);
     await request(app).get("/api/rubriques").expect(401);
+    await request(app).get("/api/transaction-favorites").expect(401);
     await request(app).get("/api/tontines").expect(401);
     await request(app).get("/api/planner-events").expect(401);
   });
@@ -211,6 +212,152 @@ describe("PATCH /api/transactions/:id — modification en place (tri-état)", ()
       .send({ projectId: null, rubriqueId: rubriqueB.body.rubrique.id })
       .expect(400);
     expect(noEffectiveProject.body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+// Couvre le bouton "☆ Favori" (sauvegarder un mouvement fréquent) et la
+// section "⭐ Favoris" de l'onglet Transactions (le rejouer). Un favori est un
+// gabarit, jamais lié aux transactions déjà saisies.
+describe("Favoris de saisie rapide (/api/transaction-favorites)", () => {
+  it("crée, liste, modifie puis supprime un favori", async () => {
+    const { access } = await authedUser();
+    const create = await request(app)
+      .post("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ label: "Taxi", type: "depense", category: "Transport", amount: 500, method: "Espèces" })
+      .expect(201);
+    const id = create.body.transactionFavorite.id;
+    expect(create.body.transactionFavorite.label).toBe("Taxi");
+
+    const list = await request(app)
+      .get("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${access}`)
+      .expect(200);
+    expect(list.body.transactionFavorites).toHaveLength(1);
+
+    const updated = await request(app)
+      .patch(`/api/transaction-favorites/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ amount: 600 })
+      .expect(200);
+    expect(Number(updated.body.transactionFavorite.amount)).toBe(600);
+    expect(updated.body.transactionFavorite.label).toBe("Taxi"); // champ non touché = inchangé
+
+    await request(app).delete(`/api/transaction-favorites/${id}`).set("Authorization", `Bearer ${access}`).expect(204);
+    const listAfter = await request(app)
+      .get("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${access}`)
+      .expect(200);
+    expect(listAfter.body.transactionFavorites).toHaveLength(0);
+  });
+
+  it("peut rattacher un projet et une rubrique, et les détacher explicitement via null", async () => {
+    const { access } = await authedUser();
+    const project = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Voyage" })
+      .expect(201);
+    const projectId = project.body.project.id;
+    const rubrique = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Transport" })
+      .expect(201);
+    const rubriqueId = rubrique.body.rubrique.id;
+
+    const create = await request(app)
+      .post("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ label: "Taxi voyage", type: "depense", category: "Transport", amount: 500, method: "Espèces", projectId, rubriqueId })
+      .expect(201);
+    const id = create.body.transactionFavorite.id;
+    expect(create.body.transactionFavorite.project_id).toBe(projectId);
+    expect(create.body.transactionFavorite.rubrique_id).toBe(rubriqueId);
+
+    const rubDetached = await request(app)
+      .patch(`/api/transaction-favorites/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ rubriqueId: null })
+      .expect(200);
+    expect(rubDetached.body.transactionFavorite.rubrique_id).toBeNull();
+    expect(rubDetached.body.transactionFavorite.project_id).toBe(projectId);
+
+    const projDetached = await request(app)
+      .patch(`/api/transaction-favorites/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ projectId: null })
+      .expect(200);
+    expect(projDetached.body.transactionFavorite.project_id).toBeNull();
+  });
+
+  it("refuse une rubrique sans projectId effectif, ou empruntée à un autre projet", async () => {
+    const { access } = await authedUser();
+    const projectB = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Projet B" })
+      .expect(201);
+    const rubriqueB = await request(app)
+      .post(`/api/projects/${projectB.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Hébergement" })
+      .expect(201);
+
+    const noProject = await request(app)
+      .post("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ label: "Sans projet", type: "depense", category: "Autres", amount: 1000, method: "Espèces", rubriqueId: rubriqueB.body.rubrique.id })
+      .expect(400);
+    expect(noProject.body.error.code).toBe("VALIDATION_ERROR");
+
+    const projectA = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Projet A" })
+      .expect(201);
+    const crossProject = await request(app)
+      .post("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ label: "Emprunté", type: "depense", category: "Autres", amount: 1000, method: "Espèces", projectId: projectA.body.project.id, rubriqueId: rubriqueB.body.rubrique.id })
+      .expect(404);
+    expect(crossProject.body.error.code).toBe("RUBRIQUE_NOT_FOUND");
+  });
+
+  it("un utilisateur ne voit ni ne modifie les favoris d'un autre (404, pas une fuite)", async () => {
+    const u1 = await authedUser();
+    const u2 = await authedUser();
+    const created = await request(app)
+      .post("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .send({ label: "Privé", type: "depense", category: "Autres", amount: 1000, method: "Espèces" })
+      .expect(201);
+    const id = created.body.transactionFavorite.id;
+
+    const listU2 = await request(app)
+      .get("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${u2.access}`)
+      .expect(200);
+    expect(listU2.body.transactionFavorites).toHaveLength(0);
+
+    const patchByU2 = await request(app)
+      .patch(`/api/transaction-favorites/${id}`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .send({ amount: 1 })
+      .expect(404);
+    expect(patchByU2.body.error.code).toBe("TRANSACTION_FAVORITE_NOT_FOUND");
+
+    const delByU2 = await request(app)
+      .delete(`/api/transaction-favorites/${id}`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .expect(404);
+    expect(delByU2.body.error.code).toBe("TRANSACTION_FAVORITE_NOT_FOUND");
+
+    const stillThere = await request(app)
+      .get("/api/transaction-favorites")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .expect(200);
+    expect(stillThere.body.transactionFavorites).toHaveLength(1);
   });
 });
 
