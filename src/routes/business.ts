@@ -4,6 +4,7 @@ import { validateBody } from "../middleware/validate.js";
 import { Errors } from "../lib/errors.js";
 import {
   createTransactionSchema, updateTransactionSchema,
+  createTransactionFavoriteSchema, updateTransactionFavoriteSchema,
   upsertBudgetSchema,
   createSavingsGoalSchema, updateSavingsGoalSchema,
   createProjectSchema, updateProjectSchema,
@@ -13,6 +14,7 @@ import {
 } from "../validators/businessSchemas.js";
 
 import * as transactions from "../services/transactionService.js";
+import * as favorites from "../services/favoriteService.js";
 import * as budgets from "../services/budgetService.js";
 import * as savingsGoals from "../services/savingsGoalService.js";
 import * as projects from "../services/projectService.js";
@@ -49,6 +51,31 @@ businessRouter.patch("/transactions/:id", validateBody(updateTransactionSchema),
 businessRouter.delete("/transactions/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await transactions.deleteTransaction(req.auth!.userId, id);
+  res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Favoris de saisie rapide — gabarits de transaction réutilisables (bouton
+// "☆ Favori" sur une ligne d'historique, puis "⭐ Favoris" dans l'onglet
+// Transactions pour les rejouer). Pas de notion de projet dans l'URL ici
+// (contrairement aux rubriques) : un favori appartient directement à
+// l'utilisateur, le project_id/rubrique_id éventuel n'est qu'un champ parmi
+// d'autres dans son gabarit.
+// ---------------------------------------------------------------------------
+businessRouter.get("/transaction-favorites", async (req, res) => {
+  res.json({ transactionFavorites: await favorites.listTransactionFavorites(req.auth!.userId) });
+});
+businessRouter.post("/transaction-favorites", validateBody(createTransactionFavoriteSchema), async (req, res) => {
+  const favorite = await favorites.createTransactionFavorite(req.auth!.userId, req.body);
+  res.status(201).json({ transactionFavorite: favorite });
+});
+businessRouter.patch("/transaction-favorites/:id", validateBody(updateTransactionFavoriteSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  res.json({ transactionFavorite: await favorites.updateTransactionFavorite(req.auth!.userId, id, req.body) });
+});
+businessRouter.delete("/transaction-favorites/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  await favorites.deleteTransactionFavorite(req.auth!.userId, id);
   res.status(204).send();
 });
 
