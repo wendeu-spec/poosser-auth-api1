@@ -565,6 +565,8 @@
 
     <div id="dashAlerts"></div>
 
+    <div class="card" id="weeklySummaryCard" style="margin-bottom:18px;"></div>
+
     <div class="grid-2">
       <div class="card">
         <h3>Revenus vs Dépenses</h3>
@@ -1041,6 +1043,7 @@ let state = {
   favorites: [],
   budgets: [],
   goals: [],
+  savingsContributions: [],
   projects: [],
   rubriques: [],
   tontines: [],
@@ -1261,6 +1264,9 @@ function suggestRubriquesFor(icon){ return RUBRIQUE_SUGGESTIONS[icon] || []; }
 function mapGoalFromApi(g){
   return { id: g.id, name: g.name, target: Number(g.target_amount), current: Number(g.current_amount), deadline: g.deadline };
 }
+function mapSavingsContributionFromApi(c){
+  return { id: c.id, goalId: c.goal_id, goalName: c.goal_name, amount: Number(c.amount), date: c.created_at.slice(0, 10) };
+}
 function mapEventFromApi(e){
   return { id: e.id, title: e.title, date: e.event_date, time: e.event_time, durationMinutes: e.duration_minutes, type: e.type, category: e.category, amount: Number(e.amount), status: e.status, notifiedStart: e.notified_start, notifiedEnd: e.notified_end };
 }
@@ -1272,7 +1278,8 @@ function mapTontineFromApi(t){
   // retrouver l'id à envoyer au serveur depuis un clic sur un nom affiché.
   const memberIdByName = {};
   const paidThisRound = {};
-  t.members.forEach(m => { memberIdByName[m.name] = m.id; paidThisRound[m.name] = !!t.paidThisRound[m.id]; });
+  const paidAtThisRound = {};
+  t.members.forEach(m => { memberIdByName[m.name] = m.id; paidThisRound[m.name] = !!t.paidThisRound[m.id]; paidAtThisRound[m.name] = (t.paidAtThisRound && t.paidAtThisRound[m.id]) || null; });
   return {
     id: t.id,
     name: t.name,
@@ -1281,6 +1288,7 @@ function mapTontineFromApi(t){
     members: t.members.map(m => m.name),
     currentRound: t.currentRound,
     paidThisRound,
+    paidAtThisRound,
     history: t.history.slice().reverse().map(h => ({ round: h.round, beneficiary: h.beneficiaryName, total: h.totalAmount })),
     _memberIdByName: memberIdByName,
   };
@@ -1293,11 +1301,12 @@ function mapTontineFromApi(t){
  */
 async function bootstrapAfterAuth(){
   try {
-    const [txRes, favRes, budRes, goalRes, tonRes, evRes, projRes, rubRes] = await Promise.all([
+    const [txRes, favRes, budRes, goalRes, contribRes, tonRes, evRes, projRes, rubRes] = await Promise.all([
       apiFetch('/api/transactions', { auth: true }),
       apiFetch('/api/transaction-favorites', { auth: true }),
       apiFetch('/api/budgets', { auth: true }),
       apiFetch('/api/savings-goals', { auth: true }),
+      apiFetch('/api/savings-goal-contributions', { auth: true }),
       apiFetch('/api/tontines', { auth: true }),
       apiFetch('/api/planner-events', { auth: true }),
       apiFetch('/api/projects', { auth: true }),
@@ -1307,6 +1316,7 @@ async function bootstrapAfterAuth(){
     state.favorites = favRes.transactionFavorites.map(mapFavoriteFromApi);
     state.budgets = budRes.budgets.map(mapBudgetFromApi);
     state.goals = goalRes.savingsGoals.map(mapGoalFromApi);
+    state.savingsContributions = contribRes.savingsGoalContributions.map(mapSavingsContributionFromApi);
     state.tontines = tonRes.tontines.map(mapTontineFromApi);
     state.plannerEvents = evRes.plannerEvents.map(mapEventFromApi);
     state.projects = projRes.projects.map(mapProjectFromApi);
@@ -1656,6 +1666,106 @@ document.getElementById('themeBtn').addEventListener('click', ()=>{
   renderAll(); // re-render charts that use resolved hex
 });
 
+/* ===================== RÉSUMÉ HEBDOMADAIRE ===================== */
+// Fenêtres glissantes de 7 jours (plutôt que semaine calendaire lundi-dimanche)
+// pour que "cette semaine" / "semaine précédente" aient toujours exactement 7
+// jours à comparer, quel que soit le jour de la semaine en cours.
+function dateInRange(dateStr, startStr, endStr){
+  return dateStr >= startStr && dateStr <= endStr;
+}
+function weeklySummary(){
+  const curStart = todayISO(-6), curEnd = todayISO(0);
+  const prevStart = todayISO(-13), prevEnd = todayISO(-7);
+
+  const curTx = state.transactions.filter(t => dateInRange(t.date, curStart, curEnd));
+  const prevTx = state.transactions.filter(t => dateInRange(t.date, prevStart, prevEnd));
+
+  const curRev = curTx.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0);
+  const curDep = curTx.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
+  const prevRev = prevTx.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0);
+  const prevDep = prevTx.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
+
+  // % d'évolution vs semaine précédente ; null si rien à comparer (évite une
+  // division par zéro qui donnerait un "+Infinity%" absurde).
+  const pctChange = (cur, prev) => prev > 0 ? Math.round((cur - prev) / prev * 100) : null;
+
+  const depByCat = {};
+  curTx.filter(t=>t.type==='depense').forEach(t => { depByCat[t.category] = (depByCat[t.category]||0) + t.amount; });
+  const topCatEntry = Object.entries(depByCat).sort((a,b)=>b[1]-a[1])[0] || null;
+
+  const contribCur = state.savingsContributions.filter(c => dateInRange(c.date, curStart, curEnd));
+  const epargneTotal = contribCur.reduce((a,c)=>a+c.amount,0);
+  const epargneByGoal = {};
+  contribCur.forEach(c => { epargneByGoal[c.goalName] = (epargneByGoal[c.goalName]||0) + c.amount; });
+
+  let tontinePaidCount = 0;
+  state.tontines.forEach(t => {
+    Object.values(t.paidAtThisRound || {}).forEach(dateIso => {
+      if(dateIso && dateInRange(dateIso.slice(0,10), curStart, curEnd)) tontinePaidCount++;
+    });
+  });
+
+  return {
+    curStart, curEnd,
+    curRev, curDep, curSolde: curRev - curDep,
+    revChangePct: pctChange(curRev, prevRev),
+    depChangePct: pctChange(curDep, prevDep),
+    topCategory: topCatEntry ? { category: topCatEntry[0], amount: topCatEntry[1] } : null,
+    epargneTotal, epargneByGoal,
+    tontinePaidCount,
+    hasAnyActivity: curTx.length > 0 || contribCur.length > 0 || tontinePaidCount > 0,
+  };
+}
+
+function changeBadge(pct, goodWhenDown){
+  if(pct === null) return '';
+  const isGood = goodWhenDown ? pct <= 0 : pct >= 0;
+  const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '→';
+  const color = pct === 0 ? 'var(--muted,#888)' : (isGood ? 'var(--good)' : 'var(--critical)');
+  return `<span style="color:${color}; font-weight:600; font-size:12.5px; margin-left:6px;">${arrow} ${Math.abs(pct)}% vs semaine préc.</span>`;
+}
+
+function renderWeeklySummary(){
+  const s = weeklySummary();
+  const card = document.getElementById('weeklySummaryCard');
+  const periodLabel = `${s.curStart.split('-').reverse().join('/')} au ${s.curEnd.split('-').reverse().join('/')}`;
+
+  if(!s.hasAnyActivity){
+    card.innerHTML = `<h3>📅 Résumé de la semaine</h3>
+      <div class="sub">${periodLabel}</div>
+      <div class="empty-state">Aucun mouvement enregistré cette semaine pour le moment.</div>`;
+    return;
+  }
+
+  const epargneLines = Object.entries(s.epargneByGoal).map(([name, amt]) => `${name} : ${fmt(amt)}`).join(' · ');
+
+  card.innerHTML = `
+    <h3>📅 Résumé de la semaine</h3>
+    <div class="sub">${periodLabel}</div>
+    <div class="tiles" style="margin-top:10px;">
+      <div class="tile">
+        <div class="label">Solde de la semaine</div>
+        <div class="value">${fmt(s.curSolde)}</div>
+        <div class="delta ${s.curSolde>=0?'good':'bad'}">${s.curSolde>=0 ? 'Positif' : 'Attention: déficit'}</div>
+      </div>
+      <div class="tile">
+        <div class="label">Revenus</div>
+        <div class="value">${fmt(s.curRev)}</div>
+        <div class="delta">${changeBadge(s.revChangePct, false) || 'Pas de comparaison possible'}</div>
+      </div>
+      <div class="tile">
+        <div class="label">Dépenses</div>
+        <div class="value">${fmt(s.curDep)}</div>
+        <div class="delta">${changeBadge(s.depChangePct, true) || 'Pas de comparaison possible'}</div>
+      </div>
+    </div>
+    <div style="margin-top:14px; display:flex; flex-wrap:wrap; gap:10px;">
+      ${s.topCategory ? `<span class="pill" style="padding:6px 12px; font-size:12.5px;">🏷️ Top dépense : <b>${s.topCategory.category}</b> (${fmt(s.topCategory.amount)})</span>` : ''}
+      <span class="pill" style="padding:6px 12px; font-size:12.5px;">🤝 Tontine : <b>${s.tontinePaidCount}</b> cotisation(s) payée(s) cette semaine</span>
+      <span class="pill" style="padding:6px 12px; font-size:12.5px;">💰 Épargne : <b>${fmt(s.epargneTotal)}</b> déposé(s) cette semaine${epargneLines ? ' (' + epargneLines + ')' : ''}</span>
+    </div>`;
+}
+
 /* ===================== DASHBOARD RENDER ===================== */
 function renderDashboard(){
   const rev = totalRevenu(), dep = totalDepense(), solde = rev - dep, ep = totalEpargne();
@@ -1684,6 +1794,7 @@ function renderDashboard(){
   renderDonut();
   renderBarChart();
   renderRecentTx();
+  renderWeeklySummary();
 }
 
 function renderDonut(){
@@ -2264,11 +2375,14 @@ function renderGoals(){
       const amt = prompt(`Montant à verser vers "${goal.name}" (FCFA) :`, '10000');
       const val = parseFloat(amt);
       if(!(val>0)) return;
-      const newCurrent = Math.min(goal.current+val, goal.target);
       btn.disabled = true;
       try {
-        const { savingsGoal } = await apiFetch('/api/savings-goals/' + id, { method:'PATCH', auth:true, body:{ currentAmount: newCurrent } });
+        // Route dédiée (plutôt qu'un PATCH currentAmount calculé côté client) :
+        // elle journalise le versement avec sa date, ce qui permet au résumé
+        // hebdomadaire de calculer "épargné cette semaine" précisément.
+        const { savingsGoal, contribution } = await apiFetch('/api/savings-goals/' + id + '/contributions', { method:'POST', auth:true, body:{ amount: val } });
         Object.assign(goal, mapGoalFromApi(savingsGoal));
+        state.savingsContributions.unshift(mapSavingsContributionFromApi(contribution));
         renderAll();
       } catch(err){
         alert('Versement impossible : ' + authErrorMessage(err));
