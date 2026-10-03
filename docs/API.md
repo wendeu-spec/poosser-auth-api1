@@ -264,9 +264,20 @@ montant reste modifiable avant validation.
 - `GET /api/savings-goals` → `{ savingsGoals: [...] }`.
 - `POST /api/savings-goals` → `{ name, targetAmount, currentAmount?, deadline? }` →
   `201 { savingsGoal }`.
-- `PATCH /api/savings-goals/:id` → champs partiels (typiquement `currentAmount` pour
-  enregistrer un versement) → `200 { savingsGoal }`.
+- `PATCH /api/savings-goals/:id` → champs partiels (renommer, changer l'objectif ou
+  l'échéance) → `200 { savingsGoal }`. Pour enregistrer un versement, préférer
+  `POST /api/savings-goals/:id/contributions` ci-dessous plutôt qu'un PATCH direct de
+  `currentAmount` : seule cette route journalise la date du versement.
 - `DELETE /api/savings-goals/:id` → `204`.
+- `POST /api/savings-goals/:id/contributions` → `{ amount }` — enregistre un versement
+  (bouton "+ Verser"). Le solde affiché (`current_amount`) est plafonné à l'objectif,
+  mais le montant journalisé dans `savings_goal_contributions` est le montant réellement
+  versé (voir migrations/023_savings_goal_contributions.sql) → `201 { savingsGoal,
+  contribution }`. Sert de base au résumé hebdomadaire ("épargné cette semaine").
+- `GET /api/savings-goal-contributions` → `{ savingsGoalContributions: [...] }` — journal
+  complet des versements de l'utilisateur, tous objectifs confondus, le plus récent en
+  premier. Non imbriqué sous `/savings-goals/:id` (même convention que
+  `/transaction-favorites`) pour éviter une requête par objectif côté client.
 - Erreurs : `404 SAVINGS_GOAL_NOT_FOUND`.
 
 ## Projets
@@ -331,13 +342,15 @@ est toujours recalculé côté client, jamais stocké.
 ## Tontines
 
 - `GET /api/tontines` → `{ tontines: [...] }`, chaque tontine incluant ses membres, le
-  statut de cotisation du tour en cours (`paidThisRound`) et l'historique des tours
-  clôturés.
+  statut de cotisation du tour en cours (`paidThisRound`) avec sa date (`paidAtThisRound`,
+  `null` si pas encore payé — utilisé par le résumé hebdomadaire pour compter les
+  cotisations payées "cette semaine") et l'historique des tours clôturés.
 - `GET /api/tontines/:id` → `{ tontine }`.
 - `POST /api/tontines` → `{ name, contributionAmount, frequency, members: string[] }`
   (2 à 50 membres, dans l'ordre de passage) → `201 { tontine }`.
 - `POST /api/tontines/:id/contributions` → `{ memberId, paid }` — marque un membre
-  payé/non payé pour le tour en cours → `200 { tontine }`.
+  payé/non payé pour le tour en cours (horodate automatiquement `paid_at` si `paid: true`)
+  → `200 { tontine }`.
 - `POST /api/tontines/:id/close-round` — clôture le tour en cours et verse au
   bénéficiaire suivant (ordre de passage) ; **refuse tant que tous les membres n'ont pas
   cotisé** (même règle que le bouton correspondant, désactivé dans le prototype tant que
