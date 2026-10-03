@@ -18,11 +18,13 @@ export interface TontineView {
   paidThisRound: Record<string, boolean>; // memberId -> paid
   paidAtThisRound: Record<string, string | null>; // memberId -> date ISO du paiement (null si pas encore payé)
   history: Array<{ round: number; beneficiaryMemberId: string; beneficiaryName: string; totalAmount: number }>;
-  // Date de début du tour en cours — `tontines.updated_at` est retouché par
-  // trigger à la création ET à chaque clôture de tour (closeRound fait un
-  // UPDATE sur tontines), donc ce champ représente déjà fidèlement "quand ce
-  // tour a commencé" sans qu'aucune colonne dédiée ne soit nécessaire. Le
-  // client calcule l'échéance de cotisation à partir de là + la fréquence.
+  // Date de début du tour en cours — colonne dédiée `round_started_at` (voir
+  // migrations/025_tontine_round_started_at.sql), avancée uniquement à la
+  // création et à chaque clôture de tour (closeRound). Volontairement
+  // découplée de `updated_at`, que PATCH /api/tontines/:id (modifier nom,
+  // cotisation, fréquence, membres) touche aussi via le trigger
+  // `touch_updated_at` — sans cette séparation, éditer une tontine aurait
+  // réinitialisé à tort l'échéance de cotisation affichée au client.
   currentRoundStartedAt: string;
 }
 
@@ -31,6 +33,17 @@ export interface CreateTontineInput {
   contributionAmount: number;
   frequency: string;
   members: string[];
+}
+
+export interface UpdateTontineInput {
+  name?: string;
+  contributionAmount?: number;
+  frequency?: string;
+  // Renomme les membres existants, dans l'ordre de passage — ne permet pas
+  // d'ajouter/retirer un membre ici : cela changerait l'ordre des
+  // bénéficiaires et le sens des cotisations déjà enregistrées par round,
+  // ce qui sort du cadre d'une simple modification.
+  memberNames?: string[];
 }
 
 async function loadTontineView(client: PoolClient | typeof pool, userId: string, tontineId: string): Promise<TontineView | null> {
@@ -84,7 +97,7 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
       beneficiaryName: h.beneficiary_name,
       totalAmount: Number(h.total_amount),
     })),
-    currentRoundStartedAt: new Date(tontine.updated_at).toISOString(),
+    currentRoundStartedAt: new Date(tontine.round_started_at).toISOString(),
   };
 }
 
@@ -129,6 +142,55 @@ export async function createTontine(userId: string, input: CreateTontineInput): 
 
     const view = await loadTontineView(client, userId, tontineId);
     if (!view) throw new Error("[createTontine] tontine introuvable juste après sa création");
+    return view;
+  });
+}
+
+/**
+ * Modifie une tontine existante : nom, cotisation, fréquence et/ou nom des
+ * membres (même nombre, même ordre de passage — voir UpdateTontineInput).
+ * Ne touche jamais `round_started_at` : l'échéance de cotisation affichée au
+ * client doit rester celle du tour en cours, même après une correction de
+ * nom ou de montant.
+ */
+export async function updateTontine(
+  userId: string,
+  tontineId: string,
+  input: UpdateTontineInput,
+): Promise<TontineView> {
+  return withTransaction(async (client) => {
+    const { rows: tontineRows } = await client.query(
+      `SELECT id FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      [tontineId, userId],
+    );
+    if (!tontineRows[0]) throw Errors.tontineNotFound();
+
+    if (input.memberNames) {
+      const { rows: members } = await client.query<TontineMember>(
+        `SELECT id, name, position FROM tontine_members WHERE tontine_id = $1 ORDER BY position ASC`,
+        [tontineId],
+      );
+      if (members.length !== input.memberNames.length) {
+        throw Errors.validation({ field: "memberNames", reason: "doit contenir exactement un nom par membre existant, dans l'ordre de passage" });
+      }
+      for (let i = 0; i < members.length; i++) {
+        await client.query(`UPDATE tontine_members SET name = $1 WHERE id = $2`, [input.memberNames[i], members[i]!.id]);
+      }
+    }
+
+    if (input.name !== undefined || input.contributionAmount !== undefined || input.frequency !== undefined) {
+      await client.query(
+        `UPDATE tontines SET
+           name = COALESCE($2, name),
+           contribution_amount = COALESCE($3, contribution_amount),
+           frequency = COALESCE($4, frequency)
+         WHERE id = $1`,
+        [tontineId, input.name ?? null, input.contributionAmount ?? null, input.frequency ?? null],
+      );
+    }
+
+    const view = await loadTontineView(client, userId, tontineId);
+    if (!view) throw new Error("[updateTontine] tontine introuvable après mise à jour");
     return view;
   });
 }
@@ -206,7 +268,10 @@ export async function closeRound(userId: string, tontineId: string): Promise<Ton
     );
 
     const nextRound = tontine.current_round + 1;
-    await client.query(`UPDATE tontines SET current_round = $2 WHERE id = $1`, [tontineId, nextRound]);
+    // round_started_at repart à maintenant : c'est le point de départ du calcul
+    // d'échéance de la prochaine cotisation côté client (voir UpdateTontineInput
+    // ci-dessus pour pourquoi ce n'est plus updated_at).
+    await client.query(`UPDATE tontines SET current_round = $2, round_started_at = now() WHERE id = $1`, [tontineId, nextRound]);
     for (const m of members) {
       await client.query(
         `INSERT INTO tontine_contributions (tontine_id, member_id, round_number, paid) VALUES ($1, $2, $3, false)`,
