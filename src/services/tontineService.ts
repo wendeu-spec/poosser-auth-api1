@@ -212,3 +212,15 @@ export async function closeRound(userId: string, tontineId: string): Promise<Ton
     return view;
   });
 }
+
+/**
+ * Supprime définitivement un groupe de tontine — membres, cotisations et
+ * historique des tours partent avec lui (ON DELETE CASCADE, voir
+ * migrations/017_tontines.sql). Aucune confirmation serveur au-delà de la
+ * vérification de propriété : le bouton "Supprimer" côté client demande déjà
+ * confirmation à l'utilisateur avant d'appeler cette route.
+ */
+export async function deleteTontine(userId: string, tontineId: string): Promise<void> {
+  const { rowCount } = await pool.query(`DELETE FROM tontines WHERE id = $1 AND user_id = $2`, [tontineId, userId]);
+  if (!rowCount) throw Errors.tontineNotFound();
+}
