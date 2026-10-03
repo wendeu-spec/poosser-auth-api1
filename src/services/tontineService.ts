@@ -16,6 +16,7 @@ export interface TontineView {
   currentRound: number;
   members: TontineMember[];
   paidThisRound: Record<string, boolean>; // memberId -> paid
+  paidAtThisRound: Record<string, string | null>; // memberId -> date ISO du paiement (null si pas encore payé)
   history: Array<{ round: number; beneficiaryMemberId: string; beneficiaryName: string; totalAmount: number }>;
 }
 
@@ -39,13 +40,17 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
     [tontineId],
   );
 
-  const { rows: contributions } = await client.query<{ member_id: string; paid: boolean }>(
-    `SELECT member_id, paid FROM tontine_contributions WHERE tontine_id = $1 AND round_number = $2`,
+  const { rows: contributions } = await client.query<{ member_id: string; paid: boolean; paid_at: Date | null }>(
+    `SELECT member_id, paid, paid_at FROM tontine_contributions WHERE tontine_id = $1 AND round_number = $2`,
     [tontineId, tontine.current_round],
   );
   const paidThisRound: Record<string, boolean> = {};
-  for (const m of members) paidThisRound[m.id] = false;
-  for (const c of contributions) paidThisRound[c.member_id] = c.paid;
+  const paidAtThisRound: Record<string, string | null> = {};
+  for (const m of members) { paidThisRound[m.id] = false; paidAtThisRound[m.id] = null; }
+  for (const c of contributions) {
+    paidThisRound[c.member_id] = c.paid;
+    paidAtThisRound[c.member_id] = c.paid_at ? c.paid_at.toISOString() : null;
+  }
 
   const { rows: history } = await client.query<{
     round_number: number; beneficiary_member_id: string; beneficiary_name: string; total_amount: string;
@@ -66,6 +71,7 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
     currentRound: tontine.current_round,
     members,
     paidThisRound,
+    paidAtThisRound,
     history: history.map((h) => ({
       round: h.round_number,
       beneficiaryMemberId: h.beneficiary_member_id,
