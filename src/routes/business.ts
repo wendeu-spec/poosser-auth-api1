@@ -9,7 +9,7 @@ import {
   createSavingsGoalSchema, updateSavingsGoalSchema, addSavingsGoalContributionSchema,
   createProjectSchema, updateProjectSchema,
   createRubriqueSchema, updateRubriqueSchema,
-  createTontineSchema, markContributionSchema,
+  createTontineSchema, updateTontineSchema, markContributionSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
 } from "../validators/businessSchemas.js";
 
@@ -201,6 +201,11 @@ businessRouter.get("/tontines/:id", async (req, res) => {
 businessRouter.post("/tontines", validateBody(createTontineSchema), async (req, res) => {
   const tontine = await tontines.createTontine(req.auth!.userId, req.body);
   res.status(201).json({ tontine });
+});
+businessRouter.patch("/tontines/:id", validateBody(updateTontineSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const tontine = await tontines.updateTontine(req.auth!.userId, id, req.body);
+  res.json({ tontine });
 });
 businessRouter.post("/tontines/:id/contributions", validateBody(markContributionSchema), async (req, res) => {
   const id = requireParamId(req.params.id);
