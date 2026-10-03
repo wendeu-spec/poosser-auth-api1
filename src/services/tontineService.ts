@@ -18,6 +18,12 @@ export interface TontineView {
   paidThisRound: Record<string, boolean>; // memberId -> paid
   paidAtThisRound: Record<string, string | null>; // memberId -> date ISO du paiement (null si pas encore payé)
   history: Array<{ round: number; beneficiaryMemberId: string; beneficiaryName: string; totalAmount: number }>;
+  // Date de début du tour en cours — `tontines.updated_at` est retouché par
+  // trigger à la création ET à chaque clôture de tour (closeRound fait un
+  // UPDATE sur tontines), donc ce champ représente déjà fidèlement "quand ce
+  // tour a commencé" sans qu'aucune colonne dédiée ne soit nécessaire. Le
+  // client calcule l'échéance de cotisation à partir de là + la fréquence.
+  currentRoundStartedAt: string;
 }
 
 export interface CreateTontineInput {
@@ -78,6 +84,7 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
       beneficiaryName: h.beneficiary_name,
       totalAmount: Number(h.total_amount),
     })),
+    currentRoundStartedAt: new Date(tontine.updated_at).toISOString(),
   };
 }
 
