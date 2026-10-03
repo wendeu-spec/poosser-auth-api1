@@ -228,6 +228,28 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
 - `DELETE /api/transactions/:id` → `204`.
 - Erreurs : `404 TRANSACTION_NOT_FOUND`.
 
+## Favoris de saisie rapide
+
+Un favori est un **gabarit** de transaction (bouton "☆ Favori" sur une ligne de
+l'historique, puis rejoué depuis la section "⭐ Favoris" de l'onglet Transactions) —
+aucun lien avec les transactions déjà saisies, le supprimer n'efface rien. Choix
+structurant validé avec l'utilisateur : rejouer un favori **pré-remplit le
+formulaire** (comme "↻ Répéter"), ça ne crée pas la transaction instantanément — le
+montant reste modifiable avant validation.
+
+- `GET /api/transaction-favorites` → `{ transactionFavorites: [...] }`, triés par
+  date de création croissante (ordre de création de l'utilisateur).
+- `POST /api/transaction-favorites` → `{ label, type, category, amount, method,
+  note?, projectId?, rubriqueId? }` → `201 { transactionFavorite }`.
+- `PATCH /api/transaction-favorites/:id` → champs partiels → `200 { transactionFavorite }`.
+  Même sémantique **tri-état** que `PATCH /api/transactions/:id` pour `note`,
+  `projectId` et `rubriqueId` : absent = inchangé, `null` = effacé/détaché, valeur =
+  remplacé.
+- `DELETE /api/transaction-favorites/:id` → `204`.
+- `rubriqueId` exige `projectId` sur le même favori, et la rubrique doit appartenir à
+  ce projet — mêmes règles que pour une transaction (voir section Rubriques).
+- Erreurs : `404 TRANSACTION_FAVORITE_NOT_FOUND`.
+
 ## Budgets
 
 - `GET /api/budgets` → `{ budgets: [...] }`.
