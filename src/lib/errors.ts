@@ -50,4 +50,6 @@ export const Errors = {
   plannerEventNotFound: () => new AppError("PLANNER_EVENT_NOT_FOUND", 404),
   tontineRoundNotReady: () => new AppError("TONTINE_ROUND_NOT_READY", 409),
   transactionFavoriteNotFound: () => new AppError("TRANSACTION_FAVORITE_NOT_FOUND", 404),
+  categoryNotFound: () => new AppError("CATEGORY_NOT_FOUND", 404),
+  categoryAlreadyExists: () => new AppError("CATEGORY_ALREADY_EXISTS", 409),
 };
