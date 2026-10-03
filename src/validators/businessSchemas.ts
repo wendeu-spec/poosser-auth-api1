@@ -1,7 +1,13 @@
 import { z } from "zod";
-import { CATEGORIES, TRANSACTION_METHODS, TONTINE_FREQUENCIES } from "../lib/categories.js";
+import { TRANSACTION_METHODS, TONTINE_FREQUENCIES } from "../lib/categories.js";
 
-const categorySchema = z.enum(CATEGORIES);
+// Historiquement un z.enum(CATEGORIES) fermé. Desserré en chaîne libre
+// (bornée) pour accepter aussi les catégories personnalisées de l'utilisateur
+// (voir categoryService.ts / migrations/026_categories.sql) sans avoir à
+// faire un aller-retour base de données dans un schéma Zod synchrone — même
+// choix que pour `category` sur budgets/transactions, déjà une simple chaîne
+// en base, jamais une contrainte CHECK fermée.
+const categorySchema = z.string().trim().min(1).max(60);
 const amountSchema = z.number().positive().max(1_000_000_000);
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date attendue au format AAAA-MM-JJ");
 
@@ -48,6 +54,15 @@ export const updateTransactionFavoriteSchema = createTransactionFavoriteSchema.p
   note: z.string().trim().max(280).nullable().optional(),
   projectId: z.string().uuid().nullable().optional(),
   rubriqueId: z.string().uuid().nullable().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Catégories personnalisées — voir categoryService.ts. S'ajoutent à la liste
+// fixe (CATEGORIES) sans distinction dépense/revenu (décision produit : une
+// catégorie personnalisée est toujours disponible pour les deux).
+// ---------------------------------------------------------------------------
+export const createCategorySchema = z.object({
+  name: z.string().trim().min(1).max(60),
 });
 
 // ---------------------------------------------------------------------------
