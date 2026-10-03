@@ -234,8 +234,12 @@ businessRouter.patch("/planner-events/:id", validateBody(updatePlannerEventSchem
 });
 businessRouter.post("/planner-events/:id/status", validateBody(setPlannerEventStatusSchema), async (req, res) => {
   const id = requireParamId(req.params.id);
-  const event = await plannerEvents.setPlannerEventStatus(req.auth!.userId, id, req.body.status);
-  res.json({ plannerEvent: event });
+  // nextPlannerEvent est non-null quand l'événement validé était récurrent :
+  // la prochaine occurrence vient d'être créée automatiquement (voir
+  // plannerEventService.setPlannerEventStatus) et le client doit l'ajouter à
+  // sa liste sans attendre un rechargement complet.
+  const { event, nextEvent } = await plannerEvents.setPlannerEventStatus(req.auth!.userId, id, req.body.status);
+  res.json({ plannerEvent: event, nextPlannerEvent: nextEvent });
 });
 businessRouter.delete("/planner-events/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
