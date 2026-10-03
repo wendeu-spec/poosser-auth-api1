@@ -29,6 +29,28 @@ export const updateTransactionSchema = createTransactionSchema.partial().extend(
 });
 
 // ---------------------------------------------------------------------------
+// Favoris de saisie rapide — gabarit de transaction (voir
+// migrations/022_transaction_favorites.sql). Mêmes règles que les
+// transactions (catégorie connue, méthode connue, rubrique exige un projet)
+// et même sémantique tri-état en modification pour note/projectId/rubriqueId.
+// ---------------------------------------------------------------------------
+export const createTransactionFavoriteSchema = z.object({
+  label: z.string().trim().min(1).max(60),
+  type: z.enum(["revenu", "depense"]),
+  category: categorySchema,
+  amount: amountSchema,
+  method: z.enum(TRANSACTION_METHODS),
+  note: z.string().trim().max(280).optional(),
+  projectId: z.string().uuid().optional(),
+  rubriqueId: z.string().uuid().optional(),
+});
+export const updateTransactionFavoriteSchema = createTransactionFavoriteSchema.partial().extend({
+  note: z.string().trim().max(280).nullable().optional(),
+  projectId: z.string().uuid().nullable().optional(),
+  rubriqueId: z.string().uuid().nullable().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Budgets — définir une limite sur une catégorie existante la met à jour (upsert).
 // ---------------------------------------------------------------------------
 export const upsertBudgetSchema = z.object({
