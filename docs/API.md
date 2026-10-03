@@ -355,6 +355,11 @@ est toujours recalculé côté client, jamais stocké.
   bénéficiaire suivant (ordre de passage) ; **refuse tant que tous les membres n'ont pas
   cotisé** (même règle que le bouton correspondant, désactivé dans le prototype tant que
   100 % des membres n'ont pas payé) → `200 { tontine }` ou `409 TONTINE_ROUND_NOT_READY`.
+- `DELETE /api/tontines/:id` → `204` — supprime définitivement le groupe. Contrairement à
+  la suppression d'un projet ou d'une rubrique (qui détache les transactions sans les
+  effacer), celle-ci efface vraiment tout : membres, cotisations et historique des tours
+  partent avec (`ON DELETE CASCADE`, voir migrations/017_tontines.sql). Le client demande
+  confirmation avant d'appeler cette route.
 - Erreurs : `404 TONTINE_NOT_FOUND`, `404 TONTINE_MEMBER_NOT_FOUND`, `409
   TONTINE_ROUND_NOT_READY`.
 
