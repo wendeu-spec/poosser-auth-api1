@@ -125,6 +125,8 @@ export const markContributionSchema = z.object({
 // ---------------------------------------------------------------------------
 // Planner financier
 // ---------------------------------------------------------------------------
+const recurrenceSchema = z.enum(TONTINE_FREQUENCIES); // même vocabulaire hebdo/mensuelle/trimestrielle
+
 export const createPlannerEventSchema = z.object({
   title: z.string().trim().min(1).max(160),
   eventDate: dateSchema,
@@ -133,8 +135,18 @@ export const createPlannerEventSchema = z.object({
   type: z.enum(["revenu", "depense"]),
   category: categorySchema,
   amount: amountSchema,
+  // Optionnel : si renseigné, la validation ("Réalisé") de cet événement crée
+  // automatiquement la prochaine occurrence à la date suivante (voir
+  // plannerEventService.setPlannerEventStatus).
+  recurrence: recurrenceSchema.optional(),
 });
-export const updatePlannerEventSchema = createPlannerEventSchema.partial();
+// recurrence nullable en plus d'optionnelle ici pour pouvoir l'effacer
+// explicitement (repasser un événement récurrent en ponctuel) : absent =
+// inchangée, null = retire la récurrence, valeur = la remplace — même
+// sémantique tri-état que note/projectId/rubriqueId sur les transactions.
+export const updatePlannerEventSchema = createPlannerEventSchema.partial().extend({
+  recurrence: recurrenceSchema.nullable().optional(),
+});
 
 export const setPlannerEventStatusSchema = z.object({
   status: z.enum(["a_venir", "realise", "non_realise"]),
