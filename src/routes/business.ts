@@ -212,6 +212,11 @@ businessRouter.post("/tontines/:id/close-round", async (req, res) => {
   const tontine = await tontines.closeRound(req.auth!.userId, id);
   res.json({ tontine });
 });
+businessRouter.delete("/tontines/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  await tontines.deleteTontine(req.auth!.userId, id);
+  res.status(204).send();
+});
 
 // ---------------------------------------------------------------------------
 // Planner financier
