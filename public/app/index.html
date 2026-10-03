@@ -611,6 +611,7 @@
         ✏️ Modification du mouvement sélectionné — les changements remplacent l'ancienne saisie.
         <button type="button" id="txCancelEdit" class="btn btn-ghost" style="padding:2px 10px; font-size:12px; margin-left:8px;">Annuler</button>
       </div>
+      <div id="txBudgetAlert" style="display:none;"></div>
       <div class="voice-bar">
         <button type="button" class="btn btn-ghost mic-btn" id="txMicBtn">🎤 Dicter un mouvement</button>
         <div class="voice-status" id="txVoiceStatus">Ex : « Dépense de 15000 FCFA pour Alimentation, marché du dimanche, payé en mobile money »</div>
@@ -1499,15 +1500,26 @@ function monthLabel(offset){
   let idx = (base + offset + 24) % 12;
   return months[idx];
 }
+// Corrigé (bug préexistant repéré en construisant l'alerte de budget temps
+// réel) : cette fonction renvoyait TOUTES les transactions, jamais filtrées
+// par date — un reliquat du prototype de démo où toutes les données de test
+// tombaient "dans la fenêtre récente" par construction. Avec un vrai compte,
+// ça faisait que les totaux du tableau de bord, les barres de budget et
+// l'assistant s'accumulaient depuis toujours au lieu de se réinitialiser
+// chaque mois. t.date est une chaîne "AAAA-MM-JJ" (voir mapTxFromApi) : on
+// compare juste son préfixe "AAAA-MM" à celui d'aujourd'hui.
 function currentMonthTx(){
-  // "mois en cours" = all sample transactions (they're all within the recent window)
-  return state.transactions;
+  const ym = todayISO(0).slice(0, 7);
+  return state.transactions.filter(t => t.date.slice(0, 7) === ym);
 }
 function totalRevenu(){ return currentMonthTx().filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0); }
 function totalDepense(){ return currentMonthTx().filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0); }
 function totalEpargne(){ return state.goals.reduce((a,g)=>a+g.current,0); }
+// Même correction pour les budgets : une "limite mensuelle" doit se comparer
+// à la dépense DU MOIS EN COURS sur cette catégorie, pas à son cumul depuis
+// toujours.
 function spentByCategory(cat){
-  return state.transactions.filter(t=>t.type==='depense' && t.category===cat).reduce((a,t)=>a+t.amount,0);
+  return currentMonthTx().filter(t=>t.type==='depense' && t.category===cat).reduce((a,t)=>a+t.amount,0);
 }
 
 /* ===================== SAISIE VOCALE ===================== */
@@ -2031,6 +2043,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       document.getElementById('txDate').value = todayISO(0);
       populateCategorySelect();
       populateRubriqueSelectForProject('');
+      if(type === 'depense') checkBudgetAlertAfterAdd(category);
     }
     renderAll();
   } catch(err){
@@ -2135,6 +2148,28 @@ function statusForPct(pct){
   if(pct >= 0.9) return {cls:'serious', label:'Presque atteint', color:'var(--serious)'};
   if(pct >= 0.7) return {cls:'warning', label:'À surveiller', color:'var(--warning)'};
   return {cls:'good', label:'Sous contrôle', color:'var(--good)'};
+}
+
+// Alerte "temps réel" : contrairement à la bannière passive du module Budget
+// (visible seulement si on va consulter cet onglet), celle-ci apparaît tout
+// de suite dans le formulaire "Ajouter un mouvement" juste après l'ajout
+// d'une dépense, pour corriger le tir immédiatement plutôt qu'en fin de
+// mois. Mêmes seuils que le reste de l'appli : on ne dérange l'utilisateur
+// qu'à partir de 90% (cohérent avec #dashAlerts et #budgetAlert), pas dès
+// 70%, pour éviter une alerte à chaque petite dépense dans une catégorie
+// "à surveiller".
+function checkBudgetAlertAfterAdd(category){
+  const budget = state.budgets.find(b=>b.category===category);
+  const alertEl = document.getElementById('txBudgetAlert');
+  if(!budget){ alertEl.style.display = 'none'; return; }
+  const spent = spentByCategory(category);
+  const pct = spent / budget.limit;
+  if(pct < 0.9){ alertEl.style.display = 'none'; return; }
+  const verb = pct >= 1 ? 'a dépassé' : 'approche';
+  alertEl.innerHTML = `<div class="alert-banner">⚠️ <div style="flex:1;"><strong>Budget ${category} ${verb} sa limite :</strong> ${fmt(spent)} / ${fmt(budget.limit)} (${Math.round(pct*100)}%) ce mois-ci.</div>
+    <button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" id="txBudgetAlertClose">Fermer</button></div>`;
+  alertEl.style.display = '';
+  document.getElementById('txBudgetAlertClose').addEventListener('click', ()=>{ alertEl.style.display = 'none'; });
 }
 
 function renderBudget(){
