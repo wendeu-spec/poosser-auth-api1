@@ -3124,9 +3124,12 @@ function renderTontines(){
             <span>Collecté : <b>${fmt(collected)}</b> / ${fmt(total)}</span>
           </div>
         </div>
-        <div class="beneficiary-box">
-          <div class="t">Bénéficiaire de ce tour</div>
-          <div class="n">${beneficiary}</div>
+        <div style="display:flex; align-items:flex-start; gap:10px;">
+          <div class="beneficiary-box">
+            <div class="t">Bénéficiaire de ce tour</div>
+            <div class="n">${beneficiary}</div>
+          </div>
+          <button class="btn-danger" data-del-tontine="${t.id}" title="Supprimer définitivement ce groupe" style="padding:5px 10px; font-size:12px;">🗑️ Supprimer</button>
         </div>
       </div>
       <div class="bar-track" style="margin-bottom:14px;"><div class="bar-fill" style="width:${paidCount/t.members.length*100}%; background:var(--s1);"></div></div>
@@ -3166,6 +3169,21 @@ function renderTontines(){
         renderTontines();
       } catch(err){
         alert('Clôture impossible : ' + authErrorMessage(err));
+        btn.disabled = false;
+      }
+    });
+  });
+  document.querySelectorAll('[data-del-tontine]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const t = state.tontines.find(x=>x.id===btn.dataset.delTontine);
+      if(!confirm(`Supprimer définitivement le groupe "${t.name}" ? Les membres, les cotisations et tout l'historique des tours seront perdus — contrairement à la suppression d'un projet, cette action ne se contente pas de détacher des données, elle les efface.`)) return;
+      btn.disabled = true;
+      try {
+        await apiFetch('/api/tontines/' + t.id, { method:'DELETE', auth:true });
+        state.tontines = state.tontines.filter(x=>x.id !== t.id);
+        renderTontines();
+      } catch(err){
+        alert('Suppression impossible : ' + authErrorMessage(err));
         btn.disabled = false;
       }
     });
