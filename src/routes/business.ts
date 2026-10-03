@@ -5,6 +5,7 @@ import { Errors } from "../lib/errors.js";
 import {
   createTransactionSchema, updateTransactionSchema,
   createTransactionFavoriteSchema, updateTransactionFavoriteSchema,
+  createCategorySchema,
   upsertBudgetSchema,
   createSavingsGoalSchema, updateSavingsGoalSchema, addSavingsGoalContributionSchema,
   createProjectSchema, updateProjectSchema,
@@ -15,6 +16,7 @@ import {
 
 import * as transactions from "../services/transactionService.js";
 import * as favorites from "../services/favoriteService.js";
+import * as categories from "../services/categoryService.js";
 import * as budgets from "../services/budgetService.js";
 import * as savingsGoals from "../services/savingsGoalService.js";
 import * as projects from "../services/projectService.js";
@@ -76,6 +78,27 @@ businessRouter.patch("/transaction-favorites/:id", validateBody(updateTransactio
 businessRouter.delete("/transaction-favorites/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await favorites.deleteTransactionFavorite(req.auth!.userId, id);
+  res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Catégories personnalisées — s'ajoutent à la liste fixe (CATEGORIES, côté
+// front) pour les listes déroulantes Transaction/Budget/Planner. Pas de
+// PATCH : on supprime et on recrée plutôt que de renommer (évite de devoir
+// décider si renommer une catégorie doit aussi renommer l'historique déjà
+// enregistré, qui n'y est jamais rattaché que par chaîne — voir
+// categoryService.ts).
+// ---------------------------------------------------------------------------
+businessRouter.get("/categories", async (req, res) => {
+  res.json({ categories: await categories.listCategories(req.auth!.userId) });
+});
+businessRouter.post("/categories", validateBody(createCategorySchema), async (req, res) => {
+  const category = await categories.createCategory(req.auth!.userId, req.body.name);
+  res.status(201).json({ category });
+});
+businessRouter.delete("/categories/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  await categories.deleteCategory(req.auth!.userId, id);
   res.status(204).send();
 });
 
