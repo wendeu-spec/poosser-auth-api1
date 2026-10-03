@@ -22,6 +22,8 @@
   "TONTINE_MEMBER_NOT_FOUND": "Membre de la tontine introuvable.",
   "PLANNER_EVENT_NOT_FOUND": "Événement du planner introuvable.",
   "TONTINE_ROUND_NOT_READY": "Tous les membres n'ont pas encore cotisé pour ce tour.",
+  "CATEGORY_NOT_FOUND": "Catégorie introuvable.",
+  "CATEGORY_ALREADY_EXISTS": "Cette catégorie existe déjà.",
 
   "otp_sent": "Un code de vérification a été envoyé si ce numéro peut recevoir des SMS.",
   "new_device_notification": "Nouvelle connexion détectée sur votre compte POOSSER."
