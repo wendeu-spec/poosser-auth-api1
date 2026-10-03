@@ -37,7 +37,11 @@ export interface TransactionInput {
 // projectId dès que rubriqueId est fourni, et on vérifie que la rubrique
 // appartient bien à CE projet (et à l'utilisateur) — jamais une rubrique
 // empruntée à un autre projet ou à un autre compte.
-async function assertProjectAndRubriqueConsistent(
+// Exportées : réutilisées telles quelles par favoriteService.ts, qui a
+// exactement la même règle de cohérence projet/rubrique qu'une transaction
+// (un favori est un gabarit de transaction) — une seule source de vérité
+// plutôt que de dupliquer cette logique de validation.
+export async function assertProjectAndRubriqueConsistent(
   userId: string,
   projectId: string | null | undefined,
   rubriqueId: string | null | undefined,
@@ -51,7 +55,7 @@ async function assertProjectAndRubriqueConsistent(
 // un projectId appartenant à un autre utilisateur serait accepté tel quel et
 // fausserait silencieusement les totaux agrégés de SON projet (fuite de
 // données entre comptes via project_id, voir projectService.SUMMARY_SELECT).
-async function assertProjectOwnedByUser(userId: string, projectId: string): Promise<void> {
+export async function assertProjectOwnedByUser(userId: string, projectId: string): Promise<void> {
   const { rows } = await pool.query(`SELECT id FROM projects WHERE id = $1 AND user_id = $2`, [projectId, userId]);
   if (!rows[0]) throw Errors.projectNotFound();
 }
