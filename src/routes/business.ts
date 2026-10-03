@@ -6,7 +6,7 @@ import {
   createTransactionSchema, updateTransactionSchema,
   createTransactionFavoriteSchema, updateTransactionFavoriteSchema,
   upsertBudgetSchema,
-  createSavingsGoalSchema, updateSavingsGoalSchema,
+  createSavingsGoalSchema, updateSavingsGoalSchema, addSavingsGoalContributionSchema,
   createProjectSchema, updateProjectSchema,
   createRubriqueSchema, updateRubriqueSchema,
   createTontineSchema, markContributionSchema,
@@ -113,6 +113,22 @@ businessRouter.delete("/savings-goals/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await savingsGoals.deleteSavingsGoal(req.auth!.userId, id);
   res.status(204).send();
+});
+// Versement vers un objectif ("+ Verser") — journalisé pour permettre un
+// calcul exact "épargné cette semaine" côté résumé hebdomadaire (voir
+// migrations/023_savings_goal_contributions.sql). Route à part plutôt qu'un
+// simple PATCH currentAmount : on veut une trace datée de chaque versement,
+// pas seulement le nouveau solde.
+businessRouter.post("/savings-goals/:id/contributions", validateBody(addSavingsGoalContributionSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const { goal, contribution } = await savingsGoals.addContribution(req.auth!.userId, id, req.body.amount);
+  res.status(201).json({ savingsGoal: goal, contribution });
+});
+// Journal complet des versements de l'utilisateur (tous objectifs confondus) —
+// non imbriqué sous /savings-goals/:id pour éviter à chaque client de faire
+// une requête par objectif ; même convention que /transaction-favorites.
+businessRouter.get("/savings-goal-contributions", async (req, res) => {
+  res.json({ savingsGoalContributions: await savingsGoals.listRecentContributions(req.auth!.userId) });
 });
 
 // ---------------------------------------------------------------------------
