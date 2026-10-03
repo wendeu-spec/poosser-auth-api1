@@ -122,6 +122,17 @@ export const markContributionSchema = z.object({
   paid: z.boolean(),
 });
 
+// Modification d'une tontine existante — tous les champs sont optionnels
+// (partial update). memberNames renomme les membres existants dans l'ordre
+// de passage ; ajouter/retirer un membre n'est pas permis ici (voir
+// tontineService.updateTontine).
+export const updateTontineSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  contributionAmount: amountSchema.optional(),
+  frequency: z.enum(TONTINE_FREQUENCIES).optional(),
+  memberNames: z.array(z.string().trim().min(1).max(80)).min(2).max(50).optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Planner financier
 // ---------------------------------------------------------------------------
