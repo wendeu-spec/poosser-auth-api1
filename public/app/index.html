@@ -1193,6 +1193,33 @@ const CAT_HEX = { // resolved hex (light) for conic-gradient which can't read CS
   "Alimentation": "#2a78d6", "Transport": "#eb6834", "Logement": "#1baf7a", "Santé": "#eda100",
   "Éducation": "#e87ba4", "Loisirs": "#008300", "Tontine": "#4a3aa7", "Autres": "#e34948"
 };
+// Option spéciale ajoutée en bas de chaque <select> de catégorie (Transaction,
+// Budget, Planner) pour créer une catégorie personnalisée sans changer d'écran
+// — voir wireAddCategoryOption() et le bloc CATÉGORIES PERSONNALISÉES plus bas.
+const ADD_CATEGORY_OPTION_VALUE = '__add_category__';
+
+// Catégories personnalisées (état chargé depuis GET /api/categories — voir
+// bootstrapAfterAuth) : toujours disponibles à la fois en dépense et en
+// revenu (décision produit : pas de distinction à la création), d'où leur
+// présence dans depenseCategories() ET revenuCategories().
+function depenseCategories(){
+  return [...CATEGORIES_DEPENSE, ...state.customCategories.map(c=>c.name)];
+}
+function revenuCategories(){
+  return [...CATEGORIES_REVENU, ...state.customCategories.map(c=>c.name)];
+}
+// Couleur d'affichage d'une catégorie, qu'elle soit de base (CAT_HEX, fixe)
+// ou personnalisée (couleur assignée une fois par le serveur à la création,
+// voir categoryService.ts) — gris neutre en dernier recours (ne devrait
+// arriver que pour une catégorie supprimée entre-temps par un autre appareil).
+function categoryColor(name){
+  if(CAT_HEX[name]) return CAT_HEX[name];
+  const custom = state.customCategories.find(c=>c.name===name);
+  return custom ? custom.color : '#9a988f';
+}
+function mapCategoryFromApi(c){
+  return { id: c.id, name: c.name, color: c.color };
+}
 
 function todayISO(offsetDays=0){
   const d = new Date(); // vrai "aujourd'hui" — nécessaire maintenant que les données viennent d'un vrai compte
@@ -1215,6 +1242,7 @@ let state = {
   tontines: [],
   plannerEvents: [],
   chatMessages: [],
+  customCategories: [],
 };
 
 /* ===================== API / SESSION (Phase 2) ===================== */
@@ -1309,6 +1337,8 @@ const AUTH_ERROR_MESSAGES = {
   OTP_TICKET_INVALID: "La vérification a expiré, merci de redemander un code.",
   PIN_TOO_WEAK: "Ce PIN est trop simple (évitez 123456, une date de naissance, etc.).",
   RATE_LIMITED: "Trop de tentatives, merci de patienter avant de réessayer.",
+  CATEGORY_ALREADY_EXISTS: "Cette catégorie existe déjà.",
+  CATEGORY_NOT_FOUND: "Catégorie introuvable.",
 };
 function authErrorMessage(err){
   return AUTH_ERROR_MESSAGES[err.code] || `Une erreur est survenue (${err.code || err.message}).`;
@@ -1495,7 +1525,7 @@ function tontineDueInfo(t){
  */
 async function bootstrapAfterAuth(){
   try {
-    const [txRes, favRes, budRes, goalRes, contribRes, tonRes, evRes, projRes, rubRes] = await Promise.all([
+    const [txRes, favRes, budRes, goalRes, contribRes, tonRes, evRes, projRes, rubRes, catRes] = await Promise.all([
       apiFetch('/api/transactions', { auth: true }),
       apiFetch('/api/transaction-favorites', { auth: true }),
       apiFetch('/api/budgets', { auth: true }),
@@ -1505,6 +1535,7 @@ async function bootstrapAfterAuth(){
       apiFetch('/api/planner-events', { auth: true }),
       apiFetch('/api/projects', { auth: true }),
       apiFetch('/api/rubriques', { auth: true }),
+      apiFetch('/api/categories', { auth: true }),
     ]);
     state.transactions = txRes.transactions.map(mapTxFromApi);
     state.favorites = favRes.transactionFavorites.map(mapFavoriteFromApi);
@@ -1515,6 +1546,7 @@ async function bootstrapAfterAuth(){
     state.plannerEvents = evRes.plannerEvents.map(mapEventFromApi);
     state.projects = projRes.projects.map(mapProjectFromApi);
     state.rubriques = rubRes.rubriques.map(mapRubriqueFromApi);
+    state.customCategories = catRes.categories.map(mapCategoryFromApi);
   } catch (err) {
     alert("Vos données n'ont pas pu être chargées : " + authErrorMessage(err) + " — vous pouvez continuer, mais certaines informations manqueront tant que le problème persiste.");
   }
@@ -1544,7 +1576,7 @@ async function onAuthenticated(data){
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
   session = { accessToken: null, refreshToken: null, user: null };
-  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = [];
+  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = [];
   chatInitialized = false;
   selectedProjectId = null;
   document.getElementById('appShell').hidden = true;
@@ -2053,7 +2085,7 @@ function renderDashboard(){
 }
 
 function renderDonut(){
-  const cats = Object.keys(CAT_HEX);
+  const cats = depenseCategories();
   const data = cats.map(c => ({cat:c, val: spentByCategory(c)})).filter(d=>d.val>0);
   const total = data.reduce((a,d)=>a+d.val,0);
   const wrap = document.getElementById('donutWrap');
@@ -2064,12 +2096,12 @@ function renderDonut(){
     const start = acc/total*360;
     acc += d.val;
     const end = acc/total*360;
-    return `${CAT_HEX[d.cat]} ${start}deg ${end}deg`;
+    return `${categoryColor(d.cat)} ${start}deg ${end}deg`;
   }).join(', ');
 
   const legend = data.sort((a,b)=>b.val-a.val).map(d=>`
     <div class="legend-row">
-      <span class="swatch" style="background:${CAT_HEX[d.cat]}"></span>
+      <span class="swatch" style="background:${categoryColor(d.cat)}"></span>
       <span class="lname">${d.cat}</span>
       <span class="lpct">${Math.round(d.val/total*100)}%</span>
       <span class="lval">${fmt(d.val)}</span>
@@ -2154,11 +2186,55 @@ function renderRecentTx(){
   document.querySelector('#recentTxTable tbody').innerHTML = rows.map(t=>`
     <tr>
       <td>${t.date}</td>
-      <td><span class="swatch" style="background:${t.type==='revenu'?'var(--s1)':CAT_HEX[t.category]||'var(--s2)'}; display:inline-block; margin-right:6px;"></span>${t.category}</td>
+      <td><span class="swatch" style="background:${t.type==='revenu'?'var(--s1)':categoryColor(t.category)}; display:inline-block; margin-right:6px;"></span>${t.category}</td>
       <td><span class="method-pill">${t.method}</span></td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
     </tr>`).join('') || '<tr><td colspan="5" class="empty-state">Aucune transaction</td></tr>';
+}
+
+/* ===================== CATÉGORIES PERSONNALISÉES ===================== */
+// Construit les <option> d'un <select> de catégorie, terminées par l'option
+// spéciale "+ Ajouter une catégorie…" — utilisée par les trois formulaires
+// qui proposent une catégorie (Transaction, Budget, Planner).
+function categorySelectOptionsHtml(list){
+  return list.map(c=>`<option value="${c}">${c}</option>`).join('')
+    + `<option value="${ADD_CATEGORY_OPTION_VALUE}">+ Ajouter une catégorie…</option>`;
+}
+
+// Branche la gestion de l'option "+ Ajouter une catégorie…" sur un <select>
+// déjà rempli par categorySelectOptionsHtml. À la sélection de cette option :
+// invite de saisie du nom, création via POST /api/categories, ajout à
+// state.customCategories, puis `refresh()` (fourni par l'appelant) reconstruit
+// la liste avec la nouvelle catégorie sélectionnée. Annulation ou erreur =
+// retour à la sélection précédente, pour ne jamais laisser le menu bloqué sur
+// l'option "+ Ajouter" elle-même. `onCreated` (optionnel) permet aux autres
+// formulaires de rafraîchir leur propre <select> de catégorie, puisqu'une
+// catégorie personnalisée est partagée entre Transaction/Budget/Planner.
+function wireAddCategoryOption(selectEl, refresh, onCreated){
+  // Affectation (pas addEventListener) à dessein : populateCategorySelect/
+  // populateBudgetCategorySelect/populateEventCategorySelect sont chacune
+  // rappelées plusieurs fois pendant la vie de l'appli (reset de formulaire,
+  // création d'une catégorie depuis un AUTRE formulaire, ...) sur le même
+  // <select> — un addEventListener empilerait un gestionnaire supplémentaire
+  // à chaque rappel et ferait apparaître l'invite de saisie plusieurs fois.
+  let previousValue = selectEl.value;
+  selectEl.onchange = async ()=>{
+    if(selectEl.value !== ADD_CATEGORY_OPTION_VALUE){ previousValue = selectEl.value; return; }
+    const name = (prompt('Nom de la nouvelle catégorie :') || '').trim();
+    if(!name){ selectEl.value = previousValue; return; }
+    try {
+      const { category } = await apiFetch('/api/categories', { method: 'POST', auth: true, body: { name } });
+      state.customCategories.push(mapCategoryFromApi(category));
+      refresh();
+      selectEl.value = category.name;
+      previousValue = category.name;
+      if(onCreated) onCreated();
+    } catch(err){
+      alert("Impossible de créer la catégorie : " + authErrorMessage(err));
+      selectEl.value = previousValue;
+    }
+  };
 }
 
 /* ===================== TRANSACTIONS VIEW ===================== */
@@ -2166,11 +2242,12 @@ function populateCategorySelect(){
   const typeSel = document.getElementById('txType');
   const catSel = document.getElementById('txCategory');
   function refresh(){
-    const list = typeSel.value === 'revenu' ? CATEGORIES_REVENU : CATEGORIES_DEPENSE;
-    catSel.innerHTML = list.map(c=>`<option value="${c}">${c}</option>`).join('');
+    const list = typeSel.value === 'revenu' ? revenuCategories() : depenseCategories();
+    catSel.innerHTML = categorySelectOptionsHtml(list);
   }
   typeSel.addEventListener('change', refresh);
   refresh();
+  wireAddCategoryOption(catSel, refresh, ()=>{ populateBudgetCategorySelect(); populateEventCategorySelect(); renderTxFilters(); });
   document.getElementById('txDate').value = todayISO(0);
 }
 
@@ -2440,7 +2517,7 @@ function renderTxFilters(){
   // rester cohérentes après un rendu complet déclenché ailleurs (ex: ajout
   // d'une transaction) pendant que le panneau est ouvert.
   const advCategory = document.getElementById('txAdvCategory');
-  const allCats = [...new Set([...CATEGORIES_REVENU, ...CATEGORIES_DEPENSE])];
+  const allCats = [...new Set([...revenuCategories(), ...depenseCategories()])];
   advCategory.innerHTML = '<option value="">Toutes</option>' + allCats.map(c=>`<option value="${c}">${c}</option>`).join('');
   document.getElementById('txAdvDateFrom').value = txAdvFilters.dateFrom;
   document.getElementById('txAdvDateTo').value = txAdvFilters.dateTo;
@@ -2490,7 +2567,7 @@ function renderTxSearchValueInput(){
       <option value="depense">Dépense</option>
     </select>`;
   } else if(txSearchField === 'category'){
-    const cats = [...new Set([...CATEGORIES_REVENU, ...CATEGORIES_DEPENSE])];
+    const cats = [...new Set([...revenuCategories(), ...depenseCategories()])];
     html = `<select id="txSearchValueCtrl"><option value="">— Choisir —</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`;
   } else if(txSearchField === 'method'){
     const methods = ['Mobile Money','Espèces','Virement bancaire'];
@@ -2598,7 +2675,10 @@ function renderTxTable(){
 
 /* ===================== BUDGET VIEW ===================== */
 function populateBudgetCategorySelect(){
-  document.getElementById('budgetCategory').innerHTML = CATEGORIES_DEPENSE.map(c=>`<option value="${c}">${c}</option>`).join('');
+  const catSel = document.getElementById('budgetCategory');
+  function refresh(){ catSel.innerHTML = categorySelectOptionsHtml(depenseCategories()); }
+  refresh();
+  wireAddCategoryOption(catSel, refresh, ()=>{ populateCategorySelect(); populateEventCategorySelect(); renderTxFilters(); });
 }
 
 document.getElementById('budgetForm').addEventListener('submit', async (e)=>{
@@ -2663,7 +2743,7 @@ function renderBudget(){
       return `
       <div class="budget-item">
         <div class="budget-top">
-          <div class="cat"><span class="swatch" style="background:${CAT_HEX[b.category]}"></span>${b.category} <span class="status-tag status-${st.cls}">${st.label}</span></div>
+          <div class="cat"><span class="swatch" style="background:${categoryColor(b.category)}"></span>${b.category} <span class="status-tag status-${st.cls}">${st.label}</span></div>
           <div class="nums">${fmt(spent)} / ${fmt(b.limit)}</div>
         </div>
         <div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct*100,100)}%; background:${st.color};"></div></div>
@@ -3624,11 +3704,12 @@ function populateEventCategorySelect(){
   const typeSel = document.getElementById('evType');
   const catSel = document.getElementById('evCategory');
   function refresh(){
-    const list = typeSel.value === 'revenu' ? CATEGORIES_REVENU : CATEGORIES_DEPENSE;
-    catSel.innerHTML = list.map(c=>`<option value="${c}">${c}</option>`).join('');
+    const list = typeSel.value === 'revenu' ? revenuCategories() : depenseCategories();
+    catSel.innerHTML = categorySelectOptionsHtml(list);
   }
   typeSel.addEventListener('change', refresh);
   refresh();
+  wireAddCategoryOption(catSel, refresh, ()=>{ populateCategorySelect(); populateBudgetCategorySelect(); renderTxFilters(); });
   document.getElementById('evDate').value = todayISO(1);
   document.getElementById('evTime').value = '09:00';
 }
@@ -3928,7 +4009,7 @@ function renderPlanner(){
       <div class="event-date-badge"><div class="d">${badge.day}</div><div class="m">${badge.month}</div></div>
       <div class="event-info">
         <div class="event-title">${ev.title} <span class="status-tag status-${st.cls}">${st.label}</span>${ev.recurrence ? ` <span class="pill" title="Se recrée automatiquement à la prochaine échéance une fois validé">🔁 ${RECURRENCE_LABELS[ev.recurrence]}</span>` : ''}</div>
-        <div class="event-meta"><span class="swatch" style="background:${CAT_HEX[ev.category]||'#2a78d6'}; display:inline-block; margin-right:4px;"></span>${ev.category} · ${ev.type==='revenu'?'Revenu attendu':'Dépense prévue'} · 🕐 ${eventTimeRangeLabel(ev)} (${durationLabel(ev.durationMinutes)})</div>
+        <div class="event-meta"><span class="swatch" style="background:${categoryColor(ev.category)}; display:inline-block; margin-right:4px;"></span>${ev.category} · ${ev.type==='revenu'?'Revenu attendu':'Dépense prévue'} · 🕐 ${eventTimeRangeLabel(ev)} (${durationLabel(ev.durationMinutes)})</div>
       </div>
       <div class="event-amount ${ev.type==='revenu'?'amt-pos':'amt-neg'}">${ev.type==='revenu'?'+':'-'} ${fmt(ev.amount)}</div>
       <div class="event-actions">
@@ -4106,7 +4187,7 @@ function answerQuestion(q){
   if(/(solde|balance|combien.*reste|situation)/.test(lower)){
     return `Votre solde du mois est de ${fmt(solde)} (revenus : ${fmt(rev)}, dépenses : ${fmt(dep)}). ${solde>=0 ? "Vous êtes dans le positif, bravo !" : "Attention, vos dépenses dépassent vos revenus ce mois-ci."}`;
   }
-  for(const cat of CATEGORIES_DEPENSE){
+  for(const cat of depenseCategories()){
     if(lower.includes(cat.toLowerCase())){
       const budget = state.budgets.find(b=>b.category===cat);
       const spent = spentByCategory(cat);
@@ -4230,7 +4311,7 @@ function movingAverage(series, field, window=3){
 // non nuls : un écart-type sur un seul point n'a pas de sens.
 function computeCategoryVolatility(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
-  return CATEGORIES_DEPENSE.map(cat=>{
+  return depenseCategories().map(cat=>{
     const monthlyTotals = keys.map(key =>
       state.transactions
         .filter(t=>t.type==='depense' && t.category===cat && t.date.slice(0,7)===key)
@@ -4495,7 +4576,7 @@ function renderStatsVolatility(){
   wrap.innerHTML = data.map(d=>`
     <div class="hbar-row">
       <div class="hbar-label">${d.category}</div>
-      <div class="hbar-track"><div class="hbar-fill" style="width:${Math.min(100,(d.cv||0)/maxCv*100)}%; background:${CAT_HEX[d.category]};"></div></div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${Math.min(100,(d.cv||0)/maxCv*100)}%; background:${categoryColor(d.category)};"></div></div>
       <div class="hbar-value">CV ${Math.round((d.cv||0)*100)}% · moy. ${fmt(d.mean)}</div>
     </div>`).join('');
 }
@@ -4531,7 +4612,7 @@ function renderStatsPareto(){
   data.forEach((d,i)=>{
     const cx = padL + i*groupW + groupW/2;
     const h = (d.share/100)*chartH;
-    bars += `<rect class="bar" data-tip="${d.category} : ${fmt(d.value)} (${d.share.toFixed(1)}% du total)" x="${cx-barW/2}" y="${padT+chartH-h}" width="${barW}" height="${h}" rx="4" fill="${CAT_HEX[d.category]}"/>`;
+    bars += `<rect class="bar" data-tip="${d.category} : ${fmt(d.value)} (${d.share.toFixed(1)}% du total)" x="${cx-barW/2}" y="${padT+chartH-h}" width="${barW}" height="${h}" rx="4" fill="${categoryColor(d.category)}"/>`;
     bars += `<text x="${cx}" y="${H-28}" font-size="10" fill="${muted}" text-anchor="middle">${d.category}</text>`;
     linePoints.push([cx, padT+chartH-(chartH*d.cumulative/100), d]);
   });
