@@ -306,6 +306,18 @@
   .top-legend { display: flex; gap: 16px; margin-bottom: 10px; font-size: 12.5px; }
   .top-legend .legend-row { gap: 6px; }
 
+  /* statistiques — barres horizontales (volatilité par catégorie) */
+  .hbar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .hbar-row:last-child { margin-bottom: 0; }
+  .hbar-label { width: 100px; flex-shrink: 0; font-size: 12.5px; color: var(--text-secondary); }
+  .hbar-track { flex: 1; height: 14px; border-radius: 5px; background: var(--grid); overflow: hidden; }
+  .hbar-fill { height: 100%; border-radius: 5px; }
+  .hbar-value { width: 170px; flex-shrink: 0; text-align: right; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) {
+    .hbar-label { width: 76px; font-size: 11.5px; }
+    .hbar-value { width: 128px; font-size: 11px; }
+  }
+
   /* planner */
   .planner-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
   .event-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--grid); flex-wrap: wrap; }
@@ -537,6 +549,7 @@
     <button class="nav-btn" data-view="tontine"><span class="ic">◎</span> Tontine</button>
     <button class="nav-btn" data-view="planner"><span class="ic">▦</span> Planner financier</button>
     <button class="nav-btn" data-view="assistant"><span class="ic">✦</span> Assistant IA</button>
+    <button class="nav-btn" data-view="stats"><span class="ic">▲</span> Statistiques</button>
   </nav>
   <div class="sidebar-foot">
     <div class="user-badge">
@@ -1014,6 +1027,54 @@
         <input type="text" id="chatInput" placeholder="Ex: Comment se porte mon budget Alimentation ?" autocomplete="off">
         <button type="submit" class="btn btn-primary">Envoyer</button>
       </form>
+    </div>
+  </section>
+
+  <!-- ================= STATISTIQUES ================= -->
+  <section class="view" id="view-stats">
+    <div class="page-head">
+      <div>
+        <h1>Statistiques</h1>
+        <p>Analyses approfondies de vos données : tendances, volatilité par catégorie, concentration des dépenses et anomalies.</p>
+      </div>
+    </div>
+
+    <div class="tiles" id="statsTiles"></div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Solde mensuel — réel et moyenne mobile (3 mois)</h3>
+      <div class="sub">Jusqu'aux 12 derniers mois avec des données, pour lisser les à-coups d'un mois isolé.</div>
+      <div class="chart-wrap" id="statsTrendChartWrap"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Variation mensuelle des dépenses</h3>
+      <div class="sub">Évolution en % par rapport au mois précédent (hausse = rouge, baisse = vert).</div>
+      <div class="chart-wrap" id="statsVariationChartWrap"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Volatilité des dépenses par catégorie</h3>
+      <div class="sub">Coefficient de variation (écart-type ÷ moyenne) des totaux mensuels sur la période — plus c'est haut, moins la catégorie est prévisible d'un mois à l'autre.</div>
+      <div id="statsVolatilityList"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Concentration des dépenses (Pareto)</h3>
+      <div class="sub">Part de chaque catégorie dans le total des dépenses, triée par ordre décroissant, et part cumulée.</div>
+      <div class="chart-wrap" id="statsParetoChartWrap"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Dépenses moyennes par jour de la semaine</h3>
+      <div class="sub">Montant moyen dépensé selon le jour de la semaine, sur la période analysée.</div>
+      <div class="chart-wrap" id="statsWeekdayChartWrap"></div>
+    </div>
+
+    <div class="card">
+      <h3>Transactions atypiques</h3>
+      <div class="sub">Dépenses nettement au-dessus de l'habitude de leur catégorie (écart de plus de 2 écarts-types par rapport à la moyenne de la catégorie).</div>
+      <div id="statsAnomaliesList"></div>
     </div>
   </section>
 
@@ -3887,6 +3948,481 @@ document.getElementById('chatForm').addEventListener('submit', (e)=>{
   renderChatMessages();
 });
 
+/* ===================== STATISTIQUES ===================== */
+// Analyses statistiques "pointues" calculées à partir de l'historique réel
+// des transactions (contrairement au graphique revenus/dépenses du tableau
+// de bord, qui ne trace que le mois en cours et simule les 5 mois
+// précédents pour le contexte visuel — voir renderBarChart). Tout ici est
+// recalculé depuis state.transactions, jamais de données synthétiques.
+const STATS_WINDOW_MONTHS = 12;
+const STATS_WEEKDAY_LABELS = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+
+// Liste les N derniers mois calendaires (le mois en cours inclus), du plus
+// ancien au plus récent, sous forme de clés "AAAA-MM" — comparables
+// directement au préfixe de t.date ("AAAA-MM-JJ").
+function statsMonthKeys(n){
+  const keys = [];
+  const now = new Date();
+  for(let i=n-1; i>=0; i--){
+    const d = new Date(Date.UTC(now.getFullYear(), now.getMonth()-i, 1));
+    keys.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`);
+  }
+  return keys;
+}
+function statsMonthLabel(key){
+  const [y,m] = key.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m-1, 1));
+  return new Intl.DateTimeFormat('fr-FR', {month:'short', year:'2-digit', timeZone:'UTC'}).format(d).replace('.', '');
+}
+
+function statsMean(arr){ return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
+// Écart-type d'échantillon (n-1) — 0 si moins de 2 valeurs, un écart-type
+// n'ayant pas de sens sur un seul point.
+function statsStdDev(arr){
+  if(arr.length < 2) return 0;
+  const m = statsMean(arr);
+  const variance = arr.reduce((a,v)=>a+(v-m)**2, 0) / (arr.length - 1);
+  return Math.sqrt(variance);
+}
+
+function buildMonthlySeries(n = STATS_WINDOW_MONTHS){
+  const keys = statsMonthKeys(n);
+  return keys.map(key=>{
+    const txs = state.transactions.filter(t=>t.date.slice(0,7)===key);
+    const rev = txs.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0);
+    const dep = txs.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
+    return { key, label: statsMonthLabel(key), rev, dep, solde: rev-dep };
+  });
+}
+
+// Moyenne mobile arrière (trailing) : chaque point est la moyenne des
+// `window` derniers mois disponibles jusque-là — les tout premiers points de
+// la série utilisent donc moins de mois que `window`, plutôt que de
+// renvoyer une valeur manquante.
+function movingAverage(series, field, window=3){
+  return series.map((_, i)=>{
+    const from = Math.max(0, i-window+1);
+    const slice = series.slice(from, i+1);
+    return statsMean(slice.map(s=>s[field]));
+  });
+}
+
+// Volatilité par catégorie : écart-type / moyenne des TOTAUX MENSUELS de
+// dépense (et non des transactions individuelles) — c'est la question
+// "cette catégorie revient-elle de façon régulière d'un mois sur l'autre,
+// ou très irrégulière ?", différente de la dispersion des montants unitaires
+// (couverte séparément par la détection d'anomalies ci-dessous). Les mois
+// sans dépense comptent comme 0, car "ne pas dépenser ce mois-là" fait
+// partie du signal de régularité. Exclut les catégories avec moins de 2 mois
+// non nuls : un écart-type sur un seul point n'a pas de sens.
+function computeCategoryVolatility(){
+  const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
+  return CATEGORIES_DEPENSE.map(cat=>{
+    const monthlyTotals = keys.map(key =>
+      state.transactions
+        .filter(t=>t.type==='depense' && t.category===cat && t.date.slice(0,7)===key)
+        .reduce((a,t)=>a+t.amount, 0)
+    );
+    const nonZeroMonths = monthlyTotals.filter(v=>v>0).length;
+    const m = statsMean(monthlyTotals);
+    const sd = statsStdDev(monthlyTotals);
+    const cv = m>0 ? sd/m : null;
+    return { category: cat, mean: m, stdDev: sd, cv, nonZeroMonths };
+  })
+  .filter(c => c.nonZeroMonths >= 2)
+  .sort((a,b) => (b.cv ?? 0) - (a.cv ?? 0));
+}
+
+// Détection d'anomalies : repère, catégorie par catégorie, les dépenses dont
+// le montant s'écarte de plus de 2 écarts-types de la moyenne HABITUELLE des
+// transactions de cette même catégorie sur la période. C'est une alerte
+// statistique simple (heuristique, pas un audit) destinée à faire remarquer
+// une dépense inhabituelle, pas une détection de fraude. Exige au moins 5
+// transactions dans la catégorie sur la période pour qu'un écart-type soit
+// fiable.
+function computeAnomalies(){
+  const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
+  const keySet = new Set(keys);
+  const windowTx = state.transactions.filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const byCat = {};
+  windowTx.forEach(t=>{ (byCat[t.category] ||= []).push(t); });
+
+  const anomalies = [];
+  Object.values(byCat).forEach(txs=>{
+    if(txs.length < 5) return;
+    const amounts = txs.map(t=>t.amount);
+    const m = statsMean(amounts), sd = statsStdDev(amounts);
+    if(sd === 0) return;
+    txs.forEach(t=>{
+      const z = (t.amount - m) / sd;
+      if(Math.abs(z) > 2) anomalies.push({ ...t, categoryMean: m, categoryStdDev: sd, z });
+    });
+  });
+  return anomalies.sort((a,b)=> Math.abs(b.z)-Math.abs(a.z)).slice(0,8);
+}
+
+// Concentration des dépenses (analyse de Pareto) sur la période : part de
+// chaque catégorie dans le total, triée décroissant, avec le cumul — exprimé
+// en % plutôt qu'en FCFA pour les barres ET la courbe cumulée, afin que les
+// deux séries partagent un seul axe (0-100%) au lieu d'un double axe FCFA/%.
+function computeParetoCategories(){
+  const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
+  const keySet = new Set(keys);
+  const windowDep = state.transactions.filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const totals = {};
+  windowDep.forEach(t=> totals[t.category] = (totals[t.category]||0) + t.amount);
+  const total = Object.values(totals).reduce((a,b)=>a+b, 0);
+  const sorted = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  let cum = 0;
+  return sorted.map(([category,value])=>{
+    const share = total>0 ? value/total*100 : 0;
+    cum += share;
+    return { category, value, share, cumulative: cum };
+  });
+}
+
+// Dépense moyenne PAR OCCURRENCE de chaque jour de la semaine (et non le
+// total brut par jour, qui serait biaisé par le nombre de lundis/mardis/...
+// réellement contenus dans la fenêtre analysée) — on compte donc d'abord
+// combien de fois chaque jour de semaine est tombé dans la période.
+function computeWeekdayAverages(){
+  const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
+  const keySet = new Set(keys);
+  const windowDep = state.transactions.filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  if(!windowDep.length) return null;
+
+  const [fy,fm] = keys[0].split('-').map(Number);
+  const [ly,lm] = keys[keys.length-1].split('-').map(Number);
+  const start = new Date(Date.UTC(fy, fm-1, 1));
+  const end = new Date(Date.UTC(ly, lm, 0)); // dernier jour du dernier mois
+
+  const occurrences = [0,0,0,0,0,0,0];
+  for(let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate()+1)){
+    occurrences[(d.getUTCDay()+6)%7]++; // 0=lundi..6=dimanche
+  }
+
+  const totals = [0,0,0,0,0,0,0];
+  windowDep.forEach(t=>{
+    const d = new Date(t.date+'T00:00:00Z');
+    totals[(d.getUTCDay()+6)%7] += t.amount;
+  });
+
+  return STATS_WEEKDAY_LABELS.map((label,i)=>({ label, avg: occurrences[i] ? totals[i]/occurrences[i] : 0 }));
+}
+
+function lineSwatchSvg(color, dashed){
+  return `<svg width="16" height="10" style="flex-shrink:0;"><line x1="0" y1="5" x2="16" y2="5" stroke="${color}" stroke-width="2" ${dashed ? 'stroke-dasharray="4,3"' : ''}/></svg>`;
+}
+
+function bindChartTooltip(wrap, tip, selector){
+  wrap.querySelectorAll(selector).forEach(el=>{
+    el.addEventListener('mousemove', (e)=>{
+      const rect = wrap.getBoundingClientRect();
+      tip.textContent = el.getAttribute('data-tip');
+      tip.style.left = (e.clientX - rect.left + 12) + 'px';
+      tip.style.top = (e.clientY - rect.top - 10) + 'px';
+      tip.style.opacity = 1;
+    });
+    el.addEventListener('mouseleave', ()=> tip.style.opacity = 0);
+  });
+}
+
+function renderStatsTiles(){
+  const series = buildMonthlySeries();
+  const lastIdx = series.length - 1;
+  const ma3 = movingAverage(series, 'dep', 3);
+  const lastDep = series[lastIdx].dep;
+  const prevDep = lastIdx>0 ? series[lastIdx-1].dep : 0;
+  const variation = prevDep>0 ? (lastDep-prevDep)/prevDep*100 : null;
+
+  const volatility = computeCategoryVolatility();
+  const mostVolatile = volatility[0];
+  const anomalies = computeAnomalies();
+
+  const tiles = [
+    { label: 'Dépenses — moyenne mobile 3 mois', value: fmt(ma3[lastIdx]), delta: `Mois en cours : ${fmt(lastDep)}` },
+    { label: 'Variation vs mois précédent', value: variation===null ? '—' : `${variation>=0?'+':''}${variation.toFixed(1)}%`,
+      delta: variation===null ? 'Historique insuffisant' : (variation>0 ? 'Dépenses en hausse' : 'Dépenses en baisse'),
+      cls: variation===null ? '' : (variation>0 ? 'bad' : 'good') },
+    { label: 'Catégorie la plus volatile', value: mostVolatile ? mostVolatile.category : '—',
+      delta: mostVolatile ? `Coefficient de variation : ${Math.round(mostVolatile.cv*100)}%` : 'Historique insuffisant' },
+    { label: 'Transactions atypiques détectées', value: String(anomalies.length),
+      delta: anomalies.length ? 'Sur les 12 derniers mois' : "Rien d'inhabituel détecté",
+      cls: anomalies.length ? 'bad' : 'good' },
+  ];
+  document.getElementById('statsTiles').innerHTML = tiles.map(t=>`
+    <div class="tile">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value}</div>
+      <div class="delta ${t.cls||''}">${t.delta}</div>
+    </div>`).join('');
+}
+
+function renderStatsTrendChart(){
+  const wrap = document.getElementById('statsTrendChartWrap');
+  const series = buildMonthlySeries();
+  if(!series.some(s=>s.rev>0 || s.dep>0)){
+    wrap.innerHTML = '<div class="empty-state">Pas encore assez d\'historique pour tracer une tendance.</div>';
+    return;
+  }
+
+  const ma3 = movingAverage(series, 'solde', 3);
+  const values = series.map(s=>s.solde).concat(ma3);
+  const minVal = Math.min(0, ...values);
+  const maxVal = Math.max(1, ...values);
+  const range = (maxVal-minVal) || 1;
+
+  const W = 640, H = 240, padL = 54, padR = 14, padT = 14, padB = 28;
+  const chartW = W-padL-padR, chartH = H-padT-padB;
+  const stepX = series.length>1 ? chartW/(series.length-1) : 0;
+  const yFor = v => padT + chartH - ((v-minVal)/range)*chartH;
+  const xFor = i => padL + i*stepX;
+
+  const grid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim();
+  const baseline = getComputedStyle(document.documentElement).getPropertyValue('--baseline').trim();
+  const surface = getComputedStyle(document.documentElement).getPropertyValue('--surface-2').trim();
+  const s1 = getComputedStyle(document.documentElement).getPropertyValue('--s1').trim() || '#2a78d6';
+
+  let gridLines = '';
+  const steps = 4;
+  for(let i=0;i<=steps;i++){
+    const val = minVal + (range*i/steps);
+    const y = yFor(val);
+    gridLines += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="${grid}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL-8}" y="${y+4}" font-size="10" fill="${muted}" text-anchor="end">${Math.round(val/1000)}k</text>`;
+  }
+
+  const zeroY = yFor(0);
+  const realPoints = series.map((s,i)=>`${xFor(i)},${yFor(s.solde)}`).join(' ');
+  const maPoints = ma3.map((v,i)=>`${xFor(i)},${yFor(v)}`).join(' ');
+
+  const everyNth = Math.max(1, Math.ceil(series.length/6));
+  const labels = series.map((s,i)=> (i%everyNth===0 || i===series.length-1)
+    ? `<text x="${xFor(i)}" y="${H-8}" font-size="10" fill="${muted}" text-anchor="middle">${s.label}</text>` : '').join('');
+
+  let dots = '';
+  series.forEach((s,i)=>{
+    dots += `<circle class="stat-pt" data-tip="${s.label} : solde ${fmt(s.solde)}" cx="${xFor(i)}" cy="${yFor(s.solde)}" r="9" fill="transparent"/>`;
+    dots += `<circle cx="${xFor(i)}" cy="${yFor(s.solde)}" r="3.5" fill="${s1}" stroke="${surface}" stroke-width="2" pointer-events="none"/>`;
+  });
+
+  wrap.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="240" style="overflow:visible;">
+    ${gridLines}
+    <line x1="${padL}" y1="${zeroY}" x2="${W-padR}" y2="${zeroY}" stroke="${baseline}" stroke-width="1"/>
+    <polyline points="${maPoints}" fill="none" stroke="${s1}" stroke-width="2" stroke-dasharray="5,4" opacity="0.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="${realPoints}" fill="none" stroke="${s1}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}
+    ${labels}
+  </svg>
+  <div class="chart-tooltip" id="statsTrendTip"></div>
+  <div class="legend" style="flex-direction:row; flex-wrap:wrap; gap:18px; margin-top:10px;">
+    <div class="legend-row" style="flex:none;">${lineSwatchSvg(s1,false)}<span class="lname">Solde mensuel réel</span></div>
+    <div class="legend-row" style="flex:none;">${lineSwatchSvg(s1,true)}<span class="lname">Moyenne mobile (3 mois)</span></div>
+  </div>`;
+
+  bindChartTooltip(wrap, document.getElementById('statsTrendTip'), '.stat-pt');
+}
+
+function renderStatsVariationChart(){
+  const wrap = document.getElementById('statsVariationChartWrap');
+  const series = buildMonthlySeries();
+  const variations = [];
+  for(let i=1; i<series.length; i++){
+    const prev = series[i-1].dep, cur = series[i].dep;
+    variations.push({ label: series[i].label, pct: prev>0 ? (cur-prev)/prev*100 : null });
+  }
+  if(variations.filter(v=>v.pct!==null).length < 2){
+    wrap.innerHTML = '<div class="empty-state">Pas encore assez de mois consécutifs avec des dépenses pour calculer une variation.</div>';
+    return;
+  }
+
+  const maxAbs = Math.max(10, ...variations.filter(v=>v.pct!==null).map(v=>Math.abs(v.pct)));
+  const W = 640, H = 200, padL = 46, padR = 14, padT = 10, padB = 26;
+  const chartW = W-padL-padR, chartH = H-padT-padB;
+  const zeroY = padT + chartH/2;
+  const groupW = chartW/variations.length;
+  const barW = Math.min(22, groupW-10);
+
+  const good = getComputedStyle(document.documentElement).getPropertyValue('--good').trim() || '#0ca30c';
+  const critical = getComputedStyle(document.documentElement).getPropertyValue('--critical').trim() || '#d03b3b';
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim();
+  const baseline = getComputedStyle(document.documentElement).getPropertyValue('--baseline').trim();
+
+  let bars = '';
+  variations.forEach((v,i)=>{
+    const cx = padL + i*groupW + groupW/2;
+    bars += `<text x="${cx}" y="${H-8}" font-size="10" fill="${muted}" text-anchor="middle">${v.label}</text>`;
+    if(v.pct===null) return;
+    const h = Math.max(Math.abs(v.pct)/maxAbs * (chartH/2), 1);
+    const y = v.pct>=0 ? zeroY-h : zeroY;
+    const color = v.pct>=0 ? critical : good; // hausse des dépenses = défavorable, baisse = favorable
+    bars += `<rect class="bar" data-tip="${v.label} : ${v.pct>=0?'+':''}${v.pct.toFixed(1)}% vs mois précédent" x="${cx-barW/2}" y="${y}" width="${barW}" height="${h}" rx="4" fill="${color}"/>`;
+  });
+
+  wrap.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="200" style="overflow:visible;">
+    <line x1="${padL}" y1="${zeroY}" x2="${W-padR}" y2="${zeroY}" stroke="${baseline}" stroke-width="1"/>
+    ${bars}
+  </svg>
+  <div class="chart-tooltip" id="statsVariationTip"></div>`;
+
+  bindChartTooltip(wrap, document.getElementById('statsVariationTip'), '.bar');
+}
+
+function renderStatsVolatility(){
+  const wrap = document.getElementById('statsVolatilityList');
+  const data = computeCategoryVolatility();
+  if(!data.length){
+    wrap.innerHTML = '<div class="empty-state">Pas encore assez de mois de dépenses par catégorie pour mesurer une volatilité.</div>';
+    return;
+  }
+  const maxCv = Math.max(...data.map(d=>d.cv||0), 0.01);
+  wrap.innerHTML = data.map(d=>`
+    <div class="hbar-row">
+      <div class="hbar-label">${d.category}</div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${Math.min(100,(d.cv||0)/maxCv*100)}%; background:${CAT_HEX[d.category]};"></div></div>
+      <div class="hbar-value">CV ${Math.round((d.cv||0)*100)}% · moy. ${fmt(d.mean)}</div>
+    </div>`).join('');
+}
+
+function renderStatsPareto(){
+  const wrap = document.getElementById('statsParetoChartWrap');
+  const data = computeParetoCategories();
+  if(!data.length){
+    wrap.innerHTML = '<div class="empty-state">Aucune dépense enregistrée sur la période.</div>';
+    return;
+  }
+
+  const W = 640, H = 250, padL = 46, padR = 36, padT = 14, padB = 46;
+  const chartW = W-padL-padR, chartH = H-padT-padB;
+  const groupW = chartW/data.length;
+  const barW = Math.min(40, groupW-14);
+
+  const grid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim();
+  const baseline = getComputedStyle(document.documentElement).getPropertyValue('--baseline').trim();
+  const surface = getComputedStyle(document.documentElement).getPropertyValue('--surface-2').trim();
+  const s1 = getComputedStyle(document.documentElement).getPropertyValue('--s1').trim();
+
+  let gridLines = '';
+  [0,25,50,75,100].forEach(pct=>{
+    const y = padT + chartH - (chartH*pct/100);
+    gridLines += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="${grid}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL-8}" y="${y+4}" font-size="10" fill="${muted}" text-anchor="end">${pct}%</text>`;
+  });
+  const y80 = padT + chartH - (chartH*80/100);
+
+  let bars = '', linePoints = [];
+  data.forEach((d,i)=>{
+    const cx = padL + i*groupW + groupW/2;
+    const h = (d.share/100)*chartH;
+    bars += `<rect class="bar" data-tip="${d.category} : ${fmt(d.value)} (${d.share.toFixed(1)}% du total)" x="${cx-barW/2}" y="${padT+chartH-h}" width="${barW}" height="${h}" rx="4" fill="${CAT_HEX[d.category]}"/>`;
+    bars += `<text x="${cx}" y="${H-28}" font-size="10" fill="${muted}" text-anchor="middle">${d.category}</text>`;
+    linePoints.push([cx, padT+chartH-(chartH*d.cumulative/100), d]);
+  });
+
+  let cumDots = '';
+  linePoints.forEach(([cx,cy,d])=>{
+    cumDots += `<circle class="stat-pt" data-tip="Cumul jusqu'à ${d.category} : ${d.cumulative.toFixed(1)}%" cx="${cx}" cy="${cy}" r="9" fill="transparent"/>`;
+    cumDots += `<circle cx="${cx}" cy="${cy}" r="3.5" fill="${s1}" stroke="${surface}" stroke-width="2" pointer-events="none"/>`;
+  });
+
+  wrap.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="250" style="overflow:visible;">
+    ${gridLines}
+    <line x1="${padL}" y1="${y80}" x2="${W-padR}" y2="${y80}" stroke="${muted}" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="${W-padR+4}" y="${y80+4}" font-size="10" fill="${muted}">80%</text>
+    <line x1="${padL}" y1="${padT+chartH}" x2="${W-padR}" y2="${padT+chartH}" stroke="${baseline}" stroke-width="1"/>
+    ${bars}
+    <polyline points="${linePoints.map(p=>p[0]+','+p[1]).join(' ')}" fill="none" stroke="${s1}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${cumDots}
+  </svg>
+  <div class="chart-tooltip" id="statsParetoTip"></div>
+  <div class="legend" style="flex-direction:row; gap:18px; margin-top:10px;">
+    <div class="legend-row" style="flex:none;">${lineSwatchSvg(s1,false)}<span class="lname">Part cumulée (%)</span></div>
+  </div>`;
+
+  bindChartTooltip(wrap, document.getElementById('statsParetoTip'), '.bar, .stat-pt');
+}
+
+function renderStatsWeekday(){
+  const wrap = document.getElementById('statsWeekdayChartWrap');
+  const data = computeWeekdayAverages();
+  if(!data){
+    wrap.innerHTML = '<div class="empty-state">Aucune dépense enregistrée sur la période.</div>';
+    return;
+  }
+
+  const maxVal = Math.max(1, ...data.map(d=>d.avg)) * 1.15;
+  const W = 520, H = 200, padL = 46, padR = 10, padT = 10, padB = 26;
+  const chartW = W-padL-padR, chartH = H-padT-padB;
+  const groupW = chartW/data.length;
+  const barW = Math.min(28, groupW-14);
+
+  const grid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim();
+  const baseline = getComputedStyle(document.documentElement).getPropertyValue('--baseline').trim();
+  const s2 = getComputedStyle(document.documentElement).getPropertyValue('--s2').trim();
+
+  let gridLines = '';
+  for(let i=0;i<=3;i++){
+    const y = padT + chartH - (chartH*i/3);
+    const val = Math.round(maxVal*i/3);
+    gridLines += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="${grid}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL-8}" y="${y+4}" font-size="10" fill="${muted}" text-anchor="end">${Math.round(val/1000)}k</text>`;
+  }
+
+  let bars = '';
+  data.forEach((d,i)=>{
+    const cx = padL + i*groupW + groupW/2;
+    const h = (d.avg/maxVal)*chartH;
+    bars += `<rect class="bar" data-tip="${d.label} : ${fmt(d.avg)} en moyenne" x="${cx-barW/2}" y="${padT+chartH-h}" width="${barW}" height="${Math.max(h,0)}" rx="4" fill="${s2}"/>`;
+    bars += `<text x="${cx}" y="${H-8}" font-size="10.5" fill="${muted}" text-anchor="middle">${d.label}</text>`;
+  });
+
+  wrap.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="200" style="overflow:visible;">
+    ${gridLines}
+    <line x1="${padL}" y1="${padT+chartH}" x2="${W-padR}" y2="${padT+chartH}" stroke="${baseline}" stroke-width="1"/>
+    ${bars}
+  </svg>
+  <div class="chart-tooltip" id="statsWeekdayTip"></div>`;
+
+  bindChartTooltip(wrap, document.getElementById('statsWeekdayTip'), '.bar');
+}
+
+function renderStatsAnomalies(){
+  const wrap = document.getElementById('statsAnomaliesList');
+  const anomalies = computeAnomalies();
+  if(!anomalies.length){
+    wrap.innerHTML = '<div class="empty-state">Rien d\'inhabituel détecté sur les 12 derniers mois.</div>';
+    return;
+  }
+  wrap.innerHTML = anomalies.map(a=>{
+    const cls = Math.abs(a.z) >= 3 ? 'critical' : 'warning';
+    return `
+    <div class="event-row">
+      <div class="event-info">
+        <div class="event-title">${a.note || a.category} <span class="status-tag status-${cls}">${a.z>=0?'+':''}${a.z.toFixed(1)} écart-type</span></div>
+        <div class="event-meta">${a.date} · ${a.category} · Habituellement autour de ${fmt(a.categoryMean)} (± ${fmt(a.categoryStdDev)})</div>
+      </div>
+      <div class="event-amount amt-neg">- ${fmt(a.amount)}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderStats(){
+  renderStatsTiles();
+  renderStatsTrendChart();
+  renderStatsVariationChart();
+  renderStatsVolatility();
+  renderStatsPareto();
+  renderStatsWeekday();
+  renderStatsAnomalies();
+}
+
 /* ===================== RENDER ALL ===================== */
 function renderAll(){
   renderDashboard();
@@ -3900,6 +4436,7 @@ function renderAll(){
   renderTontines();
   renderPlanner();
   renderAssistant();
+  renderStats();
 }
 
 populateCategorySelect();
