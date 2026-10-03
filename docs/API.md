@@ -227,6 +227,33 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
   `occurredOn`, `method`) ne prennent qu'une valeur ou sont absents (jamais `null`).
 - `DELETE /api/transactions/:id` → `204`.
 - Erreurs : `404 TRANSACTION_NOT_FOUND`.
+- `category` est une **chaîne libre** (1 à 60 caractères), pas un enum fermé : elle
+  accepte aussi bien les catégories de base (`src/lib/categories.ts`) que les
+  catégories personnalisées de l'utilisateur (voir section Catégories ci-dessous).
+  Même chose pour `category` sur Favoris, Budgets et Planner financier.
+
+## Catégories personnalisées
+
+En plus de la liste fixe (Alimentation, Transport, Logement, Santé, Éducation,
+Loisirs, Tontine, Salaire, Commerce, Freelance, Autres), un utilisateur peut créer
+ses propres catégories — disponibles aussi bien pour les dépenses que les revenus
+(pas de distinction à la création, décision produit volontairement simplifiée).
+
+- `GET /api/categories` → `{ categories: [...] }`, triées par date de création
+  croissante. Chaque catégorie a `{ id, name, color, created_at }` — `color` est
+  assignée une fois à la création (cycle sur une palette fixe) et reste stable.
+- `POST /api/categories` → `{ name }` → `201 { category }`. Refuse un nom déjà pris,
+  insensible à la casse, que ce soit par une catégorie de base ou une catégorie
+  personnalisée existante de ce même utilisateur (`409 CATEGORY_ALREADY_EXISTS`).
+  L'unicité est par utilisateur : deux utilisateurs peuvent chacun avoir une
+  catégorie "Abonnements".
+- `DELETE /api/categories/:id` → `204`. `category` est une simple chaîne portée par
+  chaque transaction/budget/événement planner (pas de clé étrangère) : supprimer une
+  catégorie personnalisée ne touche jamais l'historique déjà enregistré avec son nom,
+  elle disparaît seulement des listes proposées pour une nouvelle saisie. Pas de
+  `PATCH` (renommer) : supprimer puis recréer plutôt que de devoir décider si
+  renommer doit aussi renommer l'historique.
+- Erreurs : `404 CATEGORY_NOT_FOUND`, `409 CATEGORY_ALREADY_EXISTS`.
 
 ## Favoris de saisie rapide
 
@@ -410,4 +437,4 @@ est toujours recalculé côté client, jamais stocké.
 `FORBIDDEN` (step-up manquant sur un endpoint qui l'exige), `INTERNAL_ERROR`,
 `TRANSACTION_NOT_FOUND`, `BUDGET_NOT_FOUND`, `SAVINGS_GOAL_NOT_FOUND`, `PROJECT_NOT_FOUND`,
 `TONTINE_NOT_FOUND`, `TONTINE_MEMBER_NOT_FOUND`, `TONTINE_ROUND_NOT_READY`,
-`PLANNER_EVENT_NOT_FOUND`.
+`PLANNER_EVENT_NOT_FOUND`, `CATEGORY_NOT_FOUND`, `CATEGORY_ALREADY_EXISTS`.
