@@ -37,12 +37,28 @@ describe("POST/GET /api/transactions", () => {
     expect(list.body.transactions).toHaveLength(1);
   });
 
-  it("refuse une catégorie hors de la liste connue", async () => {
+  // category a été desserré d'un z.enum(CATEGORIES) fermé à une chaîne libre
+  // (bornée) pour accepter aussi les catégories personnalisées de
+  // l'utilisateur (voir POST /api/categories ci-dessous) — un nom qui n'est
+  // ni une catégorie de base ni une catégorie personnalisée existante est
+  // donc désormais accepté tel quel : seule la forme (non vide, <= 60
+  // caractères) est encore validée ici.
+  it("accepte n'importe quel nom de catégorie non vide (catégories personnalisées)", async () => {
     const { access } = await authedUser();
     const res = await request(app)
       .post("/api/transactions")
       .set("Authorization", `Bearer ${access}`)
-      .send({ type: "depense", category: "PasUneCategorie", amount: 1000, occurredOn: "2026-08-18", method: "Espèces" })
+      .send({ type: "depense", category: "Abonnements", amount: 1000, occurredOn: "2026-08-18", method: "Espèces" })
+      .expect(201);
+    expect(res.body.transaction.category).toBe("Abonnements");
+  });
+
+  it("refuse une catégorie vide", async () => {
+    const { access } = await authedUser();
+    const res = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "", amount: 1000, occurredOn: "2026-08-18", method: "Espèces" })
       .expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
   });
@@ -392,6 +408,116 @@ describe("isolation stricte entre utilisateurs", () => {
     // Toujours présente côté propriétaire : la tentative de l'autre utilisateur n'a rien supprimé.
     const stillThere = await request(app).get("/api/transactions").set("Authorization", `Bearer ${u1.access}`).expect(200);
     expect(stillThere.body.transactions).toHaveLength(1);
+  });
+});
+
+describe("Catégories personnalisées (/api/categories)", () => {
+  it("crée une catégorie, la liste, puis une transaction peut l'utiliser", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Abonnements" })
+      .expect(201);
+    expect(created.body.category.name).toBe("Abonnements");
+    expect(created.body.category.color).toMatch(/^#/);
+
+    const list = await request(app).get("/api/categories").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(list.body.categories.map((c: { name: string }) => c.name)).toEqual(["Abonnements"]);
+
+    const tx = await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Abonnements", amount: 5000, occurredOn: "2026-08-18", method: "Espèces" })
+      .expect(201);
+    expect(tx.body.transaction.category).toBe("Abonnements");
+  });
+
+  it("refuse une catégorie dont le nom existe déjà (insensible à la casse), qu'elle soit de base ou personnalisée", async () => {
+    const { access } = await authedUser();
+    const baseDup = await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "alimentation" }) // catégorie de base existante, casse différente
+      .expect(409);
+    expect(baseDup.body.error.code).toBe("CATEGORY_ALREADY_EXISTS");
+
+    await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Abonnements" })
+      .expect(201);
+    const customDup = await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "ABONNEMENTS" })
+      .expect(409);
+    expect(customDup.body.error.code).toBe("CATEGORY_ALREADY_EXISTS");
+  });
+
+  it("supprime une catégorie personnalisée sans affecter les transactions déjà enregistrées avec son nom", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Abonnements" })
+      .expect(201);
+
+    await request(app)
+      .post("/api/transactions")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ type: "depense", category: "Abonnements", amount: 5000, occurredOn: "2026-08-18", method: "Espèces" })
+      .expect(201);
+
+    await request(app)
+      .delete(`/api/categories/${created.body.category.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .expect(204);
+
+    const list = await request(app).get("/api/categories").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(list.body.categories).toHaveLength(0);
+
+    const txList = await request(app).get("/api/transactions").set("Authorization", `Bearer ${access}`).expect(200);
+    expect(txList.body.transactions[0].category).toBe("Abonnements");
+  });
+
+  it("isole les catégories personnalisées entre utilisateurs", async () => {
+    const userA = await authedUser();
+    const userB = await authedUser();
+
+    await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${userA.access}`)
+      .send({ name: "Abonnements" })
+      .expect(201);
+
+    const listB = await request(app).get("/api/categories").set("Authorization", `Bearer ${userB.access}`).expect(200);
+    expect(listB.body.categories).toHaveLength(0);
+
+    // userB peut créer une catégorie du même nom : l'unicité est par utilisateur.
+    await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${userB.access}`)
+      .send({ name: "Abonnements" })
+      .expect(201);
+  });
+
+  it("refuse de supprimer la catégorie d'un autre utilisateur (404, sans fuite)", async () => {
+    const userA = await authedUser();
+    const userB = await authedUser();
+    const created = await request(app)
+      .post("/api/categories")
+      .set("Authorization", `Bearer ${userA.access}`)
+      .send({ name: "Abonnements" })
+      .expect(201);
+
+    await request(app)
+      .delete(`/api/categories/${created.body.category.id}`)
+      .set("Authorization", `Bearer ${userB.access}`)
+      .expect(404);
+
+    const list = await request(app).get("/api/categories").set("Authorization", `Bearer ${userA.access}`).expect(200);
+    expect(list.body.categories).toHaveLength(1);
   });
 });
 
