@@ -345,14 +345,21 @@ est toujours recalculé côté client, jamais stocké.
   statut de cotisation du tour en cours (`paidThisRound`) avec sa date (`paidAtThisRound`,
   `null` si pas encore payé — utilisé par le résumé hebdomadaire pour compter les
   cotisations payées "cette semaine"), l'historique des tours clôturés, et
-  `currentRoundStartedAt` (date de début du tour en cours — en réalité
-  `tontines.updated_at`, qui est déjà retouché à la création et à chaque clôture de
-  tour, donc fiable sans colonne dédiée). Le client calcule l'échéance de cotisation en
-  ajoutant la fréquence du groupe à cette date, pour afficher un rappel ("cotisation due
-  dans N jours" / "en retard") sans aucun champ supplémentaire à saisir.
+  `currentRoundStartedAt` (date de début du tour en cours — colonne dédiée
+  `round_started_at`, voir migrations/025_tontine_round_started_at.sql, avancée
+  uniquement à la création et à chaque clôture de tour). Le client calcule l'échéance de
+  cotisation en ajoutant la fréquence du groupe à cette date, pour afficher un rappel
+  ("cotisation due dans N jours" / "en retard") sans aucun champ supplémentaire à saisir.
 - `GET /api/tontines/:id` → `{ tontine }`.
 - `POST /api/tontines` → `{ name, contributionAmount, frequency, members: string[] }`
   (2 à 50 membres, dans l'ordre de passage) → `201 { tontine }`.
+- `PATCH /api/tontines/:id` → champs partiels `{ name?, contributionAmount?, frequency?,
+  memberNames? }` → `200 { tontine }`. `memberNames` renomme les membres existants dans
+  l'ordre de passage ; le nombre de noms doit être identique au nombre de membres actuels
+  (ajouter/retirer un membre changerait l'ordre des bénéficiaires et le sens des
+  cotisations déjà enregistrées pour le tour en cours, ce qui sort du cadre de cette
+  modification) — sinon `400 VALIDATION_ERROR`. Ne modifie jamais `round_started_at` :
+  éditer une tontine ne réinitialise pas l'échéance de cotisation affichée.
 - `POST /api/tontines/:id/contributions` → `{ memberId, paid }` — marque un membre
   payé/non payé pour le tour en cours (horodate automatiquement `paid_at` si `paid: true`)
   → `200 { tontine }`.
