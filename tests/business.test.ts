@@ -1273,3 +1273,96 @@ describe("Tontine — cycle complet", () => {
     expect(stillThere.body.tontines).toHaveLength(1);
   });
 });
+
+describe("PATCH /api/tontines/:id — modification (nom, cotisation, fréquence, membres)", () => {
+  it("modifie le nom, la cotisation et la fréquence sans toucher à l'échéance du tour en cours", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/tontines")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Tontine Test", contributionAmount: 20000, frequency: "mensuelle", members: ["Awa", "Bella"] })
+      .expect(201);
+    const tontine = created.body.tontine;
+
+    const updated = await request(app)
+      .patch(`/api/tontines/${tontine.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Tontine Renommée", contributionAmount: 25000, frequency: "hebdomadaire" })
+      .expect(200);
+
+    expect(updated.body.tontine.name).toBe("Tontine Renommée");
+    expect(updated.body.tontine.contributionAmount).toBe(25000);
+    expect(updated.body.tontine.frequency).toBe("hebdomadaire");
+    // L'échéance du tour en cours ne doit pas être réinitialisée par une
+    // simple modification (voir migrations/025_tontine_round_started_at.sql).
+    expect(updated.body.tontine.currentRoundStartedAt).toBe(tontine.currentRoundStartedAt);
+    expect(updated.body.tontine.members.map((m: { name: string }) => m.name)).toEqual(["Awa", "Bella"]);
+  });
+
+  it("renomme les membres existants, dans l'ordre de passage, sans changer leurs id ni leurs cotisations déjà enregistrées", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/tontines")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Tontine Test", contributionAmount: 10000, frequency: "mensuelle", members: ["Awa", "Bella"] })
+      .expect(201);
+    const tontine = created.body.tontine;
+
+    await request(app)
+      .post(`/api/tontines/${tontine.id}/contributions`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ memberId: tontine.members[0].id, paid: true })
+      .expect(200);
+
+    const updated = await request(app)
+      .patch(`/api/tontines/${tontine.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ memberNames: ["Awa Corrigée", "Bella Corrigée"] })
+      .expect(200);
+
+    expect(updated.body.tontine.members[0].id).toBe(tontine.members[0].id);
+    expect(updated.body.tontine.members[0].name).toBe("Awa Corrigée");
+    expect(updated.body.tontine.members[1].name).toBe("Bella Corrigée");
+    // La cotisation déjà enregistrée pour ce membre reste intacte (même id).
+    expect(updated.body.tontine.paidThisRound[tontine.members[0].id]).toBe(true);
+  });
+
+  it("refuse un nombre de noms de membres différent du nombre de membres existants", async () => {
+    const { access } = await authedUser();
+    const created = await request(app)
+      .post("/api/tontines")
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Tontine Test", contributionAmount: 10000, frequency: "mensuelle", members: ["Awa", "Bella"] })
+      .expect(201);
+
+    const res = await request(app)
+      .patch(`/api/tontines/${created.body.tontine.id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ memberNames: ["Juste Une"] })
+      .expect(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("refuse de modifier la tontine d'un autre utilisateur (404, pas une fuite) et ne la modifie pas", async () => {
+    const u1 = await authedUser();
+    const u2 = await authedUser();
+    const created = await request(app)
+      .post("/api/tontines")
+      .set("Authorization", `Bearer ${u1.access}`)
+      .send({ name: "Privée", contributionAmount: 10000, frequency: "mensuelle", members: ["A", "B"] })
+      .expect(201);
+
+    const res = await request(app)
+      .patch(`/api/tontines/${created.body.tontine.id}`)
+      .set("Authorization", `Bearer ${u2.access}`)
+      .send({ name: "Piratée" })
+      .expect(404);
+    expect(res.body.error.code).toBe("TONTINE_NOT_FOUND");
+
+    const stillOriginal = await request(app)
+      .get(`/api/tontines/${created.body.tontine.id}`)
+      .set("Authorization", `Bearer ${u1.access}`)
+      .expect(200);
+    expect(stillOriginal.body.tontine.name).toBe("Privée");
+  });
+});
