@@ -220,6 +220,13 @@
     background: var(--surface-2); color: var(--text-secondary); cursor: pointer; font-family: inherit;
   }
   .chip.active { background: var(--s1); color: white; border-color: var(--s1); }
+  .tx-search-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-bottom: 14px; }
+  .tx-advanced-panel {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: 16px; background: var(--surface-2);
+  }
+  .tx-advanced-panel .form-grid { margin-bottom: 0; }
+  @media (max-width: 720px) { .tx-search-row { flex-direction: column; align-items: stretch; } }
   .fav-chip { display: inline-flex; align-items: center; gap: 8px; }
   .fav-chip .fav-del {
     display: inline-flex; align-items: center; justify-content: center;
@@ -682,6 +689,63 @@
     <div class="card">
       <h3>Historique</h3>
       <div class="filters" id="txFilters"></div>
+
+      <div class="tx-search-row">
+        <div class="field" style="min-width:150px;">
+          <label>Rechercher par</label>
+          <select id="txSearchField">
+            <option value="note">Note</option>
+            <option value="date">Date</option>
+            <option value="type">Type</option>
+            <option value="category">Catégorie</option>
+            <option value="method">Méthode</option>
+            <option value="amount">Montant</option>
+          </select>
+        </div>
+        <div class="field" style="flex:1; min-width:200px;">
+          <label>Valeur</label>
+          <div id="txSearchValueWrap"></div>
+        </div>
+        <div class="field" style="flex-direction:row; gap:8px;">
+          <button type="button" class="btn btn-ghost" id="txToggleAdvanced">Filtres avancés ▾</button>
+          <button type="button" class="btn btn-ghost" id="txResetFilters" style="display:none;">✕ Réinitialiser</button>
+        </div>
+      </div>
+
+      <div class="tx-advanced-panel" id="txAdvancedPanel" style="display:none;">
+        <div class="form-grid" style="margin-bottom:0;">
+          <div class="field">
+            <label>Du</label>
+            <input type="date" id="txAdvDateFrom">
+          </div>
+          <div class="field">
+            <label>Au</label>
+            <input type="date" id="txAdvDateTo">
+          </div>
+          <div class="field">
+            <label>Catégorie</label>
+            <select id="txAdvCategory"><option value="">Toutes</option></select>
+          </div>
+          <div class="field">
+            <label>Méthode</label>
+            <select id="txAdvMethod">
+              <option value="">Toutes</option>
+              <option>Mobile Money</option>
+              <option>Espèces</option>
+              <option>Virement bancaire</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Montant min.</label>
+            <input type="number" id="txAdvAmountMin" min="0" placeholder="Ex: 5000">
+          </div>
+          <div class="field">
+            <label>Montant max.</label>
+            <input type="number" id="txAdvAmountMax" min="0" placeholder="Ex: 50000">
+          </div>
+        </div>
+      </div>
+
       <table id="txTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody></tbody></table>
     </div>
   </section>
@@ -1613,6 +1677,19 @@ document.getElementById('logoutBtn').addEventListener('click', async ()=>{
 });
 
 let txTypeFilter = 'all';
+// Recherche dans l'historique des transactions — un seul champ choisi à
+// l'avance (plutôt qu'une recherche floue simultanée sur tous les champs,
+// plus lente à interpréter) + des filtres avancés optionnels, cumulables
+// entre eux et avec le filtre Type ci-dessus (toutes les conditions actives
+// s'appliquent en ET). Voir renderTxFilters()/renderTxTable().
+let txSearchField = 'note';
+let txSearchValue = '';
+const txAdvFilters = { dateFrom: '', dateTo: '', category: '', method: '', amountMin: '', amountMax: '' };
+function txFiltersActive(){
+  return txTypeFilter !== 'all' || txSearchValue !== ''
+    || !!txAdvFilters.dateFrom || !!txAdvFilters.dateTo || !!txAdvFilters.category || !!txAdvFilters.method
+    || txAdvFilters.amountMin !== '' || txAdvFilters.amountMax !== '';
+}
 // Transaction en cours de modification (bouton "Modifier" de l'historique) —
 // null quand le formulaire sert à AJOUTER un nouveau mouvement. Voir
 // enterTxEditMode()/exitTxEditMode() : le formulaire est partagé entre les
@@ -2349,11 +2426,125 @@ function renderTxFilters(){
   document.querySelectorAll('#txFilters .chip').forEach(c=>{
     c.addEventListener('click', ()=>{ txTypeFilter = c.dataset.f; renderTxTable(); renderTxFilters(); });
   });
+
+  // Sélecteur du champ de recherche — reconstruit à chaque rendu complet des
+  // filtres (pas à chaque frappe, voir renderTxSearchValueInput ci-dessous)
+  // pour refléter l'état courant sans perdre le focus pendant la saisie.
+  const fieldSelect = document.getElementById('txSearchField');
+  fieldSelect.value = txSearchField;
+  fieldSelect.onchange = () => { txSearchField = fieldSelect.value; txSearchValue = ''; renderTxSearchValueInput(); renderTxTable(); updateTxResetVisibility(); };
+  renderTxSearchValueInput();
+
+  // Panneau de filtres avancés — catégories construites dynamiquement
+  // (revenu + dépense réunies) ; valeurs reprises depuis txAdvFilters pour
+  // rester cohérentes après un rendu complet déclenché ailleurs (ex: ajout
+  // d'une transaction) pendant que le panneau est ouvert.
+  const advCategory = document.getElementById('txAdvCategory');
+  const allCats = [...new Set([...CATEGORIES_REVENU, ...CATEGORIES_DEPENSE])];
+  advCategory.innerHTML = '<option value="">Toutes</option>' + allCats.map(c=>`<option value="${c}">${c}</option>`).join('');
+  document.getElementById('txAdvDateFrom').value = txAdvFilters.dateFrom;
+  document.getElementById('txAdvDateTo').value = txAdvFilters.dateTo;
+  advCategory.value = txAdvFilters.category;
+  document.getElementById('txAdvMethod').value = txAdvFilters.method;
+  document.getElementById('txAdvAmountMin').value = txAdvFilters.amountMin;
+  document.getElementById('txAdvAmountMax').value = txAdvFilters.amountMax;
+
+  document.getElementById('txAdvDateFrom').onchange = (e) => { txAdvFilters.dateFrom = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+  document.getElementById('txAdvDateTo').onchange = (e) => { txAdvFilters.dateTo = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+  advCategory.onchange = (e) => { txAdvFilters.category = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+  document.getElementById('txAdvMethod').onchange = (e) => { txAdvFilters.method = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+  document.getElementById('txAdvAmountMin').oninput = (e) => { txAdvFilters.amountMin = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+  document.getElementById('txAdvAmountMax').oninput = (e) => { txAdvFilters.amountMax = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+
+  document.getElementById('txToggleAdvanced').onclick = () => {
+    const panel = document.getElementById('txAdvancedPanel');
+    const open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : '';
+    document.getElementById('txToggleAdvanced').textContent = open ? 'Filtres avancés ▾' : 'Filtres avancés ▴';
+  };
+
+  document.getElementById('txResetFilters').onclick = () => {
+    txTypeFilter = 'all'; txSearchField = 'note'; txSearchValue = '';
+    txAdvFilters.dateFrom = ''; txAdvFilters.dateTo = ''; txAdvFilters.category = ''; txAdvFilters.method = ''; txAdvFilters.amountMin = ''; txAdvFilters.amountMax = '';
+    renderTxFilters();
+    renderTxTable();
+  };
+
+  updateTxResetVisibility();
+}
+
+// Reconstruit le contrôle de saisie associé au champ de recherche choisi
+// (texte pour la note, menus déroulants pour type/catégorie/méthode —
+// valeurs exactes plutôt qu'une saisie libre ambiguë —, date et nombre pour
+// la date et le montant). Appelée seule (sans reconstruire tout le reste des
+// filtres) à chaque frappe n'est pas nécessaire ici : c'est le changement de
+// champ qui reconstruit ce contrôle, la frappe dans le contrôle lui-même ne
+// fait que mettre à jour txSearchValue et rafraîchir le tableau.
+function renderTxSearchValueInput(){
+  const wrap = document.getElementById('txSearchValueWrap');
+  let html;
+  if(txSearchField === 'type'){
+    html = `<select id="txSearchValueCtrl">
+      <option value="">— Choisir —</option>
+      <option value="revenu">Revenu</option>
+      <option value="depense">Dépense</option>
+    </select>`;
+  } else if(txSearchField === 'category'){
+    const cats = [...new Set([...CATEGORIES_REVENU, ...CATEGORIES_DEPENSE])];
+    html = `<select id="txSearchValueCtrl"><option value="">— Choisir —</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`;
+  } else if(txSearchField === 'method'){
+    const methods = ['Mobile Money','Espèces','Virement bancaire'];
+    html = `<select id="txSearchValueCtrl"><option value="">— Choisir —</option>${methods.map(m=>`<option value="${m}">${m}</option>`).join('')}</select>`;
+  } else if(txSearchField === 'date'){
+    html = `<input type="date" id="txSearchValueCtrl">`;
+  } else if(txSearchField === 'amount'){
+    html = `<input type="number" id="txSearchValueCtrl" min="0" step="1" placeholder="Ex: 15000">`;
+  } else { // note
+    html = `<input type="text" id="txSearchValueCtrl" placeholder="Rechercher dans les notes…">`;
+  }
+  wrap.innerHTML = html;
+  const ctrl = document.getElementById('txSearchValueCtrl');
+  ctrl.value = txSearchValue;
+  const evt = (ctrl.tagName === 'SELECT' || ctrl.type === 'date') ? 'change' : 'input';
+  ctrl.addEventListener(evt, () => { txSearchValue = ctrl.value; renderTxTable(); updateTxResetVisibility(); });
+}
+
+function updateTxResetVisibility(){
+  const btn = document.getElementById('txResetFilters');
+  if(btn) btn.style.display = txFiltersActive() ? '' : 'none';
 }
 
 function renderTxTable(){
   let rows = [...state.transactions].sort((a,b)=> b.date.localeCompare(a.date));
   if(txTypeFilter!=='all') rows = rows.filter(t=>t.type===txTypeFilter);
+
+  // Recherche rapide : un seul champ choisi à l'avance, voir txSearchField.
+  if(txSearchValue !== ''){
+    if(txSearchField === 'note'){
+      const needle = normalizeText(txSearchValue);
+      rows = rows.filter(t => normalizeText(t.note).includes(needle));
+    } else if(txSearchField === 'date'){
+      rows = rows.filter(t => t.date === txSearchValue);
+    } else if(txSearchField === 'type'){
+      rows = rows.filter(t => t.type === txSearchValue);
+    } else if(txSearchField === 'category'){
+      rows = rows.filter(t => t.category === txSearchValue);
+    } else if(txSearchField === 'method'){
+      rows = rows.filter(t => t.method === txSearchValue);
+    } else if(txSearchField === 'amount'){
+      const needle = Number(txSearchValue);
+      if(!Number.isNaN(needle)) rows = rows.filter(t => t.amount === needle);
+    }
+  }
+
+  // Filtres avancés — cumulables avec la recherche rapide ci-dessus (ET
+  // logique), chacun ignoré tant qu'il est vide.
+  if(txAdvFilters.dateFrom) rows = rows.filter(t => t.date >= txAdvFilters.dateFrom);
+  if(txAdvFilters.dateTo) rows = rows.filter(t => t.date <= txAdvFilters.dateTo);
+  if(txAdvFilters.category) rows = rows.filter(t => t.category === txAdvFilters.category);
+  if(txAdvFilters.method) rows = rows.filter(t => t.method === txAdvFilters.method);
+  if(txAdvFilters.amountMin !== '') rows = rows.filter(t => t.amount >= Number(txAdvFilters.amountMin));
+  if(txAdvFilters.amountMax !== '') rows = rows.filter(t => t.amount <= Number(txAdvFilters.amountMax));
   document.querySelector('#txTable tbody').innerHTML = rows.map(t=>`
     <tr>
       <td>${t.date}</td>
