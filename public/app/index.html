@@ -567,6 +567,8 @@
 
     <div class="card" id="weeklySummaryCard" style="margin-bottom:18px;"></div>
 
+    <div class="card" id="remindersCard" style="margin-bottom:18px; display:none;"></div>
+
     <div class="grid-2">
       <div class="card">
         <h3>Revenus vs Dépenses</h3>
@@ -957,6 +959,15 @@
           <input type="number" id="evAmount" min="1" required>
         </div>
         <div class="field">
+          <label>Récurrence</label>
+          <select id="evRecurrence">
+            <option value="">Ponctuel (une seule fois)</option>
+            <option value="hebdomadaire">Hebdomadaire</option>
+            <option value="mensuelle">Mensuelle</option>
+            <option value="trimestrielle">Trimestrielle</option>
+          </select>
+        </div>
+        <div class="field">
           <button type="submit" class="btn btn-primary">Ajouter à l'agenda</button>
         </div>
       </form>
@@ -964,7 +975,7 @@
 
     <div class="card" style="margin-bottom:18px;">
       <h3>Événements à venir</h3>
-      <div class="sub">Tâches et rendez-vous liés à vos flux financiers — un rappel s'affiche 15 min avant le début et 15 min avant la fin, avec un bouton pour valider si la tâche a été réalisée.</div>
+      <div class="sub">Tâches et rendez-vous liés à vos flux financiers — un rappel s'affiche 15 min avant le début et 15 min avant la fin, avec un bouton pour valider si la tâche a été réalisée. Un événement récurrent (🔁) se recrée automatiquement à la date suivante dès qu'il est validé "Réalisé".</div>
       <div id="plannerUpcoming"></div>
     </div>
 
@@ -1268,8 +1279,16 @@ function mapSavingsContributionFromApi(c){
   return { id: c.id, goalId: c.goal_id, goalName: c.goal_name, amount: Number(c.amount), date: c.created_at.slice(0, 10) };
 }
 function mapEventFromApi(e){
-  return { id: e.id, title: e.title, date: e.event_date, time: e.event_time, durationMinutes: e.duration_minutes, type: e.type, category: e.category, amount: Number(e.amount), status: e.status, notifiedStart: e.notified_start, notifiedEnd: e.notified_end };
+  // PostgreSQL renvoie une colonne TIME au format complet "HH:MM:SS" (contrairement
+  // à DATE, dont le parseur est déjà neutralisé côté serveur — voir
+  // src/db/pool.ts). Sans ce découpage, "HH:MM:SS" concaténé dans
+  // getEventStartDateTime() ("AAAA-MM-JJTHH:MM:SS:00") produit une Invalid Date :
+  // le rappel 15 min avant ne se déclenchait alors jamais et l'heure de fin
+  // affichée montrait "NaN:NaN", pour TOUS les événements du planner.
+  const time = (e.event_time || '').slice(0, 5);
+  return { id: e.id, title: e.title, date: e.event_date, time, durationMinutes: e.duration_minutes, type: e.type, category: e.category, amount: Number(e.amount), status: e.status, recurrence: e.recurrence || null, notifiedStart: e.notified_start, notifiedEnd: e.notified_end };
 }
+const RECURRENCE_LABELS = { hebdomadaire: 'Hebdomadaire', mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle' };
 const FREQ_LABELS = { hebdomadaire: 'Hebdomadaire', mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle' };
 const FREQ_CODES = { 'Hebdomadaire': 'hebdomadaire', 'Mensuelle': 'mensuelle', 'Trimestrielle': 'trimestrielle' };
 function mapTontineFromApi(t){
@@ -1290,8 +1309,28 @@ function mapTontineFromApi(t){
     paidThisRound,
     paidAtThisRound,
     history: t.history.slice().reverse().map(h => ({ round: h.round, beneficiary: h.beneficiaryName, total: h.totalAmount })),
+    currentRoundStartedAt: t.currentRoundStartedAt,
     _memberIdByName: memberIdByName,
   };
+}
+
+// Jours approximatifs par fréquence pour l'échéance de cotisation — une
+// approximation (mensuelle ≈ 30j, trimestrielle ≈ 90j) suffit pour un badge de
+// rappel, contrairement à nextOccurrenceDate() côté serveur qui doit être
+// exact au jour près pour dater une vraie transaction.
+const FREQ_DAYS = { hebdomadaire: 7, mensuelle: 30, trimestrielle: 90 };
+
+function tontineDueInfo(t){
+  const code = FREQ_CODES[t.freq] || 'mensuelle';
+  const days = FREQ_DAYS[code] || 30;
+  const started = new Date(t.currentRoundStartedAt);
+  const due = new Date(started.getTime() + days*86400000);
+  const now = new Date();
+  const diffDays = Math.ceil((due - now) / 86400000);
+  if(diffDays < 0) return { cls:'critical', label: `⚠️ Cotisation en retard de ${Math.abs(diffDays)} j`, diffDays };
+  if(diffDays === 0) return { cls:'warning', label: `Cotisation due aujourd'hui`, diffDays };
+  if(diffDays <= 3) return { cls:'warning', label: `Cotisation due dans ${diffDays} j`, diffDays };
+  return { cls:'good', label: `Prochaine cotisation dans ${diffDays} j`, diffDays };
 }
 
 /**
@@ -1766,6 +1805,53 @@ function renderWeeklySummary(){
     </div>`;
 }
 
+/* ===================== RAPPELS (paiements récurrents + cotisations tontine) =====================
+ * Carte dédiée aux échéances qui reviennent régulièrement — distincte du
+ * résumé hebdomadaire (qui regarde en arrière, "ce qui s'est passé cette
+ * semaine") : celle-ci regarde en avant, "qu'est-ce qui arrive bientôt".
+ * Volontairement limitée aux événements RÉCURRENTS du planner (les
+ * événements ponctuels ont déjà leur propre liste complète dans l'onglet
+ * Planner) + aux cotisations tontine, pour rester un résumé court plutôt que
+ * de dupliquer l'agenda entier. */
+function renderRemindersCard(){
+  const card = document.getElementById('remindersCard');
+
+  const recurringDue = state.plannerEvents
+    .filter(ev => ev.status === 'a_venir' && ev.recurrence && ev.date <= todayISO(7))
+    .sort((a,b)=> a.date.localeCompare(b.date));
+
+  const tontinesDue = state.tontines
+    .map(t => {
+      const paidCount = Object.values(t.paidThisRound).filter(Boolean).length;
+      if(paidCount === t.members.length) return null; // tour complet, rien à rappeler
+      const due = tontineDueInfo(t);
+      return due.cls === 'good' ? null : { t, due }; // on ne remonte que "due bientôt" / "en retard"
+    })
+    .filter(Boolean)
+    .sort((a,b)=> a.due.diffDays - b.due.diffDays);
+
+  if(!recurringDue.length && !tontinesDue.length){ card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  const eventRows = recurringDue.map(ev => {
+    const st = eventStatusInfo(ev);
+    return `<div class="legend-row">
+      <span class="lname">🔁 ${ev.title} <span class="status-tag status-${st.cls}" style="margin-left:4px;">${st.label}</span></span>
+      <span class="lval">${ev.date.split('-').reverse().join('/')} · ${fmt(ev.amount)}</span>
+    </div>`;
+  }).join('');
+
+  const tontineRows = tontinesDue.map(({t, due}) => `<div class="legend-row">
+      <span class="lname">🤝 ${t.name} <span class="status-tag status-${due.cls}" style="margin-left:4px;">${due.label}</span></span>
+      <span class="lval">${fmt(t.amount)} / membre</span>
+    </div>`).join('');
+
+  card.innerHTML = `
+    <h3>🔔 Rappels</h3>
+    <div class="sub">Paiements récurrents et cotisations tontine à venir ou en retard</div>
+    <div class="legend" style="margin-top:10px;">${eventRows}${tontineRows}</div>`;
+}
+
 /* ===================== DASHBOARD RENDER ===================== */
 function renderDashboard(){
   const rev = totalRevenu(), dep = totalDepense(), solde = rev - dep, ep = totalEpargne();
@@ -1795,6 +1881,7 @@ function renderDashboard(){
   renderBarChart();
   renderRecentTx();
   renderWeeklySummary();
+  renderRemindersCard();
 }
 
 function renderDonut(){
@@ -3110,12 +3197,17 @@ function renderTontines(){
       </div>`).join('');
 
     const historyHtml = t.history.length ? t.history.map(h=>`<div class="legend-row"><span class="lname">Tour ${h.round} — ${h.beneficiary}</span><span class="lval">${fmt(h.total)}</span></div>`).join('') : "<div class=\"empty-state\" style=\"padding:14px 0;\">Aucun tour clôturé pour l'instant.</div>";
+    // Une fois tout le monde payé, on attend la clôture du tour — un badge
+    // "cotisation due/en retard" serait trompeur puisque ce n'est plus de
+    // l'argent qui manque.
+    const allPaid = paidCount === t.members.length;
+    const due = allPaid ? null : tontineDueInfo(t);
 
     return `
     <div class="tontine-card">
       <div class="tontine-head">
         <div>
-          <h3>${t.name}</h3>
+          <h3>${t.name} ${due ? `<span class="status-tag status-${due.cls}">${due.label}</span>` : `<span class="status-tag status-good">✓ Tour complet — prêt à clôturer</span>`}</h3>
           <div class="tontine-meta">
             <span>Cotisation : <b>${fmt(t.amount)}</b></span>
             <span>Fréquence : <b>${t.freq}</b></span>
@@ -3218,11 +3310,12 @@ document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
   const type = document.getElementById('evType').value;
   const category = document.getElementById('evCategory').value;
   const amount = parseFloat(document.getElementById('evAmount').value);
+  const recurrence = document.getElementById('evRecurrence').value || undefined;
   if(!title || !date || !amount) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{ title, eventDate: date, eventTime: time, durationMinutes, type, category, amount } });
+    const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{ title, eventDate: date, eventTime: time, durationMinutes, type, category, amount, recurrence } });
     state.plannerEvents.push(mapEventFromApi(plannerEvent));
     e.target.reset();
     populateEventCategorySelect();
@@ -3364,7 +3457,7 @@ function showReminderToast(ev, phase){
 
 async function markEventRealise(ev){
   try {
-    const { plannerEvent } = await apiFetch('/api/planner-events/' + ev.id + '/status', { method:'POST', auth:true, body:{ status:'realise' } });
+    const { plannerEvent, nextPlannerEvent } = await apiFetch('/api/planner-events/' + ev.id + '/status', { method:'POST', auth:true, body:{ status:'realise' } });
     Object.assign(ev, mapEventFromApi(plannerEvent));
     clearEventTimers(ev.id);
     const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
@@ -3372,6 +3465,12 @@ async function markEventRealise(ev){
       occurredOn: ev.date < todayISO(0) ? todayISO(0) : ev.date, method: 'Mobile Money', note: ev.title,
     }});
     state.transactions.push(mapTxFromApi(transaction));
+    // Événement récurrent : la prochaine occurrence a été créée automatiquement
+    // côté serveur (voir plannerEventService.setPlannerEventStatus) — on
+    // l'ajoute à l'état local pour qu'elle apparaisse immédiatement dans
+    // "Événements à venir" et que son propre rappel (15 min avant) soit
+    // programmé par scheduleAllReminders(), sans attendre un rechargement.
+    if(nextPlannerEvent) state.plannerEvents.push(mapEventFromApi(nextPlannerEvent));
   } catch(err){
     alert('Impossible de valider cet événement : ' + authErrorMessage(err));
   }
@@ -3435,7 +3534,7 @@ function renderPlanner(){
     <div class="event-row">
       <div class="event-date-badge"><div class="d">${badge.day}</div><div class="m">${badge.month}</div></div>
       <div class="event-info">
-        <div class="event-title">${ev.title} <span class="status-tag status-${st.cls}">${st.label}</span></div>
+        <div class="event-title">${ev.title} <span class="status-tag status-${st.cls}">${st.label}</span>${ev.recurrence ? ` <span class="pill" title="Se recrée automatiquement à la prochaine échéance une fois validé">🔁 ${RECURRENCE_LABELS[ev.recurrence]}</span>` : ''}</div>
         <div class="event-meta"><span class="swatch" style="background:${CAT_HEX[ev.category]||'#2a78d6'}; display:inline-block; margin-right:4px;"></span>${ev.category} · ${ev.type==='revenu'?'Revenu attendu':'Dépense prévue'} · 🕐 ${eventTimeRangeLabel(ev)} (${durationLabel(ev.durationMinutes)})</div>
       </div>
       <div class="event-amount ${ev.type==='revenu'?'amt-pos':'amt-neg'}">${ev.type==='revenu'?'+':'-'} ${fmt(ev.amount)}</div>
