@@ -1039,6 +1039,8 @@
       </div>
     </div>
 
+    <div class="card" id="statsHealthScoreCard" style="margin-bottom:18px;"></div>
+
     <div class="tiles" id="statsTiles"></div>
 
     <div class="card" style="margin-bottom:18px;">
@@ -1071,10 +1073,30 @@
       <div class="chart-wrap" id="statsWeekdayChartWrap"></div>
     </div>
 
-    <div class="card">
+    <div class="card" style="margin-bottom:18px;">
       <h3>Transactions atypiques</h3>
       <div class="sub">Dépenses nettement au-dessus de l'habitude de leur catégorie (écart de plus de 2 écarts-types par rapport à la moyenne de la catégorie).</div>
       <div id="statsAnomaliesList"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Rythme d'épargne par objectif</h3>
+      <div class="sub">Épargne réelle sur les 3 derniers mois comparée au rythme nécessaire pour atteindre l'objectif à temps.</div>
+      <div id="statsSavingsPaceList"></div>
+    </div>
+
+    <div class="tiles" id="statsProjectionTiles" style="margin-bottom:18px;"></div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Ponctualité des cotisations tontine</h3>
+      <div class="sub">Délai de cotisation depuis le début du tour en cours, par membre — limité au tour actuel.</div>
+      <div id="statsTontinePunctuality"></div>
+    </div>
+
+    <div class="card">
+      <h3>Écarts budgétaires des projets</h3>
+      <div class="sub">Comparaison entre dépenses réelles et budget prévu par rubrique, tous projets confondus.</div>
+      <div id="statsProjectVariance"></div>
     </div>
   </section>
 
@@ -4413,7 +4435,321 @@ function renderStatsAnomalies(){
   }).join('');
 }
 
+// Régression linéaire simple (moindres carrés) sur une liste de points
+// [x,y] — utilisée pour la projection de solde. Renvoie null s'il n'y a pas
+// assez de points ou si tous les x sont identiques (dénominateur nul).
+function statsLinearRegression(points){
+  const n = points.length;
+  if(n < 2) return null;
+  const sumX = points.reduce((a,p)=>a+p[0], 0);
+  const sumY = points.reduce((a,p)=>a+p[1], 0);
+  const sumXY = points.reduce((a,p)=>a+p[0]*p[1], 0);
+  const sumXX = points.reduce((a,p)=>a+p[0]*p[0], 0);
+  const denom = n*sumXX - sumX*sumX;
+  if(denom === 0) return null;
+  const slope = (n*sumXY - sumX*sumY) / denom;
+  const intercept = (sumY - slope*sumX) / n;
+  return { slope, intercept, predict: x => slope*x + intercept };
+}
+
+// Moyenne pondérée de sous-scores (0-100) qui peuvent être null (donnée
+// insuffisante) — les poids des sous-scores manquants sont simplement
+// retirés du total plutôt que de compter comme 0, pour ne pas punir un
+// utilisateur qui n'a par exemple défini aucun budget.
+function weightedAverageScore(parts){
+  const valid = parts.filter(p => p.score !== null && p.score !== undefined);
+  if(!valid.length) return null;
+  const totalWeight = valid.reduce((a,p)=>a+p.weight, 0);
+  if(totalWeight === 0) return null;
+  return valid.reduce((a,p)=>a+p.score*p.weight, 0) / totalWeight;
+}
+
+// Score composite de santé financière (0-100), combinant trois signaux
+// indépendants : le taux d'épargne du mois en cours (revenus-dépenses /
+// revenus), la régularité des dépenses sur 12 mois (coefficient de
+// variation des totaux mensuels, inversé : moins c'est volatile, mieux
+// c'est), et le respect des budgets définis par catégorie sur le mois en
+// cours. Un sous-score manquant (ex: aucun budget défini) ne fait pas
+// chuter la note : son poids est redistribué aux autres via
+// weightedAverageScore.
+function computeHealthScore(){
+  const rev = totalRevenu(), dep = totalDepense();
+  const savingsRateScore = rev > 0 ? Math.max(0, Math.min(100, (rev-dep)/rev*100)) : null;
+
+  const series = buildMonthlySeries(STATS_WINDOW_MONTHS);
+  const monthlyDeps = series.map(s=>s.dep);
+  const nonZeroMonths = monthlyDeps.filter(v=>v>0).length;
+  let stabilityScore = null;
+  if(nonZeroMonths >= 2){
+    const m = statsMean(monthlyDeps), sd = statsStdDev(monthlyDeps);
+    const cv = m > 0 ? sd/m : 0;
+    stabilityScore = Math.max(0, Math.min(100, 100 - cv*100));
+  }
+
+  const budgetRatios = state.budgets
+    .filter(b => b.limit > 0)
+    .map(b => spentByCategory(b.category) / b.limit);
+  let budgetScore = null;
+  if(budgetRatios.length){
+    // Rester sous la limite vaut 100 ; chaque point de pourcentage de
+    // dépassement coûte un point, jusqu'à 0 à partir de +100% de dépassement.
+    const scores = budgetRatios.map(ratio => Math.max(0, Math.min(100, 100 - Math.max(0, ratio-1)*100)));
+    budgetScore = statsMean(scores);
+  }
+
+  const overall = weightedAverageScore([
+    { score: savingsRateScore, weight: 0.4 },
+    { score: stabilityScore, weight: 0.3 },
+    { score: budgetScore, weight: 0.3 },
+  ]);
+
+  return { overall, savingsRateScore, stabilityScore, budgetScore };
+}
+
+function renderStatsHealthScore(){
+  const card = document.getElementById('statsHealthScoreCard');
+  const h = computeHealthScore();
+  if(h.overall === null){
+    card.innerHTML = `
+      <h3>Score de santé financière</h3>
+      <div class="empty-state">Pas encore assez de données (revenus du mois, budgets définis ou historique de dépenses) pour calculer un score.</div>`;
+    return;
+  }
+  const score = Math.round(h.overall);
+  const cls = score >= 70 ? 'good' : (score >= 40 ? 'warning' : 'critical');
+  const label = score >= 70 ? 'Bonne santé financière' : (score >= 40 ? 'Santé financière fragile' : 'Santé financière critique');
+
+  const parts = [
+    { label: "Taux d'épargne (mois en cours)", score: h.savingsRateScore, color: 'var(--s1)' },
+    { label: 'Régularité des dépenses (12 mois)', score: h.stabilityScore, color: 'var(--s2)' },
+    { label: 'Respect des budgets (mois en cours)', score: h.budgetScore, color: 'var(--s3)' },
+  ];
+
+  card.innerHTML = `
+    <h3>Score de santé financière</h3>
+    <div class="sub">Combine le taux d'épargne du mois en cours, la régularité des dépenses sur 12 mois et le respect des budgets définis.</div>
+    <div style="display:flex; gap:32px; flex-wrap:wrap; align-items:center;">
+      <div style="text-align:center; min-width:130px;">
+        <div style="font-size:52px; font-weight:700; line-height:1; color:var(--${cls});">${score}</div>
+        <div class="status-tag status-${cls}" style="margin-top:10px; display:inline-block;">${label}</div>
+      </div>
+      <div style="flex:1; min-width:240px;">
+        ${parts.map(p=>`
+          <div class="hbar-row">
+            <div class="hbar-label">${p.label}</div>
+            <div class="hbar-track"><div class="hbar-fill" style="width:${p.score===null?0:Math.round(p.score)}%; background:${p.color};"></div></div>
+            <div class="hbar-value">${p.score===null ? 'Donnée insuffisante' : Math.round(p.score)+'/100'}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+// Rythme d'épargne réel (moyenne des 3 derniers mois de contributions) vs
+// rythme nécessaire pour tenir l'échéance (montant restant / mois restants,
+// via monthsUntil déjà utilisé par renderGoals). Projette aussi une date
+// d'atteinte probable au rythme actuel quand celui-ci est positif.
+function computeSavingsPace(){
+  const recentKeys = new Set(statsMonthKeys(3));
+  return state.goals.map(g=>{
+    const remaining = Math.max(g.target - g.current, 0);
+    const reached = remaining <= 0;
+    const months = monthsUntil(g.deadline);
+    const requiredPace = remaining / months;
+    const recentContrib = state.savingsContributions
+      .filter(c => c.goalId === g.id && recentKeys.has(c.date.slice(0,7)))
+      .reduce((a,c)=>a+c.amount, 0);
+    const actualPace = recentContrib / 3;
+    const ratio = requiredPace > 0 ? actualPace / requiredPace : (actualPace > 0 ? Infinity : null);
+
+    let monthsNeeded = null, completionDate = null;
+    if(!reached && actualPace > 0){
+      monthsNeeded = Math.ceil(remaining / actualPace);
+      const d = new Date();
+      d.setMonth(d.getMonth() + monthsNeeded);
+      completionDate = d;
+    }
+
+    let cls, statusLabel;
+    if(reached){ cls = 'good'; statusLabel = 'Objectif atteint'; }
+    else if(actualPace <= 0){ cls = 'critical'; statusLabel = 'Aucune contribution récente'; }
+    else if(ratio >= 1){ cls = 'good'; statusLabel = 'Au rythme nécessaire'; }
+    else if(ratio >= 0.5){ cls = 'warning'; statusLabel = 'Rythme insuffisant'; }
+    else { cls = 'critical'; statusLabel = 'Très en retard'; }
+
+    const sortKey = reached ? 999 : (actualPace <= 0 ? -1 : ratio);
+    return { goal: g, reached, requiredPace, actualPace, monthsNeeded, completionDate, cls, statusLabel, sortKey };
+  }).sort((a,b)=> a.sortKey - b.sortKey);
+}
+
+function renderStatsSavingsPace(){
+  const wrap = document.getElementById('statsSavingsPaceList');
+  if(!state.goals.length){
+    wrap.innerHTML = "<div class=\"empty-state\">Aucun objectif d'épargne pour le moment.</div>";
+    return;
+  }
+  const data = computeSavingsPace();
+  wrap.innerHTML = data.map(d=>{
+    let completionText = '';
+    if(!d.reached){
+      completionText = d.completionDate
+        ? `Échéance atteignable vers ${new Intl.DateTimeFormat('fr-FR',{month:'short', year:'numeric'}).format(d.completionDate)}`
+        : "Au rythme actuel, l'objectif ne sera jamais atteint";
+    }
+    return `
+    <div class="event-row">
+      <div class="event-info">
+        <div class="event-title">${d.goal.name} <span class="status-tag status-${d.cls}">${d.statusLabel}</span></div>
+        <div class="event-meta">Rythme actuel (3 derniers mois) : ${fmt(d.actualPace)}/mois · Nécessaire : ${fmt(d.requiredPace)}/mois${completionText ? ' · '+completionText : ''}</div>
+      </div>
+      <div class="event-amount">${fmt(d.goal.current)} / ${fmt(d.goal.target)}</div>
+    </div>`;
+  }).join('');
+}
+
+// Projection du solde mensuel par régression linéaire sur les 12 derniers
+// mois réels (buildMonthlySeries) — une extrapolation simple, pas une
+// prévision budgétaire précise, mais utile pour indiquer une tendance.
+function computeBalanceProjection(){
+  const series = buildMonthlySeries(STATS_WINDOW_MONTHS);
+  if(!series.some(s=>s.rev>0 || s.dep>0)) return null;
+  const points = series.map((s,i)=>[i, s.solde]);
+  const reg = statsLinearRegression(points);
+  if(!reg) return null;
+  const lastIndex = series.length - 1;
+  const projections = [1,2,3].map(n => ({ monthsAhead: n, value: reg.predict(lastIndex + n) }));
+  return { projections, lastSolde: series[lastIndex].solde };
+}
+
+// Autonomie financière (en mois) : combien de temps l'épargne totale
+// cumulée (tous objectifs) tiendrait au rythme de dépense moyen des 3
+// derniers mois, si plus aucun revenu n'arrivait.
+function computeAutonomyMonths(){
+  const series = buildMonthlySeries(3);
+  const avgDep = statsMean(series.map(s=>s.dep));
+  const totalEp = totalEpargne();
+  if(avgDep <= 0) return { months: null, avgDep, unlimited: totalEp > 0 };
+  return { months: totalEp / avgDep, avgDep, unlimited: false };
+}
+
+function renderStatsProjectionTiles(){
+  const wrap = document.getElementById('statsProjectionTiles');
+  const proj = computeBalanceProjection();
+  const autonomy = computeAutonomyMonths();
+
+  const tiles = [];
+  if(proj){
+    proj.projections.forEach(p=>{
+      tiles.push({
+        label: `Solde projeté (+${p.monthsAhead} mois)`,
+        value: fmt(p.value),
+        delta: p.value >= proj.lastSolde ? 'Tendance à la hausse vs ce mois' : 'Tendance à la baisse vs ce mois',
+        cls: p.value >= 0 ? 'good' : 'bad',
+      });
+    });
+  } else {
+    tiles.push({ label: 'Projection du solde', value: '—', delta: "Pas encore assez d'historique", cls: '' });
+  }
+
+  tiles.push({
+    label: 'Autonomie financière',
+    value: autonomy.months !== null ? `${autonomy.months.toFixed(1)} mois` : (autonomy.unlimited ? '∞' : '—'),
+    delta: `Épargne totale ÷ dépense mensuelle moyenne des 3 derniers mois${autonomy.avgDep ? ' ('+fmt(autonomy.avgDep)+')' : ''}`,
+    cls: '',
+  });
+
+  wrap.innerHTML = tiles.map(t=>`
+    <div class="tile">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value}</div>
+      <div class="delta ${t.cls||''}">${t.delta}</div>
+    </div>`).join('');
+}
+
+// Ponctualité des cotisations tontine, membre par membre, pour le TOUR EN
+// COURS uniquement (une limite assumée : pas d'historique de ponctualité
+// sur les tours précédents ici). Le délai est calculé depuis
+// round_started_at (voir tontineService.ts) jusqu'à la date de paiement
+// enregistrée, ou jusqu'à maintenant si le membre n'a pas encore cotisé.
+function computeTontinePunctuality(){
+  const rows = [];
+  state.tontines.forEach(t=>{
+    const started = new Date(t.currentRoundStartedAt);
+    const code = FREQ_CODES[t.freq] || 'mensuelle';
+    const cycleDays = FREQ_DAYS[code] || 30;
+    t.members.forEach(name=>{
+      const paid = !!t.paidThisRound[name];
+      const paidAt = t.paidAtThisRound[name];
+      const delayDays = paid && paidAt
+        ? Math.max(0, (new Date(paidAt) - started) / 86400000)
+        : Math.max(0, (Date.now() - started.getTime()) / 86400000);
+      rows.push({ tontine: t.name, member: name, paid, delayDays, overdue: !paid && delayDays > cycleDays });
+    });
+  });
+  return rows.sort((a,b)=> a.delayDays - b.delayDays);
+}
+
+function renderStatsTontinePunctuality(){
+  const wrap = document.getElementById('statsTontinePunctuality');
+  const rows = computeTontinePunctuality();
+  if(!rows.length){
+    wrap.innerHTML = '<div class="empty-state">Aucune tontine avec des membres pour le moment.</div>';
+    return;
+  }
+  const maxDelay = Math.max(...rows.map(r=>r.delayDays), 1);
+  wrap.innerHTML = rows.map(r=>{
+    const color = r.paid ? 'var(--good)' : (r.overdue ? 'var(--critical)' : 'var(--warning)');
+    const valueText = r.paid
+      ? `A cotisé après ${Math.round(r.delayDays)} j`
+      : (r.overdue ? `En retard — ${Math.round(r.delayDays)} j écoulés` : `En attente — ${Math.round(r.delayDays)} j écoulés`);
+    return `
+    <div class="hbar-row">
+      <div class="hbar-label">${r.member}</div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${Math.min(100, r.delayDays/maxDelay*100)}%; background:${color};"></div></div>
+      <div class="hbar-value">${r.tontine} · ${valueText}</div>
+    </div>`;
+  }).join('');
+}
+
+// Écarts budgétaires des rubriques de projet : compare le cumul réel
+// (rubriqueRollupStats, qui inclut les sous-rubriques) au budget
+// prévisionnel saisi (plannedAmount), tous projets confondus — seules les
+// rubriques avec un budget défini (>0) sont comparables.
+function computeProjectVariance(){
+  return state.rubriques
+    .filter(r => r.plannedAmount != null && r.plannedAmount > 0)
+    .map(r=>{
+      const rollup = rubriqueRollupStats(r.id);
+      const project = projectById(r.projectId);
+      const variance = rollup.total - r.plannedAmount;
+      const variancePct = variance / r.plannedAmount * 100;
+      return { rubrique: r.name, project: project ? project.name : '—', planned: r.plannedAmount, actual: rollup.total, variance, variancePct };
+    })
+    .sort((a,b)=> Math.abs(b.variancePct) - Math.abs(a.variancePct))
+    .slice(0, 6);
+}
+
+function renderStatsProjectVariance(){
+  const wrap = document.getElementById('statsProjectVariance');
+  const data = computeProjectVariance();
+  if(!data.length){
+    wrap.innerHTML = '<div class="empty-state">Aucune rubrique avec un budget prévisionnel défini pour le moment.</div>';
+    return;
+  }
+  const maxAbs = Math.max(...data.map(d=>Math.abs(d.variancePct)), 1);
+  wrap.innerHTML = data.map(d=>{
+    const over = d.variance > 0;
+    const color = over ? 'var(--critical)' : 'var(--good)';
+    return `
+    <div class="hbar-row">
+      <div class="hbar-label">${d.rubrique}</div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${Math.min(100, Math.abs(d.variancePct)/maxAbs*100)}%; background:${color};"></div></div>
+      <div class="hbar-value">${d.project} · ${over?'+':''}${Math.round(d.variancePct)}% (${fmt(d.actual)} / ${fmt(d.planned)})</div>
+    </div>`;
+  }).join('');
+}
+
 function renderStats(){
+  renderStatsHealthScore();
   renderStatsTiles();
   renderStatsTrendChart();
   renderStatsVariationChart();
@@ -4421,6 +4757,10 @@ function renderStats(){
   renderStatsPareto();
   renderStatsWeekday();
   renderStatsAnomalies();
+  renderStatsSavingsPace();
+  renderStatsProjectionTiles();
+  renderStatsTontinePunctuality();
+  renderStatsProjectVariance();
 }
 
 /* ===================== RENDER ALL ===================== */
