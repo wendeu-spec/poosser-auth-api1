@@ -220,6 +220,12 @@
     background: var(--surface-2); color: var(--text-secondary); cursor: pointer; font-family: inherit;
   }
   .chip.active { background: var(--s1); color: white; border-color: var(--s1); }
+  .fav-chip { display: inline-flex; align-items: center; gap: 8px; }
+  .fav-chip .fav-del {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%; color: var(--text-muted);
+  }
+  .fav-chip .fav-del:hover { background: var(--border); color: var(--text-primary); }
 
   /* budget bars */
   .budget-item { padding: 14px 0; border-bottom: 1px solid var(--grid); }
@@ -590,6 +596,12 @@
         <h1>Revenus &amp; Dépenses</h1>
         <p>Enregistrez chaque mouvement pour garder une vue claire de vos finances.</p>
       </div>
+    </div>
+
+    <div class="card" id="favCard" style="margin-bottom:18px; display:none;">
+      <h3>⭐ Favoris</h3>
+      <div class="sub">Un tap pour pré-remplir le formulaire avec un mouvement fréquent</div>
+      <div id="favChips" class="filters"></div>
     </div>
 
     <div class="card" style="margin-bottom:18px;">
@@ -1025,6 +1037,7 @@ function todayISO(offsetDays=0){
 // jamais avec des données de démonstration en dur.
 let state = {
   transactions: [],
+  favorites: [],
   budgets: [],
   goals: [],
   projects: [],
@@ -1134,6 +1147,11 @@ function authErrorMessage(err){
 /* ---- adaptateurs API -> forme interne du prototype (inchangée pour le rendu) ---- */
 function mapTxFromApi(t){
   return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null };
+}
+// Gabarit de transaction réutilisable (bouton "☆ Favori") — voir
+// applyFavoriteToForm() pour comment il pré-remplit le formulaire.
+function mapFavoriteFromApi(f){
+  return { id: f.id, label: f.label, type: f.type, category: f.category, amount: Number(f.amount), method: f.method, note: f.note || '', projectId: f.project_id || null, rubriqueId: f.rubrique_id || null };
 }
 function mapBudgetFromApi(b){
   return { id: b.id, category: b.category, limit: Number(b.monthly_limit) };
@@ -1274,8 +1292,9 @@ function mapTontineFromApi(t){
  */
 async function bootstrapAfterAuth(){
   try {
-    const [txRes, budRes, goalRes, tonRes, evRes, projRes, rubRes] = await Promise.all([
+    const [txRes, favRes, budRes, goalRes, tonRes, evRes, projRes, rubRes] = await Promise.all([
       apiFetch('/api/transactions', { auth: true }),
+      apiFetch('/api/transaction-favorites', { auth: true }),
       apiFetch('/api/budgets', { auth: true }),
       apiFetch('/api/savings-goals', { auth: true }),
       apiFetch('/api/tontines', { auth: true }),
@@ -1284,6 +1303,7 @@ async function bootstrapAfterAuth(){
       apiFetch('/api/rubriques', { auth: true }),
     ]);
     state.transactions = txRes.transactions.map(mapTxFromApi);
+    state.favorites = favRes.transactionFavorites.map(mapFavoriteFromApi);
     state.budgets = budRes.budgets.map(mapBudgetFromApi);
     state.goals = goalRes.savingsGoals.map(mapGoalFromApi);
     state.tontines = tonRes.tontines.map(mapTontineFromApi);
@@ -1842,8 +1862,12 @@ function rubriqueTag(rubriqueId){
  * marché du dimanche, n'ont pas exactement le même montant chaque fois).
  * Ne crée rien tant que l'utilisateur n'a pas validé le formulaire.
  */
-function repeatTransaction(t){
-  exitTxEditMode(); // au cas où une autre modification était en cours
+// Remplit les champs du formulaire "Ajouter un mouvement" à partir d'un
+// objet { type, category, amount, method, note, projectId, rubriqueId } —
+// partagé par repeatTransaction() (depuis l'historique), applyFavoriteToForm()
+// (depuis un favori) et enterTxEditMode() (modification en place, qui garde
+// en plus sa propre date d'origine au lieu de celle du jour).
+function prefillTxFormFields(t){
   const typeSel = document.getElementById('txType');
   if(typeSel.value !== t.type){
     typeSel.value = t.type;
@@ -1853,17 +1877,92 @@ function repeatTransaction(t){
   if([...catSel.options].some(o=>o.value===t.category)) catSel.value = t.category;
   document.getElementById('txAmount').value = t.amount;
   document.getElementById('txMethod').value = t.method;
-  document.getElementById('txDate').value = todayISO(0);
   document.getElementById('txNote').value = t.note || '';
   const projSel = document.getElementById('txProject');
   if([...projSel.options].some(o=>o.value===(t.projectId||''))) projSel.value = t.projectId || '';
   populateRubriqueSelectForProject(projSel.value);
   const rubSel = document.getElementById('txRubrique');
   if([...rubSel.options].some(o=>o.value===(t.rubriqueId||''))) rubSel.value = t.rubriqueId || '';
+}
+
+function focusTxAmount(){
   document.getElementById('txForm').scrollIntoView({ behavior:'smooth', block:'start' });
   const amountInput = document.getElementById('txAmount');
   amountInput.focus();
   amountInput.select();
+}
+
+function repeatTransaction(t){
+  exitTxEditMode(); // au cas où une autre modification était en cours
+  prefillTxFormFields(t);
+  document.getElementById('txDate').value = todayISO(0);
+  focusTxAmount();
+}
+
+/**
+ * Pré-remplit le formulaire à partir d'un favori (bouton d'un chip "⭐
+ * Favoris") — même principe que repeatTransaction(), avec la date du jour
+ * puisqu'il s'agit toujours d'un nouveau mouvement. Choix structurant validé
+ * avec l'utilisateur : ça PRÉ-REMPLIT, ça ne crée pas la transaction tout de
+ * suite — le montant reste modifiable avant validation.
+ */
+function applyFavoriteToForm(fav){
+  exitTxEditMode();
+  prefillTxFormFields(fav);
+  document.getElementById('txDate').value = todayISO(0);
+  focusTxAmount();
+}
+
+/**
+ * Enregistre une transaction existante comme favori (bouton "☆ Favori" de
+ * l'historique) — tous les champs viennent de la transaction, seul un
+ * libellé est demandé (un prompt natif suffit ici : action ponctuelle, pas
+ * un point de friction répété comme la saisie elle-même).
+ */
+async function saveTransactionAsFavorite(t){
+  const label = prompt('Nom du favori (ex: "Taxi", "Recharge crédit") :', t.category);
+  if(!label || !label.trim()) return;
+  try {
+    const { transactionFavorite } = await apiFetch('/api/transaction-favorites', { method:'POST', auth:true, body:{
+      label: label.trim(), type: t.type, category: t.category, amount: t.amount, method: t.method,
+      note: t.note || undefined, projectId: t.projectId || undefined, rubriqueId: t.rubriqueId || undefined,
+    }});
+    state.favorites.push(mapFavoriteFromApi(transactionFavorite));
+    renderFavorites();
+  } catch(err){
+    alert("Impossible d'enregistrer ce favori : " + authErrorMessage(err));
+  }
+}
+
+function renderFavorites(){
+  const card = document.getElementById('favCard');
+  card.style.display = state.favorites.length ? '' : 'none';
+  document.getElementById('favChips').innerHTML = state.favorites.map(f => `
+    <button type="button" class="chip fav-chip" data-fav-apply="${f.id}" title="Pré-remplir le formulaire avec ce favori">
+      ${f.label} · ${fmt(f.amount)}
+      <span class="fav-del" data-fav-del="${f.id}" title="Supprimer ce favori">×</span>
+    </button>`).join('');
+
+  document.querySelectorAll('[data-fav-apply]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      if(e.target.closest('[data-fav-del]')) return; // le × gère sa propre suppression
+      const fav = state.favorites.find(f=>f.id===btn.dataset.favApply);
+      if(fav) applyFavoriteToForm(fav);
+    });
+  });
+  document.querySelectorAll('[data-fav-del]').forEach(span=>{
+    span.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const id = span.dataset.favDel;
+      try {
+        await apiFetch('/api/transaction-favorites/' + id, { method:'DELETE', auth:true });
+        state.favorites = state.favorites.filter(f=>f.id !== id);
+        renderFavorites();
+      } catch(err){
+        alert('Suppression impossible : ' + authErrorMessage(err));
+      }
+    });
+  });
 }
 
 /**
@@ -1875,29 +1974,12 @@ function repeatTransaction(t){
  */
 function enterTxEditMode(t){
   editingTxId = t.id;
-  const typeSel = document.getElementById('txType');
-  if(typeSel.value !== t.type){
-    typeSel.value = t.type;
-    typeSel.dispatchEvent(new Event('change'));
-  }
-  const catSel = document.getElementById('txCategory');
-  if([...catSel.options].some(o=>o.value===t.category)) catSel.value = t.category;
-  document.getElementById('txAmount').value = t.amount;
-  document.getElementById('txMethod').value = t.method;
-  document.getElementById('txDate').value = t.date;
-  document.getElementById('txNote').value = t.note || '';
-  const projSel = document.getElementById('txProject');
-  if([...projSel.options].some(o=>o.value===(t.projectId||''))) projSel.value = t.projectId || '';
-  populateRubriqueSelectForProject(projSel.value);
-  const rubSel = document.getElementById('txRubrique');
-  if([...rubSel.options].some(o=>o.value===(t.rubriqueId||''))) rubSel.value = t.rubriqueId || '';
+  prefillTxFormFields(t);
+  document.getElementById('txDate').value = t.date; // on corrige le mouvement existant, pas sa date
 
   document.getElementById('txEditBanner').style.display = '';
   document.getElementById('txSubmitBtn').textContent = 'Enregistrer les modifications';
-  document.getElementById('txForm').scrollIntoView({ behavior:'smooth', block:'start' });
-  const amountInput = document.getElementById('txAmount');
-  amountInput.focus();
-  amountInput.select();
+  focusTxAmount();
 }
 
 // Quitte le mode modification et remet le formulaire à l'état "ajouter un
@@ -1978,10 +2060,11 @@ function renderTxTable(){
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
-      <td style="white-space:nowrap;">
-        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin-right:6px;" data-edit="${t.id}" title="Modifier ce mouvement">✏️ Modifier</button>
-        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin-right:6px;" data-repeat="${t.id}" title="Pré-remplir le formulaire avec ce mouvement">↻ Répéter</button>
-        <button class="btn-danger" data-del="${t.id}">Suppr.</button>
+      <td style="white-space:normal; min-width:260px;">
+        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-edit="${t.id}" title="Modifier ce mouvement">✏️ Modifier</button>
+        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-repeat="${t.id}" title="Pré-remplir le formulaire avec ce mouvement">↻ Répéter</button>
+        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-save-fav="${t.id}" title="Enregistrer comme favori pour le rejouer en un tap">☆ Favori</button>
+        <button class="btn-danger" style="margin:0 0 4px 0;" data-del="${t.id}">Suppr.</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="7" class="empty-state">Aucune transaction pour ce filtre</td></tr>';
 
@@ -1995,6 +2078,12 @@ function renderTxTable(){
     btn.addEventListener('click', ()=>{
       const t = state.transactions.find(x=>x.id===btn.dataset.repeat);
       if(t) repeatTransaction(t);
+    });
+  });
+  document.querySelectorAll('[data-save-fav]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const t = state.transactions.find(x=>x.id===btn.dataset.saveFav);
+      if(t) saveTransactionAsFavorite(t);
     });
   });
   document.querySelectorAll('[data-del]').forEach(btn=>{
@@ -3410,6 +3499,7 @@ function renderAll(){
   renderDashboard();
   renderTxFilters();
   renderTxTable();
+  renderFavorites();
   renderBudget();
   renderGoals();
   renderProjects();
