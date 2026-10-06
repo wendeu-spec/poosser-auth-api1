@@ -16,10 +16,11 @@ import {
   changePinSchema,
   transactionPinSchema,
   stepUpSchema,
+  updateProfileSchema,
 } from "../validators/authSchemas.js";
 
 import { requestOtp, verifyOtp, consumeOtpTicket } from "../services/otpService.js";
-import { registerUser, findUserByPhone, findUserById, getPublicUser } from "../services/userService.js";
+import { registerUser, findUserByPhone, findUserById, getPublicUser, updateUserCurrency } from "../services/userService.js";
 import { assertPinStrength, verifyLoginPin, setLoginPin, setTransactionPin, verifyTransactionPin } from "../services/pinService.js";
 import { upsertDevice, listDevices, getDeviceForUser, revokeDevice, revokeOtherDevices, revokeAllDevices } from "../services/deviceService.js";
 import { createSession, rotateSession, revokeSessionByRefreshToken, revokeAllSessions } from "../services/sessionService.js";
@@ -257,6 +258,20 @@ authRouter.get("/me", requireAccessToken, async (req, res) => {
   const user = await getPublicUser(req.auth!.userId);
   if (!user) throw Errors.unauthorized();
   res.json(user);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /auth/me   🔒
+// Pour l'instant ne change QUE la devise du compte (un seul champ supporté
+// par updateProfileSchema) — pas un PATCH profil générique. Réponse
+// enveloppée `{ user }` comme /auth/login et /auth/register (contrairement à
+// GET /me qui renvoie l'objet nu), pour que le frontend réutilise le même
+// `data.user` partout après une mutation réussie.
+// ---------------------------------------------------------------------------
+authRouter.patch("/me", requireAccessToken, validateBody(updateProfileSchema), async (req, res) => {
+  const user = await updateUserCurrency(req.auth!.userId, req.body.currency);
+  if (!user) throw Errors.unauthorized();
+  res.json({ user });
 });
 
 // ---------------------------------------------------------------------------
