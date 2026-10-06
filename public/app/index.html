@@ -1243,6 +1243,11 @@ let state = {
   plannerEvents: [],
   chatMessages: [],
   customCategories: [],
+  // Rubriques dont les sous-rubriques sont actuellement dépliées (repliées
+  // par défaut, voir renderRubriqueRow) — un simple Set d'id, en mémoire
+  // pour la session en cours (pas persisté : on repart replié à chaque
+  // rechargement de page, comme le reste de l'état applicatif).
+  expandedRubriqueIds: new Set(),
 };
 
 /* ===================== API / SESSION (Phase 2) ===================== */
@@ -1576,7 +1581,7 @@ async function onAuthenticated(data){
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
   session = { accessToken: null, refreshToken: null, user: null };
-  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = [];
+  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set();
   chatInitialized = false;
   selectedProjectId = null;
   document.getElementById('appShell').hidden = true;
@@ -3211,6 +3216,11 @@ document.getElementById('rubriqueForm').addEventListener('submit', async (e)=>{
     document.getElementById('rubriqueFormCard').style.display = 'none';
     document.getElementById('rubriqueFormSubmit').textContent = 'Ajouter';
     populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
+    // Déplie automatiquement la rubrique parente : sans ça, la sous-rubrique
+    // qu'on vient de créer (ou de déplacer via "Sous-rubrique de") serait
+    // immédiatement cachée par le repli par défaut — mauvaise surprise juste
+    // après l'avoir ajoutée.
+    if(parentRubriqueId) state.expandedRubriqueIds.add(parentRubriqueId);
     renderProjectDetail();
   } catch(err){
     alert("Impossible d'enregistrer la rubrique : " + authErrorMessage(err));
@@ -3234,6 +3244,10 @@ async function deleteRubriqueWithConfirm(id){
     children.forEach(c=>{ c.parentId = grandparentId; }); // reflète côté client le même "remonte d'un niveau" que le serveur
     state.rubriques = state.rubriques.filter(x=>x.id!==id);
     state.transactions.forEach(t=>{ if(t.rubriqueId===id) t.rubriqueId = null; });
+    state.expandedRubriqueIds.delete(id); // la rubrique supprimée n'existe plus, inutile de garder son état
+    // Les ex-enfants remontent sous le grand-parent : on le déplie pour
+    // qu'ils restent visibles au lieu de disparaître derrière un repli.
+    if(grandparentId) state.expandedRubriqueIds.add(grandparentId);
     populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
     renderProjectDetail();
   } catch(err){
@@ -3250,17 +3264,27 @@ function renderRubriqueRow(r, depth, topColor){
   const ownSpent = rubriqueOwnStats(r.id).total;
   const rollupSpent = rubriqueRollupStats(r.id).total;
   const children = rubriqueChildren(r.id);
+  const hasChildren = children.length > 0;
+  // Repliées par défaut (voir state.expandedRubriqueIds) : une rubrique sans
+  // sous-rubrique n'a pas de bouton "+" du tout (rien à révéler). Le total
+  // affiché ci-dessous reste le total ROULÉ (rollupSpent) que la rubrique
+  // soit dépliée ou non — seul le détail des sous-rubriques se cache,
+  // jamais le chiffre global.
+  const expanded = state.expandedRubriqueIds.has(r.id);
   const pct = r.plannedAmount ? Math.min(rollupSpent/r.plannedAmount, 1.4) : null;
   const st = pct!==null ? statusForPct(rollupSpent/r.plannedAmount) : null;
   const prefix = depth>0 ? '<span style="opacity:.45; margin-right:4px;">↳</span>' : '';
   const swatch = depth===0 ? `<span class="swatch" style="background:${topColor}"></span>` : '';
-  const directNote = (children.length>0 && ownSpent>0)
+  const toggle = hasChildren
+    ? `<button type="button" class="btn btn-ghost" data-toggle-rubrique="${r.id}" style="padding:1px 7px; font-size:12px; line-height:1.3; min-width:0; margin-right:6px;" title="${expanded ? 'Masquer' : 'Afficher'} les ${children.length} sous-rubrique${children.length>1?'s':''} de « ${r.name} »">${expanded ? '−' : '+'}</button>`
+    : '';
+  const directNote = (hasChildren && ownSpent>0)
     ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">dont ${fmt(ownSpent)} directement sur "${r.name}"</div>`
     : '';
   const row = `
     <div class="budget-item" style="padding-left:${depth*22}px;">
       <div class="budget-top">
-        <div class="cat">${prefix}${swatch}${r.name}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
+        <div class="cat">${prefix}${toggle}${swatch}${r.name}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <div class="nums">${fmt(rollupSpent)}${r.plannedAmount ? ' / ' + fmt(r.plannedAmount) : ''}</div>
           <button type="button" class="btn btn-ghost" data-add-sub-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;" title="Ajouter une sous-rubrique">+ Sous-rub.</button>
@@ -3271,7 +3295,7 @@ function renderRubriqueRow(r, depth, topColor){
       ${pct!==null ? `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct*100,100)}%; background:${st.color};"></div></div>` : ''}
       ${directNote}
     </div>`;
-  return row + children.map(c=>renderRubriqueRow(c, depth+1, topColor)).join('');
+  return row + (hasChildren && expanded ? children.map(c=>renderRubriqueRow(c, depth+1, topColor)).join('') : '');
 }
 
 // Donut + liste de répartition par rubrique, avec un segment "Non classé"
@@ -3332,6 +3356,14 @@ function renderProjectRubriques(p){
       </div>
     </div>` : '');
 
+  listEl.querySelectorAll('[data-toggle-rubrique]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.dataset.toggleRubrique;
+      if(state.expandedRubriqueIds.has(id)) state.expandedRubriqueIds.delete(id);
+      else state.expandedRubriqueIds.add(id);
+      renderProjectRubriques(p);
+    });
+  });
   listEl.querySelectorAll('[data-add-sub-rubrique]').forEach(btn=>{
     btn.addEventListener('click', ()=> openAddSubRubriqueForm(btn.dataset.addSubRubrique));
   });
