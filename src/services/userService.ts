@@ -25,8 +25,15 @@ export interface PublicUser {
   email: string | null;
   profileType: string;
   locale: string;
+  currency: string;
   createdAt: string;
 }
+
+// Codes ISO 4217 acceptés comme devise de compte — doit rester synchronisé
+// avec le CHECK de migrations/027_user_currency.sql et avec
+// SUPPORTED_CURRENCIES côté frontend (public/app/index.html).
+export const SUPPORTED_CURRENCIES = ["XAF", "XOF", "EUR", "USD", "GBP", "CAD"] as const;
+export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 export async function findUserByPhone(phoneE164: string): Promise<UserRow | null> {
   const { rows } = await pool.query<UserRow>(`SELECT * FROM users WHERE phone_e164 = $1`, [phoneE164]);
@@ -45,7 +52,7 @@ export async function getPublicUser(
   const { rows } = await client.query(
     `
     SELECT u.id, u.phone_e164, u.created_at,
-           p.first_name, p.last_name, p.display_name, p.email, p.profile_type_code, p.locale
+           p.first_name, p.last_name, p.display_name, p.email, p.profile_type_code, p.locale, p.currency
     FROM users u
     JOIN user_profiles p ON p.user_id = u.id
     WHERE u.id = $1
@@ -63,8 +70,29 @@ export async function getPublicUser(
     email: row.email,
     profileType: row.profile_type_code,
     locale: row.locale,
+    currency: row.currency,
     createdAt: row.created_at.toISOString(),
   };
+}
+
+/**
+ * Change la devise du compte — une seule à la fois, pas de multi-devises par
+ * transaction (voir le commentaire sur SUPPORTED_CURRENCIES plus haut). Ne
+ * touche à rien d'autre : les montants déjà enregistrés ne sont PAS
+ * convertis, ils restent le même nombre brut, juste affiché avec une autre
+ * unité à partir de maintenant (cohérent avec la décision produit : POOSSER
+ * reste "devise unique par compte", pas une conversion rétroactive).
+ */
+export async function updateUserCurrency(
+  userId: string,
+  currency: SupportedCurrency,
+): Promise<PublicUser | null> {
+  const { rowCount } = await pool.query(
+    `UPDATE user_profiles SET currency = $1, updated_at = now() WHERE user_id = $2`,
+    [currency, userId],
+  );
+  if (!rowCount) return null;
+  return getPublicUser(userId);
 }
 
 export interface RegisterInput {
