@@ -567,6 +567,17 @@
       <span>Thème</span>
       <button id="themeBtn" type="button">🌙 Sombre</button>
     </div>
+    <div class="theme-toggle">
+      <span>Devise</span>
+      <select id="currencySelect" style="border:1px solid var(--border); background:var(--surface-1); color:var(--text-primary); border-radius:7px; padding:4px 7px; font-size:12px;">
+        <option value="XAF">FCFA (Afrique Centrale)</option>
+        <option value="XOF">FCFA (Afrique de l'Ouest)</option>
+        <option value="EUR">Euro (€)</option>
+        <option value="USD">Dollar US ($)</option>
+        <option value="GBP">Livre sterling (£)</option>
+        <option value="CAD">Dollar canadien ($)</option>
+      </select>
+    </div>
   </div>
 </aside>
 
@@ -592,7 +603,7 @@
     <div class="grid-2">
       <div class="card">
         <h3>Revenus vs Dépenses</h3>
-        <div class="sub">6 derniers mois, en FCFA</div>
+        <div class="sub" id="revDepSubLabel">6 derniers mois, en FCFA</div>
         <div class="top-legend">
           <div class="legend-row"><span class="swatch" style="background:var(--s1)"></span><span class="lname">Revenus</span></div>
           <div class="legend-row"><span class="swatch" style="background:var(--s2)"></span><span class="lname">Dépenses</span></div>
@@ -653,7 +664,7 @@
           <select id="txCategory"></select>
         </div>
         <div class="field">
-          <label>Montant (FCFA)</label>
+          <label id="txAmountLabel">Montant (FCFA)</label>
           <input type="number" id="txAmount" min="1" placeholder="Ex: 15000" required>
         </div>
         <div class="field">
@@ -783,7 +794,7 @@
             </select>
           </div>
           <div class="field">
-            <label>Objectif (FCFA, optionnel)</label>
+            <label id="projTargetLabel">Objectif (FCFA, optionnel)</label>
             <input type="number" id="projTarget" min="1" placeholder="Ex: 5000000">
           </div>
           <div class="field">
@@ -832,7 +843,7 @@
               <input type="text" id="rubName" placeholder="Ex: Fondation" required>
             </div>
             <div class="field">
-              <label>Enveloppe (FCFA, optionnel)</label>
+              <label id="rubPlannedLabel">Enveloppe (FCFA, optionnel)</label>
               <input type="number" id="rubPlanned" min="1" placeholder="Ex: 2000000">
             </div>
             <div class="field">
@@ -883,7 +894,7 @@
             <select id="budgetCategory"></select>
           </div>
           <div class="field">
-            <label>Limite mensuelle (FCFA)</label>
+            <label id="budgetLimitLabel">Limite mensuelle (FCFA)</label>
             <input type="number" id="budgetLimit" min="1" placeholder="Ex: 50000" required>
           </div>
           <button type="submit" class="btn btn-primary">Enregistrer la limite</button>
@@ -910,7 +921,7 @@
           <input type="text" id="goalName" placeholder="Ex: Fonds d'urgence" required>
         </div>
         <div class="field">
-          <label>Montant cible (FCFA)</label>
+          <label id="goalTargetLabel">Montant cible (FCFA)</label>
           <input type="number" id="goalTarget" min="1" required>
         </div>
         <div class="field">
@@ -952,7 +963,7 @@
           <input type="text" id="tonName" placeholder="Ex: Tontine des Enseignantes" required>
         </div>
         <div class="field">
-          <label>Cotisation (FCFA / tour)</label>
+          <label id="tonAmountLabel">Cotisation (FCFA / tour)</label>
           <input type="number" id="tonAmount" min="1" required>
         </div>
         <div class="field">
@@ -1040,7 +1051,7 @@
           <select id="evCategory"></select>
         </div>
         <div class="field">
-          <label>Montant (FCFA)</label>
+          <label id="evAmountLabel">Montant (FCFA)</label>
           <input type="number" id="evAmount" min="1" required>
         </div>
         <div class="field">
@@ -1568,6 +1579,8 @@ async function onAuthenticated(data){
   session.user = data.user;
   const label = [data.user.firstName, data.user.lastName].filter(Boolean).join(' ') || data.user.phone || 'Mon compte';
   document.getElementById('sidebarUserName').textContent = label;
+  document.getElementById('currencySelect').value = currencyCode();
+  applyCurrencyLabels();
   // Important : on charge et on rend les données AVANT de révéler l'appli —
   // sinon les <select> de catégorie sont encore vides au moment où
   // l'utilisateur peut déjà cliquer dedans (leur remplissage se fait dans
@@ -1737,16 +1750,55 @@ let chatInitialized = false;
 let selectedProjectId = null;
 
 /* ===================== HELPERS ===================== */
+// Devise du compte connecté — un seul code ISO 4217 par compte (voir
+// PATCH /auth/me et le sélecteur dans le pied de la barre latérale), pas de
+// multi-devises par transaction : tous les montants d'un même compte sont
+// supposés dans cette unique devise, partout dans l'app (totaux, exports,
+// stats...). 'XAF' (Franc CFA — Afrique Centrale) reste la valeur par
+// défaut tant que session.user n'est pas encore chargé (ex: tout premier
+// instant après connexion) pour ne jamais casser l'affichage.
+const SUPPORTED_CURRENCIES = ['XAF','XOF','EUR','USD','GBP','CAD'];
+function currencyCode(){
+  const c = session.user && session.user.currency;
+  return SUPPORTED_CURRENCIES.includes(c) ? c : 'XAF';
+}
+// Extrait juste le "jeton devise" (ex: "FCFA", "€", "$US") produit par
+// Intl pour la devise courante — réutilisé dans les libellés de formulaire
+// et les prompt() qui ne peuvent pas appeler Intl.NumberFormat eux-mêmes.
+function currencyUnitLabel(){
+  const parts = new Intl.NumberFormat('fr-FR', { style:'currency', currency: currencyCode(), maximumFractionDigits:0 }).formatToParts(0);
+  const cur = parts.find(p=>p.type==='currency');
+  return cur ? cur.value : currencyCode();
+}
 function fmt(n){
-  return new Intl.NumberFormat('fr-FR').format(Math.round(n)) + ' FCFA';
+  return new Intl.NumberFormat('fr-FR', { style:'currency', currency: currencyCode(), maximumFractionDigits:0 }).format(Math.round(n));
 }
 // jsPDF (polices standard Helvetica/WinAnsi) ne sait afficher ni les emoji
-// ni l'espace fine insécable (U+202F) que Intl.NumberFormat('fr-FR') utilise
-// comme séparateur de milliers — sans ce correctif les montants s'affichent
-// dans le PDF avec un "/" à la place de chaque séparateur. On la remplace
-// par une espace normale uniquement pour les textes injectés dans un PDF.
+// ni les espaces insécables qu'Intl.NumberFormat('fr-FR', {style:'currency'})
+// utilise — une espace fine (U+202F) entre les groupes de milliers ET une
+// espace insécable normale (U+00A0) avant le jeton devise — sans ce
+// correctif les montants s'affichent dans le PDF avec un "/" à la place de
+// chaque espace. On les remplace par une espace normale uniquement pour les
+// textes injectés dans un PDF.
 function fmtPdf(n){
-  return fmt(n).replace(/ /g, ' ');
+  return fmt(n).replace(/[\u202f\u00a0]/g, ' ');
+}
+// Remet à jour, après connexion ou changement de devise, tous les libellés
+// de formulaire statiques qui mentionnaient "FCFA" en dur dans le HTML —
+// pour que le champ affiche bien l'unité réellement attendue si le compte
+// n'est plus en FCFA. Les montants déjà affichés (fmt()) n'ont pas besoin de
+// ça : ils recalculent leur unité à chaque rendu.
+function applyCurrencyLabels(){
+  const u = currencyUnitLabel();
+  const set = (id, text) => { const el = document.getElementById(id); if(el) el.textContent = text; };
+  set('revDepSubLabel', `6 derniers mois, en ${u}`);
+  set('txAmountLabel', `Montant (${u})`);
+  set('projTargetLabel', `Objectif (${u}, optionnel)`);
+  set('rubPlannedLabel', `Enveloppe (${u}, optionnel)`);
+  set('budgetLimitLabel', `Limite mensuelle (${u})`);
+  set('goalTargetLabel', `Montant cible (${u})`);
+  set('tonAmountLabel', `Cotisation (${u} / tour)`);
+  set('evAmountLabel', `Montant (${u})`);
 }
 function monthLabel(offset){
   const months = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
@@ -1908,6 +1960,30 @@ document.getElementById('themeBtn').addEventListener('click', ()=>{
   html.setAttribute('data-theme', isDark ? 'light' : 'dark');
   document.getElementById('themeBtn').textContent = isDark ? '🌙 Sombre' : '☀️ Clair';
   renderAll(); // re-render charts that use resolved hex
+});
+
+// Devise du compte — une seule à la fois, partagée par tous les montants
+// (pas de multi-devises par transaction, voir currencyCode() plus haut).
+// Enregistrée côté serveur (PATCH /auth/me) pour rester la même à la
+// prochaine connexion ; en cas d'échec réseau on revient à l'ancienne
+// valeur dans le <select> plutôt que de laisser l'affichage se désynchroniser
+// de ce qui est réellement enregistré.
+document.getElementById('currencySelect').addEventListener('change', async (e)=>{
+  const sel = e.target;
+  const previous = session.user.currency;
+  const next = sel.value;
+  sel.disabled = true;
+  try {
+    const { user } = await apiFetch('/auth/me', { method:'PATCH', auth:true, body:{ currency: next } });
+    session.user = user;
+    applyCurrencyLabels();
+    renderAll();
+  } catch(err){
+    sel.value = previous;
+    alert('Impossible de changer la devise : ' + authErrorMessage(err));
+  } finally {
+    sel.disabled = false;
+  }
 });
 
 /* ===================== RÉSUMÉ HEBDOMADAIRE ===================== */
@@ -2826,7 +2902,7 @@ function renderGoals(){
     btn.addEventListener('click', async ()=>{
       const id = btn.dataset.contribute;
       const goal = state.goals.find(g=>g.id===id);
-      const amt = prompt(`Montant à verser vers "${goal.name}" (FCFA) :`, '10000');
+      const amt = prompt(`Montant à verser vers "${goal.name}" (${currencyUnitLabel()}) :`, '10000');
       const val = parseFloat(amt);
       if(!(val>0)) return;
       btn.disabled = true;
