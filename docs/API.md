@@ -149,8 +149,22 @@ Termine la récupération de compte : définit un nouveau PIN de connexion.
 
 🔒 Retourne le profil de l'utilisateur authentifié.
 
-- **Réponse 200** : `{ id, phone, firstName, lastName, displayName, email, profileType, locale, createdAt }`
+- **Réponse 200** : `{ id, phone, firstName, lastName, displayName, email, profileType, locale, currency, createdAt }`
   — jamais de hash, jamais de token.
+
+## PATCH /auth/me
+
+🔒 Change la devise du compte. Pas un PATCH profil générique : pour l'instant
+`currency` est le seul champ accepté. Une seule devise à la fois par compte
+(pas de multi-devises par transaction) — elle s'applique à l'affichage de
+tous les montants déjà enregistrés, qui ne sont PAS convertis (même nombre
+brut, juste une autre unité affichée à partir de maintenant).
+
+- **Body** : `{ currency }` — un code parmi `XAF`, `XOF`, `EUR`, `USD`, `GBP`, `CAD`.
+- **Réponse 200** : `{ user }` (même forme que la réponse de `/auth/login`,
+  contrairement à `GET /me` qui renvoie l'objet nu).
+- **Erreurs** : `VALIDATION_ERROR` (400) si `currency` est absent ou hors de
+  la liste supportée.
 
 ## GET /auth/devices
 
