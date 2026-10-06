@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SUPPORTED_CURRENCIES } from "../services/userService.js";
 
 const phoneSchema = z.string().min(6).max(20);
 const pinSchema = z.string().regex(/^\d{6}$/, "Le PIN doit contenir exactement 6 chiffres");
@@ -73,4 +74,11 @@ export const transactionPinSchema = z.object({
 
 export const stepUpSchema = z.object({
   transactionPin: pinSchema,
+});
+
+// Devise du compte — un seul code à la fois (pas de multi-devises par
+// transaction), parmi la liste fermée SUPPORTED_CURRENCIES partagée avec le
+// service (elle-même synchronisée avec le CHECK de la migration 027).
+export const updateProfileSchema = z.object({
+  currency: z.enum(SUPPORTED_CURRENCIES),
 });
