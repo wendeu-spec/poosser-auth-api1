@@ -1131,7 +1131,7 @@
 
     <div class="card chat-card">
       <h3>Poser une question</h3>
-      <div class="chat-disclaimer">💡 Assistant local : les réponses sont générées à partir des données de cette session (démonstration), sans appel à un service externe.</div>
+      <div class="chat-disclaimer">💡 Les réponses s'appuient sur les données de votre compte. Si un assistant IA est activé sur ce serveur, votre question et un résumé de vos finances (jamais le détail de vos transactions) lui sont transmis ; sinon, tout reste calculé localement.</div>
       <div class="chat-messages" id="chatMessages"></div>
       <div class="chat-suggestions" id="chatSuggestions"></div>
       <form class="chat-input-row" id="chatForm">
@@ -4428,15 +4428,57 @@ function answerQuestion(q){
   return "Je peux vous renseigner sur votre solde, vos budgets par catégorie, votre épargne, vos tontines ou votre planner. Essayez par exemple : \"Comment se porte mon budget Transport ?\"";
 }
 
-document.getElementById('chatForm').addEventListener('submit', (e)=>{
+// Résumé des finances déjà calculé côté client, envoyé tel quel à
+// POST /api/assistant/ask : jamais le détail des transactions, seulement des
+// agrégats (solde, budgets, score de santé...). En mode AI_PROVIDER=console
+// côté serveur (par défaut, voir .env.example), ce contexte n'est même pas
+// transmis à un service externe — le serveur répond par un simple repli et
+// answerQuestion() prend le relais localement, comme avant.
+function buildAssistantContext(){
+  const rev = totalRevenu(), dep = totalDepense();
+  const health = computeHealthScore();
+  return {
+    devise: currencyCode(),
+    soldeMois: rev - dep,
+    revenusMois: rev,
+    depensesMois: dep,
+    scoreSante: health.overall,
+    budgets: state.budgets.map(b => ({ categorie: b.category, limite: b.limit, depense: spentByCategory(b.category) })),
+    epargne: state.goals.map(g => ({ nom: g.name, actuel: g.current, cible: g.target, echeance: g.deadline })),
+    tontines: state.tontines.map(t => ({
+      nom: t.name, montantCotisation: t.amount, tourActuel: t.currentRound,
+      membresNonCotises: t.members.filter(m=>!t.paidThisRound[m]),
+    })),
+    plannerAVenir: state.plannerEvents.filter(e=>e.status!=='realise').length,
+    plannerEnRetard: state.plannerEvents.filter(e=>e.status!=='realise' && e.date<todayISO(0)).length,
+  };
+}
+
+document.getElementById('chatForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const input = document.getElementById('chatInput');
   const q = input.value.trim();
   if(!q) return;
   pushChatMessage('user', q);
-  const answer = answerQuestion(q);
-  pushChatMessage('assistant', answer);
   input.value = '';
+  renderChatMessages();
+
+  let answer;
+  try {
+    const result = await apiFetch('/api/assistant/ask', {
+      method: 'POST', auth: true,
+      body: { question: q, context: buildAssistantContext() },
+    });
+    // source==='fallback' (mode console, clé absente, ou souci du
+    // fournisseur côté serveur) : on répond quand même, avec le moteur local.
+    answer = (result && result.source === 'llm' && result.answer) ? result.answer : answerQuestion(q);
+  } catch (err) {
+    // Hors ligne, serveur indisponible, limite de requêtes atteinte... dans
+    // tous les cas l'utilisateur garde une réponse, jamais un message
+    // d'erreur technique dans le chat.
+    answer = answerQuestion(q);
+  }
+  pushChatMessage('assistant', answer);
   renderChatMessages();
 });
 
