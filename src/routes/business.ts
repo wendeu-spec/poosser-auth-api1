@@ -13,6 +13,7 @@ import {
   createTontineSchema, updateTontineSchema, markContributionSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
   askAssistantSchema,
+  decideBudgetProposalSchema,
 } from "../validators/businessSchemas.js";
 
 import * as transactions from "../services/transactionService.js";
@@ -25,6 +26,7 @@ import * as rubriques from "../services/rubriqueService.js";
 import * as tontines from "../services/tontineService.js";
 import * as plannerEvents from "../services/plannerEventService.js";
 import { askAssistant } from "../services/assistantService.js";
+import * as budgetProposals from "../services/budgetProposalService.js";
 
 export const businessRouter = Router();
 
@@ -288,3 +290,32 @@ businessRouter.post("/assistant/ask", validateBody(askAssistantSchema), async (r
   const result = await askAssistant(req.auth!.userId, req.body.question, req.body.context);
   res.json(result);
 });
+
+// ---------------------------------------------------------------------------
+// Proposition automatique de budget mensuel — reprise des événements planner
+// non récurrents du mois en cours comme point de départ du mois suivant (voir
+// budgetProposalService.ts). Génération paresseuse : chaque GET /current peut
+// déclencher la création de la proposition si c'est le bon moment et qu'elle
+// n'existe pas déjà, mais jamais de tâche planifiée côté serveur.
+// `shouldRemind` indique si le front doit afficher un rappel maintenant ; le
+// front doit alors appeler /reminder-shown pour l'enregistrer (ce qui peut
+// déclencher l'application automatique au plafond de rappels).
+// ---------------------------------------------------------------------------
+businessRouter.get("/budget-proposals/current", async (req, res) => {
+  const result = await budgetProposals.getCurrentProposal(req.auth!.userId);
+  res.json({ current: result });
+});
+businessRouter.post("/budget-proposals/:id/reminder-shown", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const result = await budgetProposals.recordReminderShown(req.auth!.userId, id);
+  res.json(result);
+});
+businessRouter.post(
+  "/budget-proposals/:id/decide",
+  validateBody(decideBudgetProposalSchema),
+  async (req, res) => {
+    const id = requireParamId(req.params.id);
+    const proposal = await budgetProposals.decideProposal(req.auth!.userId, id, req.body.status);
+    res.json({ proposal });
+  },
+);
