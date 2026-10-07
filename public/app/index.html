@@ -1034,10 +1034,58 @@
           <span id="notifPermStatus"></span>
         </div>
       </div>
-      <button class="btn btn-primary" id="openPlannerForm">+ Nouvel événement</button>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-ghost" id="openBudgetWizard">✨ Proposer un budget mensuel</button>
+        <button class="btn btn-primary" id="openPlannerForm">+ Nouvel événement</button>
+      </div>
     </div>
 
     <div class="planner-tiles" id="plannerTiles"></div>
+
+    <div class="card" id="budgetWizardCard" style="margin-bottom:18px; display:none;">
+      <h3>Proposer un budget mensuel</h3>
+      <div class="sub">Choisissez une tranche de revenu : POOSSER propose une répartition détaillée (logement, alimentation, transport...). Ajustez librement chaque ligne, puis validez pour tout intégrer d'un coup au planner et aux limites du Budget.</div>
+
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin:16px 0;">
+        <div class="field">
+          <label>Revenu mensuel de référence</label>
+          <select id="wizardTier">
+            <option value="200000">200 000 FCFA</option>
+            <option value="500000" selected>500 000 FCFA</option>
+            <option value="700000">700 000 FCFA</option>
+            <option value="1000000">1 000 000 FCFA</option>
+            <option value="custom">Autre montant…</option>
+          </select>
+        </div>
+        <div class="field" id="wizardCustomAmountField" style="display:none;">
+          <label>Montant personnalisé (FCFA)</label>
+          <input type="number" id="wizardCustomAmount" min="1" placeholder="Ex: 450000">
+        </div>
+        <div class="field">
+          <label>Mois concerné</label>
+          <input type="month" id="wizardMonth">
+        </div>
+        <button type="button" class="btn btn-ghost" id="wizardRegenerate">↺ Régénérer la proposition</button>
+      </div>
+
+      <div id="wizardRowsHead" style="display:grid; grid-template-columns: 2fr 1fr 1.3fr 90px 1fr 36px; gap:8px; font-size:12px; color:var(--text-muted); padding:0 2px 6px;">
+        <div>Intitulé</div><div>Type</div><div>Catégorie</div><div>Jour</div><div>Montant (FCFA)</div><div></div>
+      </div>
+      <div id="wizardRowsContainer"></div>
+      <button type="button" class="btn btn-ghost" id="wizardAddRow" style="margin-top:8px;">+ Ajouter une ligne</button>
+
+      <div class="card" style="background:var(--surface-2); margin-top:18px;">
+        <h4 style="margin-top:0;">Totaux par catégorie (appliqués au Budget à la validation)</h4>
+        <div id="wizardCategoryTotals"></div>
+        <div id="wizardGrandTotal" style="margin-top:10px; font-weight:700;"></div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:16px;">
+        <button type="button" class="btn btn-primary" id="wizardValidate">✓ Valider et intégrer</button>
+        <button type="button" class="btn btn-ghost" id="wizardCancel">Annuler</button>
+      </div>
+      <div id="wizardResultMsg" style="margin-top:12px;"></div>
+    </div>
 
     <div class="card" id="plannerFormCard" style="margin-bottom:18px; display:none;">
       <h3 id="plannerFormTitle">Nouvel événement financier</h3>
@@ -3998,6 +4046,299 @@ document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
   } finally {
     if(btn) btn.disabled = false;
   }
+});
+
+/* ===================== Assistant budget mensuel (wizard) =====================
+ * Propose une répartition de dépenses détaillée selon une tranche de revenu,
+ * modifiable ligne par ligne, puis intègre tout en un clic : un événement
+ * planner par ligne (POST /api/planner-events) + une limite de budget par
+ * catégorie (POST /api/budgets, upsert) égale à la somme des lignes de cette
+ * catégorie. Les montants sont volontairement en XAF/FCFA (demande explicite),
+ * indépendamment de la devise du compte.
+ *
+ * Chaque tranche laisse sciemment une marge non affectée (ni dépense ni
+ * budget créés) plutôt que de consommer 100% du revenu : cette marge
+ * (affichée mais jamais écrite en base) est une suggestion d'épargne, à
+ * placer ensuite manuellement dans le module Épargne si l'utilisateur le
+ * souhaite — ce n'est pas à ce formulaire de décider d'un objectif d'épargne
+ * à sa place.
+ */
+const BUDGET_WIZARD_TEMPLATES = {
+  200000: {
+    revenuTitre: 'Revenu du mois', revenuCategorie: 'Salaire',
+    lignes: [
+      { titre: 'Loyer mensuel', categorie: 'Logement', montant: 55000, jour: 5 },
+      { titre: 'Électricité (ENEO)', categorie: 'Logement', montant: 6000, jour: 10 },
+      { titre: 'Eau (CAMWATER)', categorie: 'Logement', montant: 4000, jour: 10 },
+      { titre: 'Courses principales', categorie: 'Alimentation', montant: 30000, jour: 3 },
+      { titre: 'Marché / appoint', categorie: 'Alimentation', montant: 25000, jour: 17 },
+      { titre: 'Transport quotidien', categorie: 'Transport', montant: 18000, jour: 1 },
+      { titre: 'Imprévu transport', categorie: 'Transport', montant: 2000, jour: 20 },
+      { titre: 'Pharmacie / consultation', categorie: 'Santé', montant: 8000, jour: 12 },
+      { titre: 'Cotisation tontine', categorie: 'Tontine', montant: 15000, jour: 25 },
+      { titre: 'Crédit téléphone & internet', categorie: 'Autres', montant: 7000, jour: 2 },
+      { titre: 'Divers / imprévus', categorie: 'Autres', montant: 3000, jour: 28 },
+      { titre: 'Sorties / loisirs', categorie: 'Loisirs', montant: 5000, jour: 22 },
+    ],
+  },
+  500000: {
+    revenuTitre: 'Revenu du mois', revenuCategorie: 'Salaire',
+    lignes: [
+      { titre: 'Loyer mensuel', categorie: 'Logement', montant: 130000, jour: 5 },
+      { titre: 'Électricité (ENEO)', categorie: 'Logement', montant: 12000, jour: 10 },
+      { titre: 'Eau (CAMWATER)', categorie: 'Logement', montant: 8000, jour: 10 },
+      { titre: 'Courses principales', categorie: 'Alimentation', montant: 55000, jour: 3 },
+      { titre: 'Marché / appoint', categorie: 'Alimentation', montant: 35000, jour: 17 },
+      { titre: 'Carburant / transport quotidien', categorie: 'Transport', montant: 35000, jour: 1 },
+      { titre: 'Entretien véhicule/moto', categorie: 'Transport', montant: 5000, jour: 20 },
+      { titre: 'Mutuelle / assurance santé', categorie: 'Santé', montant: 12000, jour: 8 },
+      { titre: 'Pharmacie / consultations', categorie: 'Santé', montant: 8000, jour: 18 },
+      { titre: 'Formation en ligne / livres', categorie: 'Éducation', montant: 15000, jour: 15 },
+      { titre: 'Cotisation tontine', categorie: 'Tontine', montant: 40000, jour: 25 },
+      { titre: 'Sorties / restaurant', categorie: 'Loisirs', montant: 15000, jour: 22 },
+      { titre: 'Abonnements (streaming, sport)', categorie: 'Loisirs', montant: 10000, jour: 2 },
+      { titre: 'Crédit téléphone & internet', categorie: 'Autres', montant: 12000, jour: 2 },
+      { titre: 'Divers / imprévus', categorie: 'Autres', montant: 8000, jour: 28 },
+    ],
+  },
+  700000: {
+    revenuTitre: 'Revenu du mois', revenuCategorie: 'Salaire',
+    lignes: [
+      { titre: 'Loyer mensuel', categorie: 'Logement', montant: 150000, jour: 5 },
+      { titre: 'Électricité (ENEO)', categorie: 'Logement', montant: 18000, jour: 10 },
+      { titre: 'Eau (CAMWATER)', categorie: 'Logement', montant: 12000, jour: 10 },
+      { titre: 'Courses principales', categorie: 'Alimentation', montant: 65000, jour: 3 },
+      { titre: 'Marché / appoint', categorie: 'Alimentation', montant: 45000, jour: 17 },
+      { titre: 'Carburant / transport', categorie: 'Transport', montant: 45000, jour: 1 },
+      { titre: 'Entretien véhicule', categorie: 'Transport', montant: 10000, jour: 20 },
+      { titre: 'Mutuelle / assurance santé', categorie: 'Santé', montant: 18000, jour: 8 },
+      { titre: 'Pharmacie / consultations', categorie: 'Santé', montant: 12000, jour: 18 },
+      { titre: 'Formation / cours du soir', categorie: 'Éducation', montant: 25000, jour: 15 },
+      { titre: 'Cotisation tontine', categorie: 'Tontine', montant: 60000, jour: 25 },
+      { titre: 'Sorties / restaurant', categorie: 'Loisirs', montant: 25000, jour: 22 },
+      { titre: 'Abonnements & divertissement', categorie: 'Loisirs', montant: 15000, jour: 2 },
+      { titre: 'Téléphone & internet', categorie: 'Autres', montant: 15000, jour: 2 },
+      { titre: 'Soutien famille ponctuel', categorie: 'Autres', montant: 10000, jour: 27 },
+      { titre: 'Divers / imprévus', categorie: 'Autres', montant: 5000, jour: 28 },
+    ],
+  },
+  1000000: {
+    revenuTitre: 'Revenu du mois', revenuCategorie: 'Salaire',
+    lignes: [
+      { titre: 'Loyer mensuel', categorie: 'Logement', montant: 190000, jour: 5 },
+      { titre: 'Électricité (ENEO)', categorie: 'Logement', montant: 25000, jour: 10 },
+      { titre: 'Eau (CAMWATER)', categorie: 'Logement', montant: 15000, jour: 10 },
+      { titre: 'Courses principales', categorie: 'Alimentation', montant: 85000, jour: 3 },
+      { titre: 'Marché / appoint', categorie: 'Alimentation', montant: 55000, jour: 17 },
+      { titre: 'Carburant / transport (véhicule perso)', categorie: 'Transport', montant: 60000, jour: 1 },
+      { titre: 'Entretien véhicule / assurance auto', categorie: 'Transport', montant: 15000, jour: 20 },
+      { titre: 'Mutuelle / assurance santé famille', categorie: 'Santé', montant: 25000, jour: 8 },
+      { titre: 'Pharmacie / consultations', categorie: 'Santé', montant: 15000, jour: 18 },
+      { titre: 'Formation continue / scolarité', categorie: 'Éducation', montant: 40000, jour: 15 },
+      { titre: 'Cotisation tontine', categorie: 'Tontine', montant: 80000, jour: 25 },
+      { titre: 'Sorties / restaurant', categorie: 'Loisirs', montant: 35000, jour: 22 },
+      { titre: 'Voyages / abonnements', categorie: 'Loisirs', montant: 25000, jour: 2 },
+      { titre: 'Téléphone & internet', categorie: 'Autres', montant: 18000, jour: 2 },
+      { titre: 'Soutien famille', categorie: 'Autres', montant: 12000, jour: 27 },
+      { titre: 'Divers / imprévus', categorie: 'Autres', montant: 5000, jour: 28 },
+    ],
+  },
+};
+const BUDGET_WIZARD_TIER_KEYS = Object.keys(BUDGET_WIZARD_TEMPLATES).map(Number).sort((a,b)=>a-b);
+
+let wizardRows = []; // [{ _id, titre, type:'depense'|'revenu', categorie, montant, jour }]
+let wizardNextId = 1;
+
+function wizardNearestTierTemplate(amount){
+  let best = BUDGET_WIZARD_TIER_KEYS[0];
+  for(const k of BUDGET_WIZARD_TIER_KEYS){ if(Math.abs(k-amount) < Math.abs(best-amount)) best = k; }
+  return { tierKey: best, template: BUDGET_WIZARD_TEMPLATES[best] };
+}
+
+/** Construit wizardRows à partir d'un montant de revenu (tranche exacte ou
+ * personnalisé) : tranche connue -> gabarit tel quel ; montant personnalisé ->
+ * gabarit de la tranche la plus proche, mis à l'échelle proportionnellement
+ * (arrondi à la centaine de FCFA la plus proche pour rester lisible). */
+function wizardGenerateRows(amount){
+  const exact = BUDGET_WIZARD_TEMPLATES[amount];
+  const { tierKey, template } = exact ? { tierKey: amount, template: exact } : wizardNearestTierTemplate(amount);
+  const scale = amount / tierKey;
+  const rows = [];
+  rows.push({ _id: wizardNextId++, titre: template.revenuTitre, type:'revenu', categorie: template.revenuCategorie, montant: amount, jour: 1 });
+  for(const l of template.lignes){
+    const montant = exact ? l.montant : Math.max(500, Math.round(l.montant*scale/100)*100);
+    rows.push({ _id: wizardNextId++, titre: l.titre, type:'depense', categorie: l.categorie, montant, jour: l.jour });
+  }
+  return rows;
+}
+
+function wizardCategoryOptionsHtml(type){
+  return (type==='revenu' ? revenuCategories() : depenseCategories()).map(c=>`<option value="${c}">${c}</option>`).join('');
+}
+
+function renderWizardRows(){
+  const container = document.getElementById('wizardRowsContainer');
+  container.innerHTML = wizardRows.map(r => `
+    <div class="wizard-row" data-id="${r._id}" style="display:grid; grid-template-columns: 2fr 1fr 1.3fr 90px 1fr 36px; gap:8px; align-items:center; margin-bottom:6px;">
+      <input type="text" class="wizard-titre" value="${r.titre.replace(/"/g,'&quot;')}">
+      <select class="wizard-type">
+        <option value="depense" ${r.type==='depense'?'selected':''}>Dépense</option>
+        <option value="revenu" ${r.type==='revenu'?'selected':''}>Revenu</option>
+      </select>
+      <select class="wizard-categorie">${wizardCategoryOptionsHtml(r.type)}</select>
+      <input type="number" class="wizard-jour" min="1" max="28" value="${r.jour}">
+      <input type="number" class="wizard-montant" min="0" value="${r.montant}">
+      <button type="button" class="btn btn-ghost wizard-remove" title="Supprimer la ligne">✕</button>
+    </div>`).join('');
+
+  container.querySelectorAll('.wizard-row').forEach(rowEl=>{
+    const id = Number(rowEl.dataset.id);
+    const row = wizardRows.find(r=>r._id===id);
+    const catSel = rowEl.querySelector('.wizard-categorie');
+    catSel.value = row.categorie;
+    rowEl.querySelector('.wizard-titre').addEventListener('input', e=>{ row.titre = e.target.value; });
+    rowEl.querySelector('.wizard-type').addEventListener('change', e=>{
+      row.type = e.target.value;
+      catSel.innerHTML = wizardCategoryOptionsHtml(row.type);
+      row.categorie = catSel.value;
+      renderWizardTotals();
+    });
+    catSel.addEventListener('change', e=>{ row.categorie = e.target.value; renderWizardTotals(); });
+    rowEl.querySelector('.wizard-jour').addEventListener('input', e=>{ row.jour = Math.min(28, Math.max(1, parseInt(e.target.value,10)||1)); });
+    rowEl.querySelector('.wizard-montant').addEventListener('input', e=>{ row.montant = Math.max(0, parseFloat(e.target.value)||0); renderWizardTotals(); });
+    rowEl.querySelector('.wizard-remove').addEventListener('click', ()=>{
+      wizardRows = wizardRows.filter(r=>r._id!==id);
+      renderWizardRows();
+      renderWizardTotals();
+    });
+  });
+}
+
+function renderWizardTotals(){
+  const totals = {};
+  let totalDepense = 0, totalRevenuVal = 0;
+  for(const r of wizardRows){
+    if(r.type==='depense'){ totals[r.categorie] = (totals[r.categorie]||0) + r.montant; totalDepense += r.montant; }
+    else totalRevenuVal += r.montant;
+  }
+  const el = document.getElementById('wizardCategoryTotals');
+  const cats = Object.keys(totals);
+  el.innerHTML = cats.length ? cats.map(c=>{
+    const existing = state.budgets.find(b=>b.category===c);
+    const warn = existing && existing.limit !== totals[c]
+      ? ` <span style="color:var(--warning,#b8860b);">(remplace la limite actuelle de ${fmt(existing.limit)})</span>` : '';
+    return `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:13.5px;"><span>${c}</span><span>${fmt(totals[c])}${warn}</span></div>`;
+  }).join('') : '<div class="sub">Aucune ligne de dépense pour le moment.</div>';
+
+  const reste = totalRevenuVal - totalDepense;
+  document.getElementById('wizardGrandTotal').innerHTML =
+    `Revenu : ${fmt(totalRevenuVal)} — Dépenses : ${fmt(totalDepense)} — `
+    + `<span style="color:${reste>=0?'var(--good)':'var(--critical)'}">Marge/épargne suggérée : ${fmt(reste)}</span>`
+    + `<div class="sub" style="margin-top:4px;">Cette marge n'est ni dépensée ni budgétée automatiquement — à affecter vous-même, par exemple dans le module Épargne.</div>`;
+}
+
+function wizardSelectedAmount(){
+  const tierSel = document.getElementById('wizardTier').value;
+  if(tierSel === 'custom'){
+    const v = parseFloat(document.getElementById('wizardCustomAmount').value);
+    return v > 0 ? v : null;
+  }
+  return Number(tierSel);
+}
+
+function wizardRegenerate(){
+  const amount = wizardSelectedAmount();
+  if(!amount){ document.getElementById('wizardCustomAmount').focus(); return; }
+  wizardRows = wizardGenerateRows(amount);
+  renderWizardRows();
+  renderWizardTotals();
+}
+
+document.getElementById('openBudgetWizard').addEventListener('click', ()=>{
+  const card = document.getElementById('budgetWizardCard');
+  const willOpen = card.style.display === 'none';
+  card.style.display = willOpen ? 'block' : 'none';
+  if(willOpen){
+    document.getElementById('plannerFormCard').style.display = 'none';
+    document.getElementById('wizardResultMsg').innerHTML = '';
+    if(!document.getElementById('wizardMonth').value){
+      document.getElementById('wizardMonth').value = todayISO(0).slice(0,7);
+    }
+    wizardRegenerate();
+    card.scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+});
+document.getElementById('wizardCancel').addEventListener('click', ()=>{
+  document.getElementById('budgetWizardCard').style.display = 'none';
+});
+document.getElementById('wizardTier').addEventListener('change', (e)=>{
+  document.getElementById('wizardCustomAmountField').style.display = e.target.value==='custom' ? '' : 'none';
+  if(e.target.value!=='custom') wizardRegenerate();
+});
+document.getElementById('wizardRegenerate').addEventListener('click', wizardRegenerate);
+document.getElementById('wizardAddRow').addEventListener('click', ()=>{
+  wizardRows.push({ _id: wizardNextId++, titre: '', type:'depense', categorie: depenseCategories()[0], montant: 0, jour: 1 });
+  renderWizardRows();
+  renderWizardTotals();
+});
+
+/** Jour -> date ISO dans le mois choisi, plafonné au dernier jour réel de ce
+ * mois (même logique que addMonthsClamped côté serveur, pour ne jamais
+ * produire une date invalide comme "2026-02-30"). */
+function wizardDateForDay(day){
+  const [y, m] = document.getElementById('wizardMonth').value.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const d = Math.min(Math.max(1, day), lastDay);
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+
+document.getElementById('wizardValidate').addEventListener('click', async ()=>{
+  if(!wizardRows.length) return;
+  const invalid = wizardRows.find(r=>!r.titre.trim() || !r.montant);
+  if(invalid){ alert('Chaque ligne doit avoir un intitulé et un montant supérieur à 0.'); return; }
+  const btn = document.getElementById('wizardValidate');
+  btn.disabled = true;
+  const msgEl = document.getElementById('wizardResultMsg');
+  msgEl.innerHTML = 'Intégration en cours…';
+
+  const createdEvents = [];
+  const eventErrors = [];
+  for(const r of wizardRows){
+    try {
+      const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{
+        title: r.titre.trim(), eventDate: wizardDateForDay(r.jour), eventTime: '09:00',
+        durationMinutes: 30, type: r.type, category: r.categorie, amount: r.montant,
+      }});
+      createdEvents.push(mapEventFromApi(plannerEvent));
+    } catch(err){ eventErrors.push(r.titre + ' : ' + authErrorMessage(err)); }
+  }
+  state.plannerEvents.push(...createdEvents);
+
+  const categoryTotals = {};
+  for(const r of wizardRows){ if(r.type==='depense') categoryTotals[r.categorie] = (categoryTotals[r.categorie]||0) + r.montant; }
+  const budgetErrors = [];
+  let budgetsDone = 0;
+  for(const [category, monthlyLimit] of Object.entries(categoryTotals)){
+    try {
+      const { budget } = await apiFetch('/api/budgets', { method:'POST', auth:true, body:{ category, monthlyLimit } });
+      const mapped = mapBudgetFromApi(budget);
+      const existing = state.budgets.find(b=>b.category===category);
+      if(existing) Object.assign(existing, mapped); else state.budgets.push(mapped);
+      budgetsDone++;
+    } catch(err){ budgetErrors.push(category + ' : ' + authErrorMessage(err)); }
+  }
+
+  renderAll();
+  btn.disabled = false;
+
+  const parts = [`${createdEvents.length}/${wizardRows.length} événement(s) ajouté(s) au planner`, `${budgetsDone}/${Object.keys(categoryTotals).length} limite(s) de budget mise(s) à jour`];
+  let html = `<div style="color:var(--good);">✓ ${parts.join(' — ')}.</div>`;
+  if(eventErrors.length || budgetErrors.length){
+    html += `<div style="color:var(--critical); margin-top:6px;">Échecs : ${[...eventErrors, ...budgetErrors].join(' ; ')}</div>`;
+  } else {
+    document.getElementById('budgetWizardCard').style.display = 'none';
+  }
+  msgEl.innerHTML = html;
 });
 
 function eventStatusInfo(ev){
