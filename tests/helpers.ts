@@ -33,7 +33,8 @@ export async function resetDb(): Promise<void> {
       tontine_contributions,
       tontine_members,
       tontines,
-      planner_events
+      planner_events,
+      budget_proposals
     RESTART IDENTITY CASCADE
   `);
   sentOtps.clear();
