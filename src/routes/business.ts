@@ -12,6 +12,7 @@ import {
   createRubriqueSchema, updateRubriqueSchema,
   createTontineSchema, updateTontineSchema, markContributionSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
+  askAssistantSchema,
 } from "../validators/businessSchemas.js";
 
 import * as transactions from "../services/transactionService.js";
@@ -23,6 +24,7 @@ import * as projects from "../services/projectService.js";
 import * as rubriques from "../services/rubriqueService.js";
 import * as tontines from "../services/tontineService.js";
 import * as plannerEvents from "../services/plannerEventService.js";
+import { askAssistant } from "../services/assistantService.js";
 
 export const businessRouter = Router();
 
@@ -273,4 +275,16 @@ businessRouter.delete("/planner-events/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await plannerEvents.deletePlannerEvent(req.auth!.userId, id);
   res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Assistant IA — `context` est un résumé déjà calculé côté client (solde,
+// budgets, score de santé...) ; voir assistantService.ts pour le détail du
+// fournisseur actif (AI_PROVIDER) et de la limite de requêtes par utilisateur.
+// Quand `source` revient à "fallback", le client doit répondre lui-même avec
+// son moteur local existant (answerQuestion()) — ce n'est jamais une erreur.
+// ---------------------------------------------------------------------------
+businessRouter.post("/assistant/ask", validateBody(askAssistantSchema), async (req, res) => {
+  const result = await askAssistant(req.auth!.userId, req.body.question, req.body.context);
+  res.json(result);
 });
