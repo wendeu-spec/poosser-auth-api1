@@ -177,3 +177,22 @@ export const updatePlannerEventSchema = createPlannerEventSchema.partial().exten
 export const setPlannerEventStatusSchema = z.object({
   status: z.enum(["a_venir", "realise", "non_realise"]),
 });
+
+// ---------------------------------------------------------------------------
+// Assistant IA — `context` est un résumé déjà calculé côté client (solde,
+// budgets, score de santé...), jamais les lignes de transactions brutes : on
+// accepte un objet libre plutôt qu'un schéma rigide pour ne pas devoir faire
+// évoluer ce validateur à chaque fois que le front enrichit son résumé, mais
+// on borne sa taille sérialisée pour éviter qu'un corps de requête anormalement
+// gros n'atteigne le fournisseur LLM.
+const MAX_ASSISTANT_CONTEXT_JSON_LENGTH = 20_000;
+export const askAssistantSchema = z.object({
+  question: z.string().trim().min(1).max(500),
+  context: z
+    .record(z.string(), z.unknown())
+    .refine((ctx) => JSON.stringify(ctx).length <= MAX_ASSISTANT_CONTEXT_JSON_LENGTH, {
+      message: `context dépasse la taille maximale autorisée (${MAX_ASSISTANT_CONTEXT_JSON_LENGTH} caractères sérialisés)`,
+    })
+    .optional()
+    .default({}),
+});
