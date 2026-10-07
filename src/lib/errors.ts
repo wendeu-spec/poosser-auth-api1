@@ -52,4 +52,5 @@ export const Errors = {
   transactionFavoriteNotFound: () => new AppError("TRANSACTION_FAVORITE_NOT_FOUND", 404),
   categoryNotFound: () => new AppError("CATEGORY_NOT_FOUND", 404),
   categoryAlreadyExists: () => new AppError("CATEGORY_ALREADY_EXISTS", 409),
+  budgetProposalNotFound: () => new AppError("BUDGET_PROPOSAL_NOT_FOUND", 404),
 };
