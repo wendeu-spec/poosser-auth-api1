@@ -583,6 +583,24 @@
 
 <main>
 
+  <!-- Bannière de rappel pour la proposition automatique de budget mensuel
+       (reprise du mois précédent) — visible sur toutes les vues tant qu'une
+       proposition "pending" existe, voir budgetProposalService.ts côté
+       serveur et le bloc JS "PROPOSITION AUTOMATIQUE DE BUDGET MENSUEL"
+       plus bas dans ce fichier. -->
+  <div class="card" id="budgetProposalBanner" style="display:none; margin-bottom:18px; border-left:4px solid var(--accent,#b8860b);">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <strong>📋 Budget de <span id="budgetProposalMonthLabel"></span> prêt à valider</strong>
+        <div class="sub">Repris de votre mois précédent — entièrement modifiable avant validation définitive.</div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary" id="budgetProposalReview">Vérifier et valider</button>
+        <button type="button" class="btn btn-ghost" id="budgetProposalDismiss">Ignorer ce mois</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= DASHBOARD ================= -->
   <section class="view active" id="view-dashboard">
     <div class="page-head">
@@ -1338,6 +1356,9 @@ let state = {
   plannerEvents: [],
   chatMessages: [],
   customCategories: [],
+  // { proposal, shouldRemind, daysSinceGenerated } | null — voir le bloc
+  // "PROPOSITION AUTOMATIQUE DE BUDGET MENSUEL" plus bas.
+  budgetProposal: null,
   // Rubriques dont les sous-rubriques sont actuellement dépliées (repliées
   // par défaut, voir renderRubriqueRow) — un simple Set d'id, en mémoire
   // pour la session en cours (pas persisté : on repart replié à chaque
@@ -1650,6 +1671,15 @@ async function bootstrapAfterAuth(){
   } catch (err) {
     alert("Vos données n'ont pas pu être chargées : " + authErrorMessage(err) + " — vous pouvez continuer, mais certaines informations manqueront tant que le problème persiste.");
   }
+  // Séparé du bloc critique ci-dessus par choix délibéré : un souci sur la
+  // proposition automatique de budget (fonctionnalité secondaire) ne doit
+  // jamais empêcher le chargement du reste de l'application.
+  try {
+    const propRes = await apiFetch('/api/budget-proposals/current', { auth: true });
+    state.budgetProposal = propRes.current;
+  } catch (err) {
+    state.budgetProposal = null;
+  }
   populateCategorySelect();
   populateBudgetCategorySelect();
   populateEventCategorySelect();
@@ -1678,7 +1708,8 @@ async function onAuthenticated(data){
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
   session = { accessToken: null, refreshToken: null, user: null };
-  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set();
+  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set(); state.budgetProposal = null;
+  reminderRecordedForProposalId = null;
   chatInitialized = false;
   selectedProjectId = null;
   document.getElementById('appShell').hidden = true;
@@ -2030,13 +2061,12 @@ function initVoiceInput(btnId, statusId, onParsed){
 }
 
 /* ===================== NAVIGATION ===================== */
+function switchToView(viewName){
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.view===viewName));
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active', v.id==='view-'+viewName));
+}
 document.querySelectorAll('.nav-btn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('view-'+btn.dataset.view).classList.add('active');
-  });
+  btn.addEventListener('click', ()=>switchToView(btn.dataset.view));
 });
 
 document.getElementById('themeBtn').addEventListener('click', ()=>{
@@ -4148,6 +4178,13 @@ const BUDGET_WIZARD_TIER_KEYS = Object.keys(BUDGET_WIZARD_TEMPLATES).map(Number)
 
 let wizardRows = []; // [{ _id, titre, type:'depense'|'revenu', categorie, montant, jour }]
 let wizardNextId = 1;
+// Identifiant de la proposition automatique en cours d'édition dans le
+// wizard, ou null si le wizard a été ouvert de façon classique (tranche de
+// revenu) — voir openBudgetWizard, wizardLoadFromProposal et la validation
+// de wizardValidate plus bas. Ne jamais confondre un wizard "tranche" avec un
+// wizard "proposition" : seul ce dernier doit clore la proposition serveur
+// (decide) après une validation réussie.
+let wizardActiveProposalId = null;
 
 function wizardNearestTierTemplate(amount){
   let best = BUDGET_WIZARD_TIER_KEYS[0];
@@ -4254,26 +4291,36 @@ function wizardRegenerate(){
   renderWizardTotals();
 }
 
+/** Révèle la carte du wizard et remet à zéro son message de résultat — partagé
+ * entre l'ouverture classique (tranche de revenu) et l'ouverture depuis la
+ * bannière de proposition automatique (wizardLoadFromProposal). */
+function openWizardCardShell(){
+  const card = document.getElementById('budgetWizardCard');
+  card.style.display = 'block';
+  document.getElementById('plannerFormCard').style.display = 'none';
+  document.getElementById('wizardResultMsg').innerHTML = '';
+  card.scrollIntoView({ behavior:'smooth', block:'start' });
+  return card;
+}
+
 document.getElementById('openBudgetWizard').addEventListener('click', ()=>{
   const card = document.getElementById('budgetWizardCard');
   const willOpen = card.style.display === 'none';
-  card.style.display = willOpen ? 'block' : 'none';
-  if(willOpen){
-    document.getElementById('plannerFormCard').style.display = 'none';
-    document.getElementById('wizardResultMsg').innerHTML = '';
-    if(!document.getElementById('wizardMonth').value){
-      document.getElementById('wizardMonth').value = todayISO(0).slice(0,7);
-    }
-    wizardRegenerate();
-    card.scrollIntoView({ behavior:'smooth', block:'start' });
+  if(!willOpen){ card.style.display = 'none'; return; }
+  wizardActiveProposalId = null;
+  openWizardCardShell();
+  if(!document.getElementById('wizardMonth').value){
+    document.getElementById('wizardMonth').value = todayISO(0).slice(0,7);
   }
+  wizardRegenerate();
 });
 document.getElementById('wizardCancel').addEventListener('click', ()=>{
   document.getElementById('budgetWizardCard').style.display = 'none';
+  wizardActiveProposalId = null;
 });
 document.getElementById('wizardTier').addEventListener('change', (e)=>{
   document.getElementById('wizardCustomAmountField').style.display = e.target.value==='custom' ? '' : 'none';
-  if(e.target.value!=='custom') wizardRegenerate();
+  if(e.target.value!=='custom'){ wizardActiveProposalId = null; wizardRegenerate(); }
 });
 document.getElementById('wizardRegenerate').addEventListener('click', wizardRegenerate);
 document.getElementById('wizardAddRow').addEventListener('click', ()=>{
@@ -4337,8 +4384,98 @@ document.getElementById('wizardValidate').addEventListener('click', async ()=>{
     html += `<div style="color:var(--critical); margin-top:6px;">Échecs : ${[...eventErrors, ...budgetErrors].join(' ; ')}</div>`;
   } else {
     document.getElementById('budgetWizardCard').style.display = 'none';
+    // Si ce wizard a été ouvert depuis la bannière de proposition
+    // automatique, l'intégration vient de réussir intégralement : on clôt la
+    // proposition côté serveur ("validated") pour qu'elle ne soit plus
+    // jamais proposée/rappelée. Tolérant à l'échec (la proposition resterait
+    // simplement "pending" et serait rappelée plus tard — pas une perte de
+    // données, les écritures planner/budget ci-dessus ont déjà réussi).
+    if(wizardActiveProposalId){
+      try {
+        await apiFetch(`/api/budget-proposals/${wizardActiveProposalId}/decide`, { method:'POST', auth:true, body:{ status:'validated' } });
+      } catch(err){ /* non bloquant : voir commentaire ci-dessus */ }
+      state.budgetProposal = null;
+      wizardActiveProposalId = null;
+      renderBudgetProposalBanner();
+    }
   }
   msgEl.innerHTML = html;
+});
+
+/* ===================== PROPOSITION AUTOMATIQUE DE BUDGET MENSUEL =====================
+ * Quelques jours avant le début du mois suivant, le serveur propose de
+ * reprendre les événements planner non récurrents du mois en cours comme
+ * point de départ du mois suivant (voir budgetProposalService.ts). La
+ * bannière ci-dessous (visible sur toutes les vues) relaie cette proposition ;
+ * "Vérifier et valider" ouvre le même wizard que "✨ Proposer un budget
+ * mensuel", pré-rempli à partir de la proposition plutôt que d'une tranche de
+ * revenu — entièrement modifiable avant validation définitive, comme pour le
+ * wizard classique.
+ */
+// Empêche de compter deux fois le même rappel si renderAll() est appelé
+// plusieurs fois sans rechargement de la proposition (ex. après une autre
+// action de l'utilisateur) : on ne signale "rappel affiché" qu'une fois par
+// proposition et par chargement de page.
+let reminderRecordedForProposalId = null;
+
+function monthLabelFr(firstOfMonthStr){
+  const d = new Date(firstOfMonthStr + 'T00:00:00Z');
+  return d.toLocaleDateString('fr-FR', { month:'long', year:'numeric', timeZone:'UTC' });
+}
+
+function wizardLoadFromProposal(proposal){
+  wizardActiveProposalId = proposal.id;
+  wizardRows = proposal.items.map(it => ({ _id: wizardNextId++, titre: it.titre, type: it.type, categorie: it.categorie, montant: it.montant, jour: it.jour }));
+  document.getElementById('wizardMonth').value = proposal.target_month.slice(0, 7);
+  renderWizardRows();
+  renderWizardTotals();
+}
+
+function renderBudgetProposalBanner(){
+  const banner = document.getElementById('budgetProposalBanner');
+  const entry = state.budgetProposal;
+  if(!entry || entry.proposal.status !== 'pending'){
+    banner.style.display = 'none';
+    return;
+  }
+  document.getElementById('budgetProposalMonthLabel').textContent = monthLabelFr(entry.proposal.target_month);
+  banner.style.display = 'block';
+
+  // Un rappel n'est signalé au serveur comme "affiché" qu'une fois par
+  // proposition tant que la page n'est pas rechargée — recordReminderShown
+  // côté serveur gère lui-même l'espacement réel entre deux rappels (voir
+  // computeShouldRemind) ; ceci évite seulement un double comptage si
+  // renderBudgetProposalBanner() est appelé plusieurs fois de suite ici.
+  if(entry.shouldRemind && reminderRecordedForProposalId !== entry.proposal.id){
+    reminderRecordedForProposalId = entry.proposal.id;
+    apiFetch(`/api/budget-proposals/${entry.proposal.id}/reminder-shown`, { method:'POST', auth:true })
+      .then(result => {
+        if(result.autoApplied){
+          state.budgetProposal = null;
+          renderBudgetProposalBanner();
+          alert(`Le budget de ${monthLabelFr(result.proposal.target_month)} n'a pas été validé à temps : il a été appliqué automatiquement (modifiable à tout moment dans Planner financier et Budget).`);
+          bootstrapAfterAuth();
+        }
+      })
+      .catch(()=>{ /* non bloquant : un rappel non comptabilisé sera simplement renvoyé au prochain chargement */ });
+  }
+}
+
+document.getElementById('budgetProposalReview').addEventListener('click', ()=>{
+  const entry = state.budgetProposal;
+  if(!entry) return;
+  switchToView('planner');
+  openWizardCardShell();
+  wizardLoadFromProposal(entry.proposal);
+});
+document.getElementById('budgetProposalDismiss').addEventListener('click', async ()=>{
+  const entry = state.budgetProposal;
+  if(!entry) return;
+  try {
+    await apiFetch(`/api/budget-proposals/${entry.proposal.id}/decide`, { method:'POST', auth:true, body:{ status:'dismissed' } });
+  } catch(err){ alert("Impossible d'ignorer ce mois pour l'instant : " + authErrorMessage(err)); return; }
+  state.budgetProposal = null;
+  renderBudgetProposalBanner();
 });
 
 function eventStatusInfo(ev){
@@ -5630,6 +5767,7 @@ function renderAll(){
   renderPlanner();
   renderAssistant();
   renderStats();
+  renderBudgetProposalBanner();
 }
 
 populateCategorySelect();
