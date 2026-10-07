@@ -179,6 +179,15 @@ export const setPlannerEventStatusSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Proposition automatique de budget mensuel — voir budgetProposalService.ts.
+// Pas de schéma pour GET /current ni POST /:id/reminder-shown (aucun corps
+// attendu) ; seule la décision explicite de l'utilisateur a un corps.
+// ---------------------------------------------------------------------------
+export const decideBudgetProposalSchema = z.object({
+  status: z.enum(["validated", "dismissed"]),
+});
+
+// ---------------------------------------------------------------------------
 // Assistant IA — `context` est un résumé déjà calculé côté client (solde,
 // budgets, score de santé...), jamais les lignes de transactions brutes : on
 // accepte un objet libre plutôt qu'un schéma rigide pour ne pas devoir faire
