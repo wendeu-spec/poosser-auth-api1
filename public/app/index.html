@@ -823,6 +823,42 @@
     <div id="projectDetailState" style="display:none;">
       <button type="button" class="btn btn-ghost" id="backToProjects" style="margin-bottom:16px;">← Tous les projets</button>
       <div class="project-detail-head" id="projectDetailHead"></div>
+
+      <div class="card" id="projectEditFormCard" style="margin-bottom:18px; display:none;">
+        <h3>Modifier le projet</h3>
+        <form id="projectEditForm" class="form-grid">
+          <div class="field">
+            <label>Nom du projet</label>
+            <input type="text" id="projEditName" placeholder="Ex: Construction maison" required>
+          </div>
+          <div class="field">
+            <label>Icône</label>
+            <select id="projEditIcon">
+              <option value="📁">📁 Général</option>
+              <option value="🏠">🏠 Construction / logement</option>
+              <option value="✈️">✈️ Voyage</option>
+              <option value="💍">💍 Mariage / événement</option>
+              <option value="🎓">🎓 Études</option>
+              <option value="🛠️">🛠️ Activité / commerce</option>
+              <option value="🚗">🚗 Véhicule</option>
+              <option value="❤️">❤️ Santé / famille</option>
+            </select>
+          </div>
+          <div class="field">
+            <label id="projEditTargetLabel">Objectif (FCFA, optionnel)</label>
+            <input type="number" id="projEditTarget" min="1" placeholder="Ex: 5000000">
+          </div>
+          <div class="field">
+            <label>Date cible (optionnel)</label>
+            <input type="date" id="projEditTargetDate">
+          </div>
+          <div class="field" style="display:flex; flex-direction:row; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Enregistrer</button>
+            <button type="button" class="btn btn-ghost" id="projEditCancel">Annuler</button>
+          </div>
+        </form>
+      </div>
+
       <div class="project-detail-tiles" id="projectDetailTiles"></div>
       <div id="projectDetailProgress" style="margin-bottom:18px;"></div>
       <div class="project-actions" id="projectDetailActions" style="margin-bottom:18px;"></div>
@@ -1794,6 +1830,7 @@ function applyCurrencyLabels(){
   set('revDepSubLabel', `6 derniers mois, en ${u}`);
   set('txAmountLabel', `Montant (${u})`);
   set('projTargetLabel', `Objectif (${u}, optionnel)`);
+  set('projEditTargetLabel', `Objectif (${u}, optionnel)`);
   set('rubPlannedLabel', `Enveloppe (${u}, optionnel)`);
   set('budgetLimitLabel', `Limite mensuelle (${u})`);
   set('goalTargetLabel', `Montant cible (${u})`);
@@ -3088,6 +3125,12 @@ function showProjectDetail(id){
   selectedProjectId = id;
   document.getElementById('projectListState').style.display = 'none';
   document.getElementById('projectDetailState').style.display = 'block';
+  // Referme le formulaire de modification à chaque VRAIE navigation vers un
+  // projet (pas à chaque simple rafraîchissement — voir renderProjectDetail,
+  // appelée aussi par renderAll() lors d'un changement de thème ou de
+  // devise : la fermer là aurait fait perdre une modification en cours de
+  // saisie à chaque bascule clair/sombre).
+  document.getElementById('projectEditFormCard').style.display = 'none';
   renderProjectDetail();
 }
 function backToProjectList(){
@@ -3121,6 +3164,7 @@ function renderProjectDetail(){
       <p style="margin:0; color:var(--text-secondary); font-size:13px;">${p.targetDate ? 'Date cible : ' + p.targetDate : "Pas de date cible définie"}</p>
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button type="button" class="btn btn-ghost" id="projEditBtn">✏️ Modifier</button>
       <button type="button" class="btn btn-ghost" id="projMarkDone">${p.status==='termine' ? '↺ Réactiver' : '✓ Marquer terminé'}</button>
       <button type="button" class="btn-danger" id="projDelete">🗑 Supprimer</button>
     </div>
@@ -3156,6 +3200,7 @@ function renderProjectDetail(){
   document.getElementById('projQuickRevenu').addEventListener('click', ()=> goToTransactionForm('revenu', p.id));
   document.getElementById('projExportPdf').addEventListener('click', ()=> exportProjectSheet(p.id, 'pdf'));
   document.getElementById('projExportExcel').addEventListener('click', ()=> exportProjectSheet(p.id, 'excel'));
+  document.getElementById('projEditBtn').addEventListener('click', ()=> openProjectEditForm(p));
   document.getElementById('projMarkDone').addEventListener('click', ()=> toggleProjectDone(p.id));
   document.getElementById('projDelete').addEventListener('click', ()=> deleteProjectWithConfirm(p.id));
 
@@ -3188,6 +3233,51 @@ function applyProjectPatch(p, apiRow){
   p.targetDate = apiRow.target_date;
   p.status = apiRow.status;
 }
+
+// Ouvre le formulaire de modification pré-rempli avec les valeurs actuelles
+// du projet — même principe que openRubriqueEditForm plus bas : un seul
+// formulaire, réutilisé, jamais de double saisie de ce qui est déjà connu.
+// targetAmount n'a pas d'équivalent "retirer la valeur" ici (contrairement à
+// parentRubriqueId pour les rubriques) : un champ vidé est juste ignoré par
+// le serveur (COALESCE côté updateProject), l'objectif existant est alors
+// conservé tel quel plutôt que supprimé — cohérent avec le formulaire de
+// création où l'objectif est déjà optionnel.
+function openProjectEditForm(p){
+  document.getElementById('projEditName').value = p.name;
+  document.getElementById('projEditIcon').value = p.icon;
+  document.getElementById('projEditTarget').value = p.target || '';
+  document.getElementById('projEditTargetDate').value = p.targetDate || '';
+  document.getElementById('projectEditFormCard').style.display = 'block';
+  document.getElementById('projectEditFormCard').scrollIntoView({ behavior:'smooth', block:'center' });
+  document.getElementById('projEditName').focus();
+}
+document.getElementById('projEditCancel').addEventListener('click', ()=>{
+  document.getElementById('projectEditFormCard').style.display = 'none';
+});
+document.getElementById('projectEditForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const p = projectById(selectedProjectId);
+  if(!p) return;
+  const name = document.getElementById('projEditName').value.trim();
+  const icon = document.getElementById('projEditIcon').value;
+  const targetRaw = document.getElementById('projEditTarget').value;
+  const targetAmount = targetRaw ? parseFloat(targetRaw) : undefined;
+  const targetDate = document.getElementById('projEditTargetDate').value || undefined;
+  if(!name) return;
+  const btn = e.target.querySelector('button[type="submit"]');
+  if(btn) btn.disabled = true;
+  try {
+    const { project } = await apiFetch('/api/projects/' + p.id, { method:'PATCH', auth:true, body:{ name, icon, targetAmount, targetDate } });
+    applyProjectPatch(p, project);
+    document.getElementById('projectEditFormCard').style.display = 'none';
+    populateProjectSelect(); // le nom/icône apparaissent aussi dans la liste déroulante "Projet" du formulaire de transaction
+    renderProjectDetail();
+  } catch(err){
+    alert("Impossible d'enregistrer les modifications : " + authErrorMessage(err));
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+});
 
 /* ----- Rubriques (postes de dépense à l'intérieur d'un projet, imbrication
    à profondeur illimitée : Transport > Billets d'avion > ... ) ----- */
