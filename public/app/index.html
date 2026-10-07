@@ -716,7 +716,14 @@
     </div>
 
     <div class="card">
-      <h3>Historique</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <h3 style="margin:0;">Historique</h3>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-ghost" id="txExportPdf" style="padding:6px 12px; font-size:12.5px;">📄 Export PDF</button>
+          <button type="button" class="btn btn-ghost" id="txExportExcel" style="padding:6px 12px; font-size:12.5px;">📊 Export Excel</button>
+        </div>
+      </div>
+      <div class="sub" style="margin-top:4px;">Les exports reprennent exactement les mouvements affichés ci-dessous (filtres et recherche appliqués).</div>
       <div class="filters" id="txFilters"></div>
 
       <div class="tx-search-row">
@@ -2787,7 +2794,12 @@ function updateTxResetVisibility(){
   if(btn) btn.style.display = txFiltersActive() ? '' : 'none';
 }
 
-function renderTxTable(){
+/** Applique exactement les mêmes filtres (type, recherche rapide, filtres
+ * avancés) que le tableau Historique affiché à l'écran — partagé avec les
+ * exports PDF/Excel (exportTransactionsPDF/Excel) pour qu'un export reflète
+ * toujours exactement ce que l'utilisateur voit au moment où il l'exporte,
+ * jamais la totalité non filtrée des mouvements. */
+function filteredTransactionRows(){
   let rows = [...state.transactions].sort((a,b)=> b.date.localeCompare(a.date));
   if(txTypeFilter!=='all') rows = rows.filter(t=>t.type===txTypeFilter);
 
@@ -2818,6 +2830,11 @@ function renderTxTable(){
   if(txAdvFilters.method) rows = rows.filter(t => t.method === txAdvFilters.method);
   if(txAdvFilters.amountMin !== '') rows = rows.filter(t => t.amount >= Number(txAdvFilters.amountMin));
   if(txAdvFilters.amountMax !== '') rows = rows.filter(t => t.amount <= Number(txAdvFilters.amountMax));
+  return rows;
+}
+
+function renderTxTable(){
+  const rows = filteredTransactionRows();
   document.querySelector('#txTable tbody').innerHTML = rows.map(t=>`
     <tr>
       <td>${t.date}</td>
@@ -2868,6 +2885,91 @@ function renderTxTable(){
     });
   });
 }
+
+/* ----- Export PDF / Excel de l'historique Revenus & Dépenses -----
+ * Même principe que les exports de feuille de projet (exportProjectPDF/
+ * exportProjectExcel ci-dessus) : jsPDF+autotable et SheetJS déjà chargés
+ * depuis cdnjs (voir <head>). Toujours construits à partir de
+ * filteredTransactionRows() pour refléter exactement l'historique affiché au
+ * moment du clic, filtres et recherche compris — jamais la totalité non
+ * filtrée des mouvements. */
+function transactionsExportTitle(){
+  return txFiltersActive() ? 'Historique des revenus et dépenses (filtré)' : 'Historique des revenus et dépenses';
+}
+function transactionsTotals(rows){
+  let totalRevenu = 0, totalDepense = 0;
+  for(const t of rows){ if(t.type==='revenu') totalRevenu += t.amount; else totalDepense += t.amount; }
+  return { totalRevenu, totalDepense, solde: totalRevenu - totalDepense };
+}
+
+function exportTransactionsPDF(){
+  const rows = filteredTransactionRows();
+  if(!rows.length){ alert('Aucun mouvement à exporter pour ce filtre.'); return; }
+  if(!window.jspdf){ alert("Le générateur PDF n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const today = new Date().toLocaleDateString('fr-FR');
+  const totals = transactionsTotals(rows);
+
+  // Pas d'emoji ici : les polices standard de jsPDF (WinAnsi) ne les
+  // affichent pas correctement (voir fmtPdf plus haut pour le même souci
+  // avec le séparateur de milliers).
+  doc.setFontSize(16);
+  doc.text('POOSSER — ' + transactionsExportTitle(), 14, 18);
+  doc.setFontSize(9);
+  doc.setTextColor(100);
+  doc.text(`Généré le ${today} — ${rows.length} mouvement(s)`, 14, 25);
+
+  const body = rows.map(t=>[
+    t.date,
+    t.type==='revenu' ? 'Revenu' : 'Dépense',
+    t.category, t.method, t.note||'',
+    (t.type==='revenu'?'+':'-') + ' ' + fmtPdf(t.amount),
+  ]);
+
+  doc.autoTable({
+    startY: 31,
+    head: [['Date','Type','Catégorie','Méthode','Note','Montant']],
+    body,
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [42, 120, 214] },
+    foot: [
+      ['', '', '', '', 'Total revenus', fmtPdf(totals.totalRevenu)],
+      ['', '', '', '', 'Total dépenses', fmtPdf(totals.totalDepense)],
+      ['', '', '', '', 'Solde', fmtPdf(totals.solde)],
+    ],
+    footStyles: { fillColor: [245,245,245], textColor: 20, fontStyle: 'bold' },
+  });
+
+  doc.save('POOSSER - Historique revenus et depenses.pdf');
+}
+
+function exportTransactionsExcel(){
+  const rows = filteredTransactionRows();
+  if(!rows.length){ alert('Aucun mouvement à exporter pour ce filtre.'); return; }
+  if(!window.XLSX){ alert("Le générateur Excel n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
+  const totals = transactionsTotals(rows);
+
+  const aoa = [
+    ['POOSSER — ' + transactionsExportTitle()],
+    [`Généré le ${new Date().toLocaleDateString('fr-FR')} — ${rows.length} mouvement(s)`],
+    [],
+    ['Date','Type','Catégorie','Méthode','Note','Montant'],
+    ...rows.map(t=>[t.date, t.type==='revenu'?'Revenu':'Dépense', t.category, t.method, t.note||'', (t.type==='revenu'?1:-1)*t.amount]),
+    [],
+    ['','','','','Total revenus', totals.totalRevenu],
+    ['','','','','Total dépenses', totals.totalDepense],
+    ['','','','','Solde', totals.solde],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:12},{wch:10},{wch:16},{wch:18},{wch:28},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Historique');
+  XLSX.writeFile(wb, 'POOSSER - Historique revenus et depenses.xlsx');
+}
+
+document.getElementById('txExportPdf').addEventListener('click', exportTransactionsPDF);
+document.getElementById('txExportExcel').addEventListener('click', exportTransactionsExcel);
 
 /* ===================== BUDGET VIEW ===================== */
 function populateBudgetCategorySelect(){
