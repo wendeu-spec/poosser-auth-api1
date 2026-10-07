@@ -62,6 +62,13 @@ const envSchema = z.object({
   RATE_LIMIT_CHANGE_PIN_PER_USER: z.coerce.number().int().positive().default(5),
   RATE_LIMIT_CHANGE_PIN_PER_USER_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  AI_PROVIDER: z.enum(["console", "anthropic"]).default("console"),
+  ANTHROPIC_API_KEY: z.string().optional().default(""),
+  ANTHROPIC_MODEL: z.string().optional().default("claude-3-5-haiku-20241022"),
+
+  RATE_LIMIT_ASSISTANT_PER_USER: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_ASSISTANT_PER_USER_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   DEFAULT_PHONE_COUNTRY: z.string().length(2).default("CM"),
   DEFAULT_LOCALE: z.enum(["fr", "en"]).default("fr"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
