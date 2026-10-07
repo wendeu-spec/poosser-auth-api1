@@ -69,6 +69,21 @@ const envSchema = z.object({
   RATE_LIMIT_ASSISTANT_PER_USER: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_ASSISTANT_PER_USER_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // Proposition automatique de budget mensuel (reprise des éléments du mois
+  // précédent) : génération déclenchée paresseusement à partir du jour
+  // configuré du mois en cours, jamais par une tâche planifiée (voir
+  // budgetProposalService.ts). Cadence de rappel dégressive et plafonnée :
+  // un rappel par jour les BUDGET_PROPOSAL_REMINDER_EARLY_DAYS premiers
+  // jours (espacés d'au moins ..._GAP_HOURS_EARLY), puis jusqu'à deux par
+  // jour ensuite (..._GAP_HOURS_LATE), jusqu'à un plafond total de rappels
+  // affichés — au-delà, le budget proposé est appliqué automatiquement
+  // (modifiable ensuite) plutôt que de rappeler indéfiniment.
+  BUDGET_PROPOSAL_GENERATE_DAY_OF_MONTH: z.coerce.number().int().min(1).max(28).default(25),
+  BUDGET_PROPOSAL_REMINDER_EARLY_DAYS: z.coerce.number().int().positive().default(3),
+  BUDGET_PROPOSAL_REMINDER_GAP_HOURS_EARLY: z.coerce.number().int().positive().default(24),
+  BUDGET_PROPOSAL_REMINDER_GAP_HOURS_LATE: z.coerce.number().int().positive().default(12),
+  BUDGET_PROPOSAL_REMINDER_CAP: z.coerce.number().int().positive().default(10),
+
   DEFAULT_PHONE_COUNTRY: z.string().length(2).default("CM"),
   DEFAULT_LOCALE: z.enum(["fr", "en"]).default("fr"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
