@@ -841,6 +841,33 @@
         </form>
       </div>
 
+      <div class="card" id="projectFiltersCard" style="margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+          <h3 style="margin:0;">Filtrer les projets</h3>
+          <span class="sub" id="projectFilterCount" style="margin:0;"></span>
+        </div>
+        <div class="sub" style="margin-top:4px;">Affinez l'affichage par statut, recherchez par nom ou changez le tri.</div>
+        <div class="filters" id="projectStatusFilters"></div>
+        <div class="tx-search-row">
+          <div class="field" style="flex:1; min-width:200px;">
+            <label>Rechercher un projet</label>
+            <input type="text" id="projectSearchInput" placeholder="Rechercher par nom…">
+          </div>
+          <div class="field" style="min-width:180px;">
+            <label>Trier par</label>
+            <select id="projectSortSelect">
+              <option value="recent">Plus récents</option>
+              <option value="name">Nom (A → Z)</option>
+              <option value="balance">Solde (décroissant)</option>
+              <option value="progress">Progression (décroissant)</option>
+            </select>
+          </div>
+          <div class="field" style="flex-direction:row; gap:8px;">
+            <button type="button" class="btn btn-ghost" id="projectResetFilters" style="display:none;">✕ Réinitialiser</button>
+          </div>
+        </div>
+      </div>
+
       <div class="goals-grid" id="projectsGrid"></div>
     </div>
 
@@ -3152,6 +3179,82 @@ function renderGoals(){
 /* ===================== PROJETS VIEW ===================== */
 const PROJECT_STATUS_LABELS = { actif: 'Actif', termine: 'Terminé', archive: 'Archivé' };
 
+// Filtres de la liste des projets — même principe que les filtres de
+// l'historique des transactions (txTypeFilter/txSearchField/txAdvFilters) :
+// un filtre rapide par statut (chips), une recherche texte par nom
+// (insensible à la casse/aux accents via normalizeText, déjà utilisée pour
+// la saisie vocale) et un tri, cumulables. Avec la liste des projets non
+// paginée côté serveur (GET /api/projects renvoie tout), ces filtres sont le
+// seul moyen de s'y retrouver dès qu'un utilisateur accumule plusieurs
+// projets actifs et archivés.
+let projectStatusFilter = 'all';
+let projectSearchValue = '';
+let projectSortBy = 'recent';
+function projectFiltersActive(){
+  return projectStatusFilter !== 'all' || projectSearchValue !== '' || projectSortBy !== 'recent';
+}
+// Point d'agrégation unique (comme filteredTransactionRows() pour
+// l'historique) : renderProjects() ET tout futur export/compteur doivent
+// passer par ici pour rester garantis cohérents avec ce qui est affiché.
+function filteredSortedProjects(){
+  const q = normalizeText(projectSearchValue.trim());
+  let rows = state.projects.filter(p=>{
+    if(projectStatusFilter !== 'all' && p.status !== projectStatusFilter) return false;
+    if(q && !normalizeText(p.name).includes(q)) return false;
+    return true;
+  });
+  const statsCache = new Map();
+  const statsOf = (p) => {
+    if(!statsCache.has(p.id)) statsCache.set(p.id, projectStats(p.id));
+    return statsCache.get(p.id);
+  };
+  if(projectSortBy === 'name'){
+    rows = rows.slice().sort((a,b)=> a.name.localeCompare(b.name, 'fr'));
+  } else if(projectSortBy === 'balance'){
+    rows = rows.slice().sort((a,b)=> statsOf(b).balance - statsOf(a).balance);
+  } else if(projectSortBy === 'progress'){
+    const progressOf = (p) => p.target ? statsOf(p).balance / p.target : -Infinity;
+    rows = rows.slice().sort((a,b)=> progressOf(b) - progressOf(a));
+  }
+  // 'recent' : l'ordre renvoyé par l'API (ORDER BY created_at DESC) est déjà
+  // le bon, aucun tri supplémentaire nécessaire.
+  return rows;
+}
+function renderProjectFilters(){
+  const opts = [['all','Tous'],['actif','Actif'],['termine','Terminé'],['archive','Archivé']];
+  document.getElementById('projectStatusFilters').innerHTML = opts.map(([v,l])=>
+    `<button type="button" class="chip ${projectStatusFilter===v?'active':''}" data-f="${v}">${l}</button>`).join('');
+  document.querySelectorAll('#projectStatusFilters .chip').forEach(c=>{
+    c.addEventListener('click', ()=>{ projectStatusFilter = c.dataset.f; renderProjects(); renderProjectFilters(); });
+  });
+
+  const searchInput = document.getElementById('projectSearchInput');
+  searchInput.value = projectSearchValue;
+  searchInput.oninput = (e) => { projectSearchValue = e.target.value; renderProjects(); updateProjectResetVisibility(); };
+
+  const sortSelect = document.getElementById('projectSortSelect');
+  sortSelect.value = projectSortBy;
+  sortSelect.onchange = (e) => { projectSortBy = e.target.value; renderProjects(); updateProjectResetVisibility(); };
+
+  document.getElementById('projectResetFilters').onclick = () => {
+    projectStatusFilter = 'all'; projectSearchValue = ''; projectSortBy = 'recent';
+    renderProjectFilters();
+    renderProjects();
+  };
+
+  updateProjectResetVisibility();
+}
+function updateProjectResetVisibility(){
+  const btn = document.getElementById('projectResetFilters');
+  if(btn) btn.style.display = projectFiltersActive() ? '' : 'none';
+  const countEl = document.getElementById('projectFilterCount');
+  if(countEl){
+    countEl.textContent = (state.projects.length && projectFiltersActive())
+      ? `${filteredSortedProjects().length} / ${state.projects.length} projet(s)`
+      : '';
+  }
+}
+
 document.getElementById('openProjectForm').addEventListener('click', ()=>{
   const card = document.getElementById('projectFormCard');
   const willShow = card.style.display === 'none';
@@ -3253,6 +3356,7 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
     renderProjRubriqueChips();
     document.getElementById('projectFormCard').style.display = 'none';
     populateProjectSelect();
+    renderProjectFilters();
     renderProjects();
   } catch(err){
     alert("Impossible de créer le projet : " + authErrorMessage(err));
@@ -3263,11 +3367,22 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
 
 function renderProjects(){
   const grid = document.getElementById('projectsGrid');
+  const filtersCard = document.getElementById('projectFiltersCard');
+  updateProjectResetVisibility();
   if(!state.projects.length){
+    if(filtersCard) filtersCard.style.display = 'none';
     grid.innerHTML = '<div class="empty-state">Aucun projet pour le moment. Créez-en un pour suivre à part le budget d\'une construction, d\'un voyage, d\'un événement, d\'une activité...</div>';
     return;
   }
-  grid.innerHTML = state.projects.map(p=>{
+  if(filtersCard) filtersCard.style.display = '';
+  const rows = filteredSortedProjects();
+  if(!rows.length){
+    grid.innerHTML = '<div class="empty-state">Aucun projet ne correspond à ces filtres. <button type="button" class="btn btn-ghost" id="projectFiltersEmptyReset" style="margin-left:8px;">✕ Réinitialiser les filtres</button></div>';
+    const resetLink = document.getElementById('projectFiltersEmptyReset');
+    if(resetLink) resetLink.addEventListener('click', ()=> document.getElementById('projectResetFilters').click());
+    return;
+  }
+  grid.innerHTML = rows.map(p=>{
     const stats = projectStats(p.id);
     const pct = p.target ? Math.min(Math.max(stats.balance/p.target*100,0),100) : null;
     return `
@@ -3327,6 +3442,7 @@ function backToProjectList(){
   selectedProjectId = null;
   document.getElementById('projectDetailState').style.display = 'none';
   document.getElementById('projectListState').style.display = 'block';
+  renderProjectFilters();
   renderProjects();
 }
 document.getElementById('backToProjects').addEventListener('click', backToProjectList);
@@ -5873,6 +5989,7 @@ function renderAll(){
   renderFavorites();
   renderBudget();
   renderGoals();
+  renderProjectFilters();
   renderProjects();
   if(selectedProjectId) renderProjectDetail();
   renderTontines();
