@@ -949,8 +949,81 @@
       </div>
 
       <div class="card">
-        <h3>Mouvements du projet</h3>
-        <div class="sub">Comptabilisés dans l'historique général, mais exclus du Budget par catégorie (étiquette "Projet" — suivi séparément ici)</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+          <h3 style="margin:0;">Mouvements du projet</h3>
+          <span class="sub" id="projTxFilterCount" style="margin:0;"></span>
+        </div>
+        <div class="sub" style="margin-top:4px;">Comptabilisés dans l'historique général, mais exclus du Budget par catégorie (étiquette "Projet" — suivi séparément ici)</div>
+
+        <div class="filters" id="projTxFilters"></div>
+
+        <div class="tx-search-row">
+          <div class="field" style="min-width:150px;">
+            <label>Rechercher par</label>
+            <select id="projTxSearchField">
+              <option value="note">Note</option>
+              <option value="date">Date</option>
+              <option value="type">Type</option>
+              <option value="category">Catégorie</option>
+              <option value="rubrique">Rubrique</option>
+              <option value="method">Méthode</option>
+              <option value="amount">Montant</option>
+            </select>
+          </div>
+          <div class="field" style="flex:1; min-width:200px;">
+            <label>Valeur</label>
+            <div id="projTxSearchValueWrap"></div>
+          </div>
+          <div class="field" style="min-width:180px;">
+            <label>Trier par</label>
+            <select id="projTxSortSelect">
+              <option value="date_desc">Date (plus récent)</option>
+              <option value="date_asc">Date (plus ancien)</option>
+              <option value="amount_desc">Montant (décroissant)</option>
+              <option value="amount_asc">Montant (croissant)</option>
+              <option value="category_asc">Catégorie (A → Z)</option>
+            </select>
+          </div>
+          <div class="field" style="flex-direction:row; gap:8px;">
+            <button type="button" class="btn btn-ghost" id="projTxToggleAdvanced">Filtres avancés ▾</button>
+            <button type="button" class="btn btn-ghost" id="projTxResetFilters" style="display:none;">✕ Réinitialiser</button>
+          </div>
+        </div>
+
+        <div class="tx-advanced-panel" id="projTxAdvancedPanel" style="display:none;">
+          <div class="form-grid" style="margin-bottom:0;">
+            <div class="field">
+              <label>Du</label>
+              <input type="date" id="projTxAdvDateFrom">
+            </div>
+            <div class="field">
+              <label>Au</label>
+              <input type="date" id="projTxAdvDateTo">
+            </div>
+            <div class="field">
+              <label>Rubrique</label>
+              <select id="projTxAdvRubrique"><option value="">Toutes</option></select>
+            </div>
+            <div class="field">
+              <label>Méthode</label>
+              <select id="projTxAdvMethod">
+                <option value="">Toutes</option>
+                <option>Mobile Money</option>
+                <option>Espèces</option>
+                <option>Virement bancaire</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Montant min.</label>
+              <input type="number" id="projTxAdvAmountMin" min="0" placeholder="Ex: 5000">
+            </div>
+            <div class="field">
+              <label>Montant max.</label>
+              <input type="number" id="projTxAdvAmountMax" min="0" placeholder="Ex: 50000">
+            </div>
+          </div>
+        </div>
+
         <table id="projectTxTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Rubrique</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
@@ -3426,6 +3499,190 @@ function renderProjects(){
   });
 }
 
+// Filtres/tri du tableau "Mouvements du projet" (intérieur d'une fiche
+// projet) — même principe à trois niveaux que l'historique des transactions
+// (chips de type, recherche par champ choisi, panneau de filtres avancés),
+// PLUS un tri explicite (date/montant/catégorie, croissant ou décroissant :
+// le "tri plus approfondi" demandé) et une variante propre à ce contexte,
+// absente de l'historique général : un filtre par Rubrique (sous-catégorie
+// interne au projet). État indépendant de txTypeFilter/txSearchField (vue
+// Transactions) ET de projectStatusFilter/projectSearchValue (liste des
+// Projets, qui filtre des PROJETS, pas des transactions) — préfixe `projTx`
+// pour ne pas confondre les trois. Réinitialisé à chaque navigation vers un
+// projet (voir showProjectDetail ci-dessous) : une recherche laissée active
+// en quittant un projet n'a pas de sens une fois sur un AUTRE projet.
+let projTxTypeFilter = 'all';
+let projTxSearchField = 'note';
+let projTxSearchValue = '';
+let projTxSortBy = 'date_desc';
+const projTxAdvFilters = { dateFrom: '', dateTo: '', rubriqueId: '', method: '', amountMin: '', amountMax: '' };
+function resetProjTxFilters(){
+  projTxTypeFilter = 'all'; projTxSearchField = 'note'; projTxSearchValue = ''; projTxSortBy = 'date_desc';
+  projTxAdvFilters.dateFrom = ''; projTxAdvFilters.dateTo = ''; projTxAdvFilters.rubriqueId = '';
+  projTxAdvFilters.method = ''; projTxAdvFilters.amountMin = ''; projTxAdvFilters.amountMax = '';
+}
+function projTxFiltersActive(){
+  return projTxTypeFilter !== 'all' || projTxSearchValue !== '' || projTxSortBy !== 'date_desc'
+    || !!projTxAdvFilters.dateFrom || !!projTxAdvFilters.dateTo || !!projTxAdvFilters.rubriqueId
+    || !!projTxAdvFilters.method || projTxAdvFilters.amountMin !== '' || projTxAdvFilters.amountMax !== '';
+}
+// Point d'agrégation unique pour ce tableau (même principe que
+// filteredTransactionRows()/filteredSortedProjects() ailleurs) : une seule
+// fonction qui applique filtre + recherche + filtres avancés + tri, pour
+// garantir que l'affichage reste cohérent avec lui-même. Volontairement
+// indépendant de exportProjectSheet() : la "Feuille de projet" PDF/Excel
+// reste un document officiel complet du projet (rubriques + totaux réels),
+// non affecté par une recherche ponctuelle dans le tableau à l'écran.
+function filteredSortedProjectTxRows(projectId){
+  const q = normalizeText(projTxSearchValue.trim());
+  let rows = state.transactions.filter(t=>{
+    if(t.projectId !== projectId) return false;
+    if(projTxTypeFilter !== 'all' && t.type !== projTxTypeFilter) return false;
+    if(projTxAdvFilters.dateFrom && t.date < projTxAdvFilters.dateFrom) return false;
+    if(projTxAdvFilters.dateTo && t.date > projTxAdvFilters.dateTo) return false;
+    if(projTxAdvFilters.rubriqueId && t.rubriqueId !== projTxAdvFilters.rubriqueId) return false;
+    if(projTxAdvFilters.method && t.method !== projTxAdvFilters.method) return false;
+    if(projTxAdvFilters.amountMin !== '' && t.amount < Number(projTxAdvFilters.amountMin)) return false;
+    if(projTxAdvFilters.amountMax !== '' && t.amount > Number(projTxAdvFilters.amountMax)) return false;
+    if(q){
+      const rub = t.rubriqueId ? rubriqueById(t.rubriqueId) : null;
+      let field;
+      if(projTxSearchField === 'date') field = t.date;
+      else if(projTxSearchField === 'type') field = t.type === 'revenu' ? 'revenu' : 'depense';
+      else if(projTxSearchField === 'category') field = t.category;
+      else if(projTxSearchField === 'rubrique') field = rub ? rub.name : 'non classé';
+      else if(projTxSearchField === 'method') field = t.method;
+      else if(projTxSearchField === 'amount') field = String(t.amount);
+      else field = t.note || '';
+      if(!normalizeText(field).includes(q)) return false;
+    }
+    return true;
+  });
+  rows = rows.slice();
+  if(projTxSortBy === 'date_asc') rows.sort((a,b)=> a.date.localeCompare(b.date));
+  else if(projTxSortBy === 'amount_desc') rows.sort((a,b)=> b.amount - a.amount);
+  else if(projTxSortBy === 'amount_asc') rows.sort((a,b)=> a.amount - b.amount);
+  else if(projTxSortBy === 'category_asc') rows.sort((a,b)=> a.category.localeCompare(b.category, 'fr'));
+  else rows.sort((a,b)=> b.date.localeCompare(a.date)); // 'date_desc' (défaut, inchangé par rapport à avant)
+  return rows;
+}
+function renderProjTxSearchValueInput(){
+  const wrap = document.getElementById('projTxSearchValueWrap');
+  let html;
+  if(projTxSearchField === 'type'){
+    html = `<select id="projTxSearchValueCtrl">
+      <option value="">— Choisir —</option>
+      <option value="revenu">Revenu</option>
+      <option value="depense">Dépense</option>
+    </select>`;
+  } else if(projTxSearchField === 'category'){
+    const cats = [...new Set([...revenuCategories(), ...depenseCategories()])];
+    html = `<select id="projTxSearchValueCtrl"><option value="">— Choisir —</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`;
+  } else if(projTxSearchField === 'rubrique'){
+    const rubs = rubriquesForProject(selectedProjectId);
+    html = `<select id="projTxSearchValueCtrl"><option value="">— Choisir —</option><option value="non classé">Non classé</option>${rubs.map(r=>`<option value="${r.name}">${r.parentId?'— ':''}${r.name}</option>`).join('')}</select>`;
+  } else if(projTxSearchField === 'method'){
+    const methods = ['Mobile Money','Espèces','Virement bancaire'];
+    html = `<select id="projTxSearchValueCtrl"><option value="">— Choisir —</option>${methods.map(m=>`<option value="${m}">${m}</option>`).join('')}</select>`;
+  } else if(projTxSearchField === 'date'){
+    html = `<input type="date" id="projTxSearchValueCtrl">`;
+  } else if(projTxSearchField === 'amount'){
+    html = `<input type="number" id="projTxSearchValueCtrl" min="0" step="1" placeholder="Ex: 15000">`;
+  } else { // note
+    html = `<input type="text" id="projTxSearchValueCtrl" placeholder="Rechercher dans les notes…">`;
+  }
+  wrap.innerHTML = html;
+  const ctrl = document.getElementById('projTxSearchValueCtrl');
+  ctrl.value = projTxSearchValue;
+  const evt = (ctrl.tagName === 'SELECT' || ctrl.type === 'date') ? 'change' : 'input';
+  ctrl.addEventListener(evt, () => { projTxSearchValue = ctrl.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); });
+}
+function renderProjTxFilters(projectId){
+  const opts = [['all','Tous'],['revenu','Revenus'],['depense','Dépenses']];
+  document.getElementById('projTxFilters').innerHTML = opts.map(([v,l])=>
+    `<button type="button" class="chip ${projTxTypeFilter===v?'active':''}" data-f="${v}">${l}</button>`).join('');
+  document.querySelectorAll('#projTxFilters .chip').forEach(c=>{
+    c.addEventListener('click', ()=>{ projTxTypeFilter = c.dataset.f; renderProjectDetailTxTable(); renderProjTxFilters(projectId); });
+  });
+
+  const fieldSelect = document.getElementById('projTxSearchField');
+  fieldSelect.value = projTxSearchField;
+  fieldSelect.onchange = () => { projTxSearchField = fieldSelect.value; projTxSearchValue = ''; renderProjTxSearchValueInput(); renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+  renderProjTxSearchValueInput();
+
+  const sortSelect = document.getElementById('projTxSortSelect');
+  sortSelect.value = projTxSortBy;
+  sortSelect.onchange = (e) => { projTxSortBy = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+
+  const advRubrique = document.getElementById('projTxAdvRubrique');
+  const rubs = rubriquesForProject(projectId);
+  advRubrique.innerHTML = '<option value="">Toutes</option>' + rubs.map(r=>`<option value="${r.id}">${r.parentId?'— ':''}${r.name}</option>`).join('');
+  document.getElementById('projTxAdvDateFrom').value = projTxAdvFilters.dateFrom;
+  document.getElementById('projTxAdvDateTo').value = projTxAdvFilters.dateTo;
+  advRubrique.value = projTxAdvFilters.rubriqueId;
+  document.getElementById('projTxAdvMethod').value = projTxAdvFilters.method;
+  document.getElementById('projTxAdvAmountMin').value = projTxAdvFilters.amountMin;
+  document.getElementById('projTxAdvAmountMax').value = projTxAdvFilters.amountMax;
+
+  document.getElementById('projTxAdvDateFrom').onchange = (e) => { projTxAdvFilters.dateFrom = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+  document.getElementById('projTxAdvDateTo').onchange = (e) => { projTxAdvFilters.dateTo = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+  advRubrique.onchange = (e) => { projTxAdvFilters.rubriqueId = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+  document.getElementById('projTxAdvMethod').onchange = (e) => { projTxAdvFilters.method = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+  document.getElementById('projTxAdvAmountMin').oninput = (e) => { projTxAdvFilters.amountMin = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+  document.getElementById('projTxAdvAmountMax').oninput = (e) => { projTxAdvFilters.amountMax = e.target.value; renderProjectDetailTxTable(); updateProjTxResetVisibility(); };
+
+  document.getElementById('projTxToggleAdvanced').onclick = () => {
+    const panel = document.getElementById('projTxAdvancedPanel');
+    const open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : '';
+    document.getElementById('projTxToggleAdvanced').textContent = open ? 'Filtres avancés ▾' : 'Filtres avancés ▴';
+  };
+
+  document.getElementById('projTxResetFilters').onclick = () => {
+    resetProjTxFilters();
+    renderProjTxFilters(projectId);
+    renderProjectDetailTxTable();
+  };
+
+  updateProjTxResetVisibility();
+}
+function updateProjTxResetVisibility(){
+  const btn = document.getElementById('projTxResetFilters');
+  if(btn) btn.style.display = projTxFiltersActive() ? '' : 'none';
+  const countEl = document.getElementById('projTxFilterCount');
+  if(countEl && selectedProjectId){
+    const total = state.transactions.filter(t=>t.projectId===selectedProjectId).length;
+    countEl.textContent = (total && projTxFiltersActive())
+      ? `${filteredSortedProjectTxRows(selectedProjectId).length} / ${total} mouvement(s)`
+      : '';
+  }
+}
+// Reconstruit uniquement le <tbody> du tableau (sans retoucher les tuiles,
+// la tête de page ou la répartition par rubrique) : appelée à chaque
+// interaction avec un filtre, bien plus légère que renderProjectDetail().
+function renderProjectDetailTxTable(){
+  if(!selectedProjectId) return;
+  const rows = filteredSortedProjectTxRows(selectedProjectId);
+  document.querySelector('#projectTxTable tbody').innerHTML = rows.map(t=>{
+    const r = t.rubriqueId ? rubriqueById(t.rubriqueId) : null;
+    return `
+    <tr>
+      <td>${t.date}</td>
+      <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
+      <td>${t.category}</td>
+      <td>${r ? r.name : '<span class="empty-state" style="padding:0; display:inline;">Non classé</span>'}</td>
+      <td>${t.method}</td>
+      <td>${t.note||'—'}</td>
+      <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
+    </tr>`;
+  }).join('') || (projTxFiltersActive()
+    ? `<tr><td colspan="7" class="empty-state">Aucun mouvement ne correspond à ces filtres. <button type="button" class="btn btn-ghost" id="projTxEmptyReset" style="margin-left:8px;">✕ Réinitialiser les filtres</button></td></tr>`
+    : '<tr><td colspan="7" class="empty-state">Aucun mouvement rattaché à ce projet pour le moment.</td></tr>');
+  updateProjTxResetVisibility();
+  const emptyResetBtn = document.getElementById('projTxEmptyReset');
+  if(emptyResetBtn) emptyResetBtn.addEventListener('click', ()=> document.getElementById('projTxResetFilters').click());
+}
+
 function showProjectDetail(id){
   selectedProjectId = id;
   document.getElementById('projectListState').style.display = 'none';
@@ -3436,6 +3693,9 @@ function showProjectDetail(id){
   // devise : la fermer là aurait fait perdre une modification en cours de
   // saisie à chaque bascule clair/sombre).
   document.getElementById('projectEditFormCard').style.display = 'none';
+  // Repart systématiquement d'une recherche vide en entrant sur un projet —
+  // voir le commentaire au-dessus de projTxTypeFilter.
+  resetProjTxFilters();
   renderProjectDetail();
 }
 function backToProjectList(){
@@ -3510,20 +3770,8 @@ function renderProjectDetail(){
   document.getElementById('projMarkDone').addEventListener('click', ()=> toggleProjectDone(p.id));
   document.getElementById('projDelete').addEventListener('click', ()=> deleteProjectWithConfirm(p.id));
 
-  const rows = state.transactions.filter(t=>t.projectId===p.id).sort((a,b)=> b.date.localeCompare(a.date));
-  document.querySelector('#projectTxTable tbody').innerHTML = rows.map(t=>{
-    const r = t.rubriqueId ? rubriqueById(t.rubriqueId) : null;
-    return `
-    <tr>
-      <td>${t.date}</td>
-      <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
-      <td>${t.category}</td>
-      <td>${r ? r.name : '<span class="empty-state" style="padding:0; display:inline;">Non classé</span>'}</td>
-      <td>${t.method}</td>
-      <td>${t.note||'—'}</td>
-      <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="7" class="empty-state">Aucun mouvement rattaché à ce projet pour le moment.</td></tr>';
+  renderProjTxFilters(p.id);
+  renderProjectDetailTxTable();
 
   renderProjectRubriques(p);
 }
