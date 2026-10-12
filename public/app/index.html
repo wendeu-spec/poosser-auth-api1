@@ -630,7 +630,7 @@
       </div>
       <div class="card">
         <h3>Répartition des dépenses</h3>
-        <div class="sub">Par catégorie — mois en cours</div>
+        <div class="sub">Par catégorie — mois en cours (hors mouvements de Projet)</div>
         <div class="donut-wrap" id="donutWrap"></div>
       </div>
     </div>
@@ -923,7 +923,7 @@
 
       <div class="card">
         <h3>Mouvements du projet</h3>
-        <div class="sub">Comptabilisés normalement dans le budget et l'historique général (étiquette "Projet")</div>
+        <div class="sub">Comptabilisés dans l'historique général, mais exclus du Budget par catégorie (étiquette "Projet" — suivi séparément ici)</div>
         <table id="projectTxTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Rubrique</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
@@ -943,7 +943,7 @@
     <div class="grid-2" style="grid-template-columns: 1fr 0.9fr;">
       <div class="card">
         <h3>Suivi par catégorie</h3>
-        <div class="sub">Mois en cours — dépenses réelles vs prévision</div>
+        <div class="sub">Mois en cours — dépenses réelles vs prévision (hors mouvements rattachés à un Projet, suivis dans la vue Projets)</div>
         <div id="budgetList"></div>
       </div>
       <div class="card">
@@ -1947,8 +1947,18 @@ function totalEpargne(){ return state.goals.reduce((a,g)=>a+g.current,0); }
 // Même correction pour les budgets : une "limite mensuelle" doit se comparer
 // à la dépense DU MOIS EN COURS sur cette catégorie, pas à son cumul depuis
 // toujours.
+// Changement validé avec l'utilisateur (reprend la décision initiale de
+// migrations/019_projects.sql, qui comptabilisait les mouvements de projet
+// dans le budget) : un mouvement rattaché à un Projet (projectId renseigné)
+// a déjà son propre suivi dans la vue Projets — il ne doit plus être compté
+// une seconde fois dans le Budget par catégorie, pour éviter le double
+// comptage et la confusion entre les deux suivis. Comme spentByCategory est
+// le point d'agrégation unique utilisé par la vue Budget, les alertes de
+// dépassement, l'assistant IA, le score de santé ET le donut "Répartition
+// des dépenses" du tableau de bord, ce seul filtre suffit à propager le
+// changement partout — voir ces appelants pour la liste complète.
 function spentByCategory(cat){
-  return currentMonthTx().filter(t=>t.type==='depense' && t.category===cat).reduce((a,t)=>a+t.amount,0);
+  return currentMonthTx().filter(t=>t.type==='depense' && t.category===cat && !t.projectId).reduce((a,t)=>a+t.amount,0);
 }
 
 /* ===================== SAISIE VOCALE ===================== */
