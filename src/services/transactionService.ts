@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
 import { assertRubriqueBelongsToProject } from "./rubriqueService.js";
+import { assertAccountUsable, ensureDefaultAccount } from "./accountService.js";
 
 export interface TransactionRow {
   id: string;
@@ -12,6 +13,10 @@ export interface TransactionRow {
   note: string | null;
   project_id: string | null;
   rubrique_id: string | null;
+  // Compte du mouvement (obligatoire depuis migrations/029) et, pour une
+  // dépense « frais » générée par un virement, le virement d'origine.
+  account_id: string;
+  transfer_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -31,6 +36,10 @@ export interface TransactionInput {
   // dépense à l'intérieur d'un projet, voir migrations/020_rubriques.sql).
   // N'a de sens que si projectId est aussi fourni — vérifié ci-dessous.
   rubriqueId?: string;
+  // Compte du mouvement. Absent = compte par défaut de l'utilisateur (son plus
+  // ancien compte actif, « Espèces » créé au besoin) : garde compatibles les
+  // appels qui ne connaissent pas encore les comptes.
+  accountId?: string;
 }
 
 // La rubrique n'a de sens qu'à l'intérieur d'un projet donné : on exige donc
@@ -83,10 +92,14 @@ export async function createTransaction(userId: string, input: TransactionInput)
   if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
   await assertProjectAndRubriqueConsistent(userId, input.projectId, input.rubriqueId);
 
+  const accountId = input.accountId
+    ? (await assertAccountUsable(userId, input.accountId)).id
+    : await ensureDefaultAccount(userId);
+
   const { rows } = await pool.query<TransactionRow>(
-    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null],
+    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id, account_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId],
   );
   return rows[0]!;
 }
@@ -99,6 +112,8 @@ export async function updateTransaction(
   const existing = await pool.query<TransactionRow>(`SELECT * FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!existing.rows[0]) throw Errors.transactionNotFound();
   const current = existing.rows[0]!;
+  // Les frais d'un virement suivent leur virement : on ne les modifie pas ici.
+  if (current.transfer_id) throw Errors.transactionLinkedToTransfer();
 
   // note/projectId/rubriqueId sont traités en tri-état (absent du body =
   // inchangé, null = effacé/détaché, valeur = remplacé) plutôt qu'avec
@@ -114,6 +129,13 @@ export async function updateTransaction(
   if (nextProjectId) await assertProjectOwnedByUser(userId, nextProjectId);
   await assertProjectAndRubriqueConsistent(userId, nextProjectId, nextRubriqueId);
 
+  // Changer de compte : le nouveau doit appartenir à l'utilisateur et être
+  // actif. Rester sur un compte depuis archivé reste permis (on corrige un
+  // ancien mouvement sans le déplacer).
+  if (input.accountId && input.accountId !== current.account_id) {
+    await assertAccountUsable(userId, input.accountId);
+  }
+
   const { rows } = await pool.query<TransactionRow>(
     `UPDATE transactions SET
        type = COALESCE($3, type),
@@ -123,15 +145,21 @@ export async function updateTransaction(
        method = COALESCE($7, method),
        note = $8,
        project_id = $9,
-       rubrique_id = $10
+       rubrique_id = $10,
+       account_id = COALESCE($11, account_id)
      WHERE id = $1 AND user_id = $2
      RETURNING *`,
-    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId],
+    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId, input.accountId ?? null],
   );
   return rows[0]!;
 }
 
 export async function deleteTransaction(userId: string, id: string): Promise<void> {
-  const { rowCount } = await pool.query(`DELETE FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
-  if (!rowCount) throw Errors.transactionNotFound();
+  const existing = await pool.query<{ transfer_id: string | null }>(
+    `SELECT transfer_id FROM transactions WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  if (!existing.rows[0]) throw Errors.transactionNotFound();
+  if (existing.rows[0].transfer_id) throw Errors.transactionLinkedToTransfer();
+  await pool.query(`DELETE FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
 }
