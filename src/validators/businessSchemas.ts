@@ -23,6 +23,8 @@ export const createTransactionSchema = z.object({
   note: z.string().trim().max(280).optional(),
   projectId: z.string().uuid().optional(),
   rubriqueId: z.string().uuid().optional(),
+  // Absent = compte par défaut de l'utilisateur (voir accountService).
+  accountId: z.string().uuid().optional(),
 });
 // note/projectId/rubriqueId sont nullables (en plus d'optionnels) ici pour
 // pouvoir les effacer/détacher explicitement en modification (bouton
@@ -205,3 +207,37 @@ export const askAssistantSchema = z.object({
     .optional()
     .default({}),
 });
+
+// ---------------------------------------------------------------------------
+// Comptes et virements (voir migrations/029_accounts_transfers.sql)
+// ---------------------------------------------------------------------------
+const accountTypeSchema = z.enum(["especes", "mobile_money", "banque", "epargne", "autre"]);
+const accountNameSchema = z.string().trim().min(1).max(60);
+// Un solde d'ouverture peut être négatif (découvert bancaire).
+const openingBalanceSchema = z.number().min(-1_000_000_000).max(1_000_000_000);
+
+export const createAccountSchema = z.object({
+  name: accountNameSchema,
+  type: accountTypeSchema,
+  openingBalance: openingBalanceSchema.optional(),
+});
+export const updateAccountSchema = z.object({
+  name: accountNameSchema.optional(),
+  type: accountTypeSchema.optional(),
+  openingBalance: openingBalanceSchema.optional(),
+  archived: z.boolean().optional(),
+});
+
+export const createTransferSchema = z
+  .object({
+    fromAccountId: z.string().uuid(),
+    toAccountId: z.string().uuid(),
+    amount: amountSchema,
+    fee: z.number().min(0).max(1_000_000_000).optional(),
+    occurredOn: dateSchema,
+    note: z.string().trim().max(280).optional(),
+  })
+  .refine((v) => v.fromAccountId !== v.toAccountId, {
+    message: "Le compte de destination doit être différent du compte d'origine",
+    path: ["toAccountId"],
+  });
