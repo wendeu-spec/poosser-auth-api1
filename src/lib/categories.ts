@@ -14,6 +14,9 @@ export const CATEGORIES = [
   "Éducation",
   "Loisirs",
   "Tontine",
+  // Dépense générée automatiquement par les frais d'un virement entre
+  // comptes (voir accountService.createTransfer).
+  "Frais Mobile Money",
   "Salaire",
   "Commerce",
   "Freelance",

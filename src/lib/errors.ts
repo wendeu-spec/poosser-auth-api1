@@ -53,4 +53,13 @@ export const Errors = {
   categoryNotFound: () => new AppError("CATEGORY_NOT_FOUND", 404),
   categoryAlreadyExists: () => new AppError("CATEGORY_ALREADY_EXISTS", 409),
   budgetProposalNotFound: () => new AppError("BUDGET_PROPOSAL_NOT_FOUND", 404),
+
+  // Comptes et virements (voir migrations/029_accounts_transfers.sql).
+  accountNotFound: () => new AppError("ACCOUNT_NOT_FOUND", 404),
+  accountNameTaken: () => new AppError("ACCOUNT_NAME_TAKEN", 409),
+  accountInUse: () => new AppError("ACCOUNT_IN_USE", 409),
+  accountArchived: () => new AppError("ACCOUNT_ARCHIVED", 409),
+  accountLastActive: () => new AppError("ACCOUNT_LAST_ACTIVE", 409),
+  transferNotFound: () => new AppError("TRANSFER_NOT_FOUND", 404),
+  transactionLinkedToTransfer: () => new AppError("TRANSACTION_LINKED_TO_TRANSFER", 409),
 };
