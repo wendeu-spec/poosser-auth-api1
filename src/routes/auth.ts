@@ -28,6 +28,7 @@ import { assessLoginRisk } from "../services/riskService.js";
 import { logSecurityEvent, listSecurityEvents } from "../services/securityEventService.js";
 import { signStepUpToken } from "../lib/jwt.js";
 import { pool, withTransaction } from "../db/pool.js";
+import { readRefreshCookie, setRefreshCookie, clearRefreshCookie } from "../lib/refreshCookie.js";
 
 export const authRouter = Router();
 
@@ -145,6 +146,14 @@ authRouter.post("/login", validateBody(loginSchema), async (req, res) => {
   }
 
   const publicUser = await getPublicUser(user.id);
+  if (body.rememberMe) {
+    // Le refresh token part dans le cookie HttpOnly et n'apparaît PAS dans la
+    // réponse : le code de la page n'y a jamais accès.
+    setRefreshCookie(res, tokens.refreshToken);
+    const { refreshToken: _inCookie, ...publicTokens } = tokens;
+    res.json({ user: publicUser, ...publicTokens, newDevice: isNewDevice, rememberMe: true });
+    return;
+  }
   res.json({ user: publicUser, ...tokens, newDevice: isNewDevice });
 });
 
@@ -152,15 +161,33 @@ authRouter.post("/login", validateBody(loginSchema), async (req, res) => {
 // POST /auth/refresh
 // ---------------------------------------------------------------------------
 authRouter.post("/refresh", validateBody(refreshSchema), async (req, res) => {
-  const tokens = await rotateSession(req.body.refreshToken, clientIp(req));
-  res.json(tokens);
+  const fromBody = req.body.refreshToken as string | undefined;
+  if (fromBody) {
+    res.json(await rotateSession(fromBody, clientIp(req)));
+    return;
+  }
+  // Connexion automatique : refresh token lu dans le cookie « rester connecté ».
+  const fromCookie = readRefreshCookie(req);
+  if (!fromCookie) throw Errors.refreshInvalid();
+  try {
+    const tokens = await rotateSession(fromCookie, clientIp(req));
+    setRefreshCookie(res, tokens.refreshToken);
+    const { refreshToken: _inCookie, ...publicTokens } = tokens;
+    res.json(publicTokens);
+  } catch (err) {
+    // Cookie expiré, révoqué ou rejoué : on l'efface pour ne pas le représenter.
+    clearRefreshCookie(res);
+    throw err;
+  }
 });
 
 // ---------------------------------------------------------------------------
 // POST /auth/logout   🔒
 // ---------------------------------------------------------------------------
 authRouter.post("/logout", requireAccessToken, validateBody(logoutSchema), async (req, res) => {
-  await revokeSessionByRefreshToken(req.body.refreshToken, req.auth!.userId);
+  const refreshToken = (req.body.refreshToken as string | undefined) ?? readRefreshCookie(req);
+  if (refreshToken) await revokeSessionByRefreshToken(refreshToken, req.auth!.userId);
+  clearRefreshCookie(res);
   await logSecurityEvent({
     userId: req.auth!.userId,
     deviceId: req.auth!.deviceId,
@@ -175,6 +202,7 @@ authRouter.post("/logout", requireAccessToken, validateBody(logoutSchema), async
 // ---------------------------------------------------------------------------
 authRouter.post("/logout-all", requireAccessToken, async (req, res) => {
   await withTransaction((client) => revokeAllSessions(client, req.auth!.userId));
+  clearRefreshCookie(res);
   await logSecurityEvent({ userId: req.auth!.userId, type: "global_logout", ip: clientIp(req) });
   res.status(204).end();
 });
