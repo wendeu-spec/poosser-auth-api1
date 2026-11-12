@@ -138,7 +138,10 @@
   }
 
   /* ---------- Main ---------- */
-  main { flex: 1; padding: 26px 32px 60px; max-width: 1180px; }
+  /* min-width:0 : sans lui, un élément flex ne rétrécit jamais sous la largeur
+     de son contenu (un tableau large, par exemple) et toute la page déborde
+     sur le côté au lieu de s'adapter à l'écran. */
+  main { flex: 1; min-width: 0; padding: 26px 32px 60px; max-width: 1180px; }
   .view { display: none; }
   .view.active { display: block; }
 
@@ -452,6 +455,62 @@
      both screens render superimposed. This restores `hidden` as the one
      source of truth for visibility on these two containers. */
   #authScreen[hidden], #appShell[hidden] { display: none !important; }
+
+  /* ---------- Petits écrans : menu repliable ----------
+     Sous 900 px de large, le menu latéral ne prend plus de place : il se
+     replie derrière un bouton ☰ dans une barre fixe en haut de l'écran, et
+     s'ouvre par-dessus le contenu (fermeture : choix d'une rubrique, clic à
+     côté, ou touche Échap). Les tableaux larges défilent dans leur propre
+     cadre au lieu de faire déborder toute la page. */
+  .mobile-topbar, .sidebar-overlay { display: none; }
+  @media (max-width: 900px) {
+    #appShell { flex-direction: column; }
+    .mobile-topbar {
+      display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; z-index: 40;
+      padding: 10px 16px; background: var(--surface-1); border-bottom: 1px solid var(--border);
+    }
+    body.demo-mode .mobile-topbar { top: 26px; }
+    .menu-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; flex-shrink: 0; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary);
+      font-size: 20px; line-height: 1; cursor: pointer; font-family: inherit;
+    }
+    .topbar-brand { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+    .topbar-brand strong { font-size: 15px; }
+    .topbar-brand span { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sidebar {
+      position: fixed; top: 0; left: 0; bottom: 0; height: 100%; z-index: 60;
+      width: 264px; max-width: 85vw; overflow-y: auto;
+      transform: translateX(-100%); transition: transform .2s ease; visibility: hidden;
+    }
+    body.nav-open .sidebar { transform: translateX(0); visibility: visible; box-shadow: 0 0 32px rgba(0,0,0,.28); }
+    body.nav-open .sidebar-overlay { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.38); }
+    body.nav-open { overflow: hidden; }
+    main { padding: 18px 16px 60px; }
+    table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* Un champ « large » (span 2 ou 3) prend toute la ligne au lieu de créer
+       une colonne supplémentaire qui déborderait. */
+    .form-grid > [style*="span"] { grid-column: 1 / -1 !important; }
+    /* Grilles fixées directement dans le code HTML (style="…") : on les
+       ramène à une colonne, sinon elles gardent leurs colonnes de bureau. */
+    .grid-2 { grid-template-columns: 1fr !important; }
+    #rubriqueForm { grid-template-columns: 1fr 1fr !important; }
+  }
+  /* Une tuile peut rétrécir sous la largeur de son montant au lieu de pousser la page. */
+  .tiles > * { min-width: 0; }
+  @media (max-width: 560px) {
+    .form-grid, #rubriqueForm { grid-template-columns: 1fr !important; }
+    .tiles { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tile { padding: 12px 12px; }
+    .tile .value { font-size: 18px; overflow-wrap: anywhere; }
+    .tile .label, .tile .delta { overflow-wrap: anywhere; }
+    .page-head h1 { font-size: 22px; }
+    /* Assistant de budget : une ligne par champ au lieu de 6 colonnes. */
+    #wizardRowsHead { display: none !important; }
+    .wizard-row { grid-template-columns: 1fr 1fr !important; }
+  }
 </style>
 </head>
 <body>
@@ -551,7 +610,15 @@
 
 <div id="appShell" hidden>
 
-<aside class="sidebar">
+<!-- Barre du haut, visible seulement sur petit écran (voir « Petits écrans :
+     menu repliable » dans le CSS) : bouton ☰ qui ouvre le menu latéral. -->
+<div class="mobile-topbar">
+  <button type="button" class="menu-btn" id="menuToggle" aria-label="Ouvrir le menu" aria-controls="appSidebar" aria-expanded="false">☰</button>
+  <div class="topbar-brand"><strong>POOSSER</strong><span id="topbarViewTitle">Tableau de bord</span></div>
+</div>
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<aside class="sidebar" id="appSidebar">
   <div class="brand">
     <div class="brand-mark"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAABNS0lEQVR42u19d7xdVZX/d+19bn39pfcOIYEQQm8SqoCogCbYxe7g2EbnJ47O5KEzo4Ojoz8de0EFwURBIQpICxCSAEkgJCEhIb2/9/J6ueXstX5/nLbPufcFQlFmftzPB17efbecs/faq3zXd60FvP54/fH646U/RESJCPm/qgULFmvrbyQi6vVV+t+36SQitHhxbLNVQijSwe+LFr12hYBe386j23giAgCxnhsLYNTBg+1ffGL1xsdLLo86dsak2vFjhz/X1FT/KwC1RLQHgCIiFpHXBeB/mopvaWnBDTfcwNZzzQBm/+WBtZMeXr7i3ctWrp+9Y/uuUf2DA2ml0yClOZ3NdZ54zITWv/vAVakr33rBjx1HfcMYUeJJkbwuAK/tTddEZPz1EQCoq6tBT0/f3K3b9rz5t7+795Sl9608Zn/r4Zl7dh0AFAFKAZ6iN1BpDSig2AuYEt544bmDH37/2z/69qvm30JEvgy8NoTAeX27PdUOgIiI/Z8GALKZtAwWimfu3HPgpD8uffjicy/96IR9hzpO3rFjb3B0mHJpQAACSCAEIg0wABbKZESQonsfWJXbuGXXr0ulwkUicj0RHXytCIHz//mmw9p4ERGqyeekf2DwzJ6enuF3LF2+4IqFn521YfOOE3cfbHPEeO9UuSxEWCBQIp5lkEChCkAQAEIsTAQFXV8ve/cdlOsXfev9DbX5fSKyCIB53QT8De7Xd8KCTQ+EIQtguOu6J/zslj/Nf+qpDe/5870rsof7BpsHegc91Z5ymAggkBIRQAAhACLWKvoC4PuJ3ncpEBGUJjGd7XzGWaeVVz7wi/cT0eLFixfrhQsXmtc1wF/ntCsiMoEXLyIZAE0A5t9192Nn3/XnZWfeu+yJ0e1dveMGOrqAbAZQilU2BREQIEoYkFBri7fhROH+i/1/AQgUyATYNaTqG2nVmo3ZL3/1+x8VkeVEtF9ElC2Mr2uAV3DTlwBqoW/P/efSAFIALv7TvY/Nu+f+xy5Z+eT6WVt3Hqjr6ewBUilAEWutiZkBCEEA8S186BEKvGMe/EJkLaggHumRv8oCBQgXXZx0wtTi2kd/8wml1M+Z+W8qAM7/wpNORBSEWkZrBdc1NQDe/Ohjayfeff/Kix9avub4jc/tHN3b1QsoDaQ0e3ZdSCDKsAkjffIMh/8FFD82BJAQxBORIc6XLzjiuYhwNO9p7c7ectvdJCJYuHDh3/QQOv9LNh1EBH/TxX8+D+DU9eu3nPDlr/7oohVPPH3amnXPDe/pG0yBBUhpqHzeU+osSoRRDaMRimAfIfHUun/K/S8GgRABPGJJSGAOJBQIUoKuzh7sPtB6joj8hogKf8uIwPmfvOktLS1JZ24UgOHbd+5f8PVv/XL6qtXrL3l8zcbmg4d7NMplIJMGpRz2NTUxGxWe02r7521ZaPdJPFPgRXuhpPkvD95omYOYHBAABaWh3La9ktbmVADnALhv2bJlDgD3dQE4urAtcOaGAajr7O59z09+ecfcu+5+dM7aZ7ZMOtjRnTb9g0A6DXI0k5OBd9JFxW25xN0h8s17cOrD4+//W8JfrGuz991+vaU+Qt1Bvj1gAlD/Og5wFB68tek1ABoHi8X333zr0plL//LYrJVrNs3Yd7C93hSKnjPnaFY1eRJh8pIz1mdC/JMd+6ZwkwK/LvDkRcSy5lzpQ9vaO9ASsZAwUg5EBOXkAOXIawELcF6jm678o86BM+dvejOA0/5872MX/Pn+lWc/+OgT07Zu21vrlsqAkwIcR1Q+JyJMgChm8beNrNPs7UT81Fq6Ojj9YjlxoUZI2vdKtR+cdVIk4tkLiDBgDGBcGBhCadAoJ5XyIxIA818XABGhlpaWwKFj/zkNYCSAUx9evmb+H5Yum7vyyQ3znt68vb44UPKOWDolKqtFIN5pB5FYJ49I+U5Y0shHp1QsNY3wzeI7e2RHeRWn34/1BUJCBLAYiOuSGPGMidsPKIWGYSMxvDGHbAogGZ8ql0rbABwEgPnzIf9fCkAVZy7w4McDGL5x0/YP/Oq2e8Y9vuaZC57asK2xp6ePwAJkUqBMikk8/N0L3+J7E5zYSPWTZbsj9I4oUPFeOCeI23giTwiC1/pv9sSGjYhrCCwKYkiMgaqpxaiRjRg9anh5ZFPz/jmzJ5ZnHTOtrSZf8/tpk0b3Nzc05AaKPas33n//RiLqkIcWOb5Z+5vgAX+LGHQoOHYkgMbntu45d/Ht952/5plNlz+26pm6wz0DjpRKkTPn2XSCSJVjI1VuSSwXzPO/bCev6lsp8gaICEIQYQhEFIxLcMsAKWRq8miuS6OurrY8afyYA6efMrswacK4JyeOG3XfheedlNGp7GoArf7N7hWR4wEcB+DPAMYC6Cai1iRu8L9SAGy7bj1XA6Cx7WDHuX+455FLH3h49bkr16yftGd/u5ZiCcikAa2MUkoJM4VhF5FlkxO7KGQ79DEvPr7IEjl7UCDPQROBiIgIQF7oaMoAFJxsGrU1WYwYPnxg+qRR3TOmTjyYy+TuveC8eQOnzZtVbGxu/B2ABgCbifSgiKklYKALuDDT13qsevaWVq1S13PX/tFiert0/fiMzjesQPP0W8yEi5o08BiI9sDDBPh/hQAMsekaQBbA+37z23tOumPpQyev27hl9vZ9hzOmUAIc7XnwSgUefGyjKRF1ByBL5Wbb3rjvxVPCdoPZh3VJXAO4LkE50GmCIsHY0aN52oSRvZMnjN05bszI1W+69Gw1c/L4xQ0jm9cDGE5E65x0Fi4TQA66Sz2XO527U6lD647XfQfOx9a7i3B7TkfvgUZl2jW62iAMkIb3M58CMqPgTrmkH6f8/S3O6JM+hRYqo+WvRxqhV2nTYzfg2/rxACbe9aeH3/Sb3z9w7JZtOy7euHVvXXFg0CNUpFLi7blQZKHF2kNLCIgsM22fZGvDyYrASQUOgZAiYsMC1yiwAFIGwBg5aiSmThrtDh8xatPMaRM3vvH800bMmDLuh5OmjicAm2vy2fX9AwVFRPy0SM0M4JLBw4efq+ve8jF9aN0Y2vdYXko9Z0rb1nqnf7+DYrfn45e8a2ANhqMpTBgAJGKEDUgJRE+YZHjqVTfqi3/8ZfnNgMYCkb+GJqBXaNNDZy6gTolICsBEAI3LV6y9bPHv75+3dsPWi57Z9HxdX8GFlFwgkxIiJRAmgYQuVpRmpfjPIS8gcuasBJwQEVjEO9lCBHEBt4yaxgaMbK7h0aPGHph7woy200+Z2T9l/Ng/vOEN83KAviel6cmykXoi6tknMrwGmGyAQl3bpqtpy8P1qmvbXOnaMxcHN+Sod19eyQBAJaDkXbsoiHhZQhZSikhASsiOGANtRVpBHEdAJaj6OkLT+V+mhUv/LY43vIYFIIlji8g4AHWbntvx4VuX3Dvt8TXPnrN63bPDO7r6ANcA2Uwg2co7BUn/RxJIOlkgjR2n+5tNGj5aK8xGIFAwhsAu4Bo4+SxGD69HY1NTx7TJ4/aef87J2Ynjxz501ukn8KhRw+4FcC+ABiI6JCJNu4DGGqC5oWP/RamNS1q5++ClPNBxLu1fm0Ln3iYt/RqFXg+4dbwNZ0VMWnnJfy9IIPLVEhE80VYSX/UAcVQEUgRDJCCXdd0IjbO+8lXM+fj3ATrk4RCvnjmgl7nxATKXAzBsw7O7zv/zPcsWLHts7fFPrHtuTEdfMSuDg0A6BVIw3jKEyHq0iSEW7y9Y7LRbp99bUAnSMSICsCi4ZcAInJo88inCiOHDShPGjDh46knHDYwbM3rFhfNP6T5+5oQVcDJ3A5hIRJtEpG4PkMoCkxtM6SR+7Ja9aRQ+hgNbTsD+dQ3Ss2+YNp0Kg+1AQXxxBVjDQCsf6Rfy+B6+lvJVGIUqyKMKig0aEoEJIOX9B/LDTyWAdoQLZVbTztXqmmXfhVKf9TXZq6YOXjIOEJAbAYxa+udHrvvlrXdeuWb91jk7dh8CmIF0BqS0UfmsEmaCiOYYeuYbcTucC7z7kGuhglBMBAQBKymVSMplQGtSWlCTz8u0yZMKxx0z+eCw5mEPXHLh6YUzT569a/jI5t8BqMtl0+sLxTJEhPYDExqBGf27nsnzuruuHXdg86nYtqKBO/dMTg+2ZtF3ACi5ofZhDYMUQaU0sQj58qfBYqWIA7PlRSeevEbCIHY60fdTFEWOLLw0sfdy4xJrAu1fIe6ji1Kp+f9qZAH0a8oEiAjNn9+ily1radyxY9+F13/lB//4pwdWzuvv6iIoJZTN+nqaCSAPHgsWQfz/kvl1/9T4R0L8A0RsXIExylshA+gUJo4eJlMmjOyaOH7CllPmHbfv9HmzDp0y59iHdS6tarKpWweKrudmQ6GLSycTkMpuXTHL2b/5Atn6xFR07Z2N1i15PdjqOWriwftGgeEQSCs/RBAvW6ACXMD3UgI7TjbcGP0nPt4f/F3894avURQJiwqREW8pSCAgo1PQZsw5T+t3PfJxED3xaoaGzkux9yIiN//2zz/96o0/edOWne0O0imomloWNgpsSKBCqhSJRBacovQZhYtGQqQhYsQLxUSJKRDYoG7EaBo9PG9GDR+x65S5x7Sdf96ZhXGjhn/t5JNnjgdwtwWyuM+INO0rlE9KDwyksjuefDs2PDQSP/rwfNmzvk737m/GYBtQKgJlQBzAOBDSWqAI0EIEUSABCUdZQoJv1gMXlV7ciQpNVpSHCPPDEm06Ak9IrNcSKQhAgwdnlPr29GcAEbTQ39wEeJu/UImIXH7Np77xyGNPv7W/u5dVTR2LGMUQ76QGiydBvONj6j45kogE5DtsLBosJIU+IJOhESOHYXhzQ2H6pHHtp518XFtjQ/OP33HVRWOHj2xcBWA5gDoi2gco7BEzYx+QP6W79d3uA78cjl987nRp330S7dvUqPoP5VHuAQZLgE/SRgoMpYEMyFtsIRKOEvskkaay8AKIRCc1mfcXy5zFM7+By2oRAyQybcHHqOhrIwVIBGFWVMpg21+8ZNGSZ/+2AhA4fI6jzDs++MU7Hl616cqBgbJR+RolxiVRyr8bAuCjHPB4F6SUEJGwMMRAiesSXCanJo262gxGNA9vPef0mWrq5ImrTzp51qPzTz+xMV+b/x2Aula87pMfB1pFxozM1vf0FXqmutufuYKefXiG+uUXLhq/6dE897RNUcUuB73tnmeuAVYQBHE3CUF5fjgJx1PAvvqPeehB/pAiL95OFwVCTWKZggoUOi4NSeIwbB8hSE/bGSdPgzhUHHxV7f+LFgBf7+trrv3Cf9x578orB0uuq9Iph9lEFxyKMkGRZhEDccsKhSKJK0T5NGpraviYaVP75x5/7OHG+vo/XvP2i82pJ8289dvfyaee/lc7d34Fd/9pv/Xh6dOnfIfjOMDKlSv1jTfeqF+I+F8QoePHj+fnnnvOJKI71qxZ8+bp06cn6+vrX/HP8ZoIABGRJUuWEACcOnUqPnv27P8LQAO4XUR+8Vqf7wUJgIhIS0uLbmlpwU9+8hM6efIkvfDCC7Rr1y7avn07ffvb3xYADIB1CGD+lHFbf3z61pPXAQAAAABJRU5ErkJggg==" alt="Logo POOSSER"></div>
     <div class="brand-text"><strong>POOSSER</strong><span>Où va votre argent</span></div>
@@ -2394,7 +2461,26 @@ function initVoiceInput(btnId, statusId, onParsed){
 function switchToView(viewName){
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.view===viewName));
   document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active', v.id==='view-'+viewName));
+  // Petit écran : la barre du haut affiche la rubrique ouverte, et le menu se referme.
+  const activeBtn = document.querySelector(`.nav-btn[data-view="${viewName}"]`);
+  const title = document.getElementById('topbarViewTitle');
+  if(activeBtn && title) title.textContent = activeBtn.textContent.replace(/^\s*\S+\s+/, '').trim();
+  setMobileNavOpen(false);
 }
+
+// Menu latéral repliable (petits écrans).
+function setMobileNavOpen(open){
+  document.body.classList.toggle('nav-open', open);
+  const btn = document.getElementById('menuToggle');
+  if(btn){
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.setAttribute('aria-label', open ? 'Fermer le menu' : 'Ouvrir le menu');
+    btn.textContent = open ? '✕' : '☰';
+  }
+}
+document.getElementById('menuToggle').addEventListener('click', ()=> setMobileNavOpen(!document.body.classList.contains('nav-open')));
+document.getElementById('sidebarOverlay').addEventListener('click', ()=> setMobileNavOpen(false));
+document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && document.body.classList.contains('nav-open')) setMobileNavOpen(false); });
 document.querySelectorAll('.nav-btn').forEach(btn=>{
   btn.addEventListener('click', ()=>switchToView(btn.dataset.view));
 });
