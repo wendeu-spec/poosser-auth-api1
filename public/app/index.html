@@ -419,6 +419,8 @@
   .auth-step { display: flex; flex-direction: column; gap: 12px; }
   .auth-step[hidden] { display: none; }
   .auth-field { display: flex; flex-direction: column; gap: 5px; }
+  .auth-remember { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+  .auth-remember input { width: 16px; height: 16px; margin: 0; accent-color: var(--s1); }
   .auth-field label { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
   .auth-field input, .auth-field select {
     font-family: inherit; font-size: 14px; padding: 10px 11px;
@@ -483,6 +485,10 @@
         <label>PIN POOSSER (6 chiffres)</label>
         <input type="password" id="loginPin" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="current-password" required>
       </div>
+      <label class="auth-remember" for="loginRemember">
+        <input type="checkbox" id="loginRemember">
+        <span>Rester connecté sur cet appareil (30 jours)</span>
+      </label>
       <button type="submit" class="btn btn-primary auth-submit" id="loginSubmitBtn">Se connecter</button>
     </form>
 
@@ -539,7 +545,7 @@
       </div>
     </details>
 
-    <p class="auth-footnote">Ce PIN protège votre connexion — ne le partagez jamais. Vos identifiants sont vérifiés côté serveur à chaque connexion ; aucune donnée financière n'est conservée sur cet appareil, une nouvelle connexion sera nécessaire à la fermeture de l'onglet.</p>
+    <p class="auth-footnote">Ce PIN protège votre connexion — ne le partagez jamais. Vos identifiants sont vérifiés côté serveur à chaque connexion ; aucune donnée financière n'est conservée sur cet appareil. Sans « Rester connecté », une nouvelle connexion est nécessaire à la fermeture de l'onglet ; avec, vous restez connecté 30 jours sur cet appareil (à ne cocher que sur un appareil personnel).</p>
   </div>
 </div>
 
@@ -1585,11 +1591,23 @@ let state = {
 // serveur (avancé)"). Pointe désormais vers le back-end hébergé sur Render
 // (Phase 4) au lieu du serveur local de développement.
 let apiBase = 'https://poosser-backend.onrender.com';
-let session = { accessToken: null, refreshToken: null, user: null };
-// Identifiant d'appareil régénéré à chaque chargement de page : aucune donnée
-// (y compris cet identifiant) n'est persistée dans le navigateur — voir la
-// note de sécurité affichée sur l'écran de connexion.
-let deviceFingerprint = 'web-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+// cookieMode = session « Rester connecté » : le refresh token vit dans un
+// cookie HttpOnly posé par le serveur (illisible ici, voir
+// src/lib/refreshCookie.ts) ; session.refreshToken reste alors null.
+let session = { accessToken: null, refreshToken: null, user: null, cookieMode: false };
+// Identifiant d'appareil : conservé sur l'appareil (ce n'est pas un secret)
+// pour que le serveur reconnaisse le même appareil d'une connexion à l'autre
+// au lieu d'en déclarer un « nouveau » à chaque fois. Stockage indisponible
+// (navigation privée, stockage bloqué) : identifiant éphémère, comme avant.
+const DEVICE_ID_KEY = 'poosser.deviceId';
+const REMEMBER_PREF_KEY = 'poosser.rememberMe';
+function storageGet(key){ try { return window.localStorage.getItem(key); } catch { return null; } }
+function storageSet(key, value){ try { window.localStorage.setItem(key, value); } catch { /* stockage indisponible */ } }
+let deviceFingerprint = storageGet(DEVICE_ID_KEY);
+if(!deviceFingerprint || !/^web-[a-z0-9]{8,40}$/.test(deviceFingerprint)){
+  deviceFingerprint = 'web-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  storageSet(DEVICE_ID_KEY, deviceFingerprint);
+}
 let pendingRefresh = null;
 
 class ApiError extends Error {
@@ -1623,12 +1641,15 @@ async function rawApiFetch(path, opts = {}){
 }
 
 async function refreshTokens(){
-  if(!session.refreshToken) throw new ApiError('REFRESH_INVALID', 401);
+  if(!session.refreshToken && !session.cookieMode) throw new ApiError('REFRESH_INVALID', 401);
   if(!pendingRefresh){
-    pendingRefresh = rawApiFetch('/auth/refresh', { method:'POST', body:{ refreshToken: session.refreshToken } })
+    // En mode « Rester connecté », le corps est vide : le serveur lit le
+    // refresh token dans son cookie HttpOnly et en pose un nouveau.
+    const body = session.cookieMode ? {} : { refreshToken: session.refreshToken };
+    pendingRefresh = rawApiFetch('/auth/refresh', { method:'POST', body })
       .then(tokens => {
         session.accessToken = tokens.accessToken;
-        session.refreshToken = tokens.refreshToken;
+        if(!session.cookieMode) session.refreshToken = tokens.refreshToken;
         return tokens;
       })
       .finally(() => { pendingRefresh = null; });
@@ -1917,7 +1938,8 @@ async function bootstrapAfterAuth(){
 
 async function onAuthenticated(data){
   session.accessToken = data.accessToken;
-  session.refreshToken = data.refreshToken;
+  session.refreshToken = data.refreshToken || null;
+  session.cookieMode = !data.refreshToken;
   session.user = data.user;
   const label = [data.user.firstName, data.user.lastName].filter(Boolean).join(' ') || data.user.phone || 'Mon compte';
   document.getElementById('sidebarUserName').textContent = label;
@@ -1935,7 +1957,7 @@ async function onAuthenticated(data){
 
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
-  session = { accessToken: null, refreshToken: null, user: null };
+  session = { accessToken: null, refreshToken: null, user: null, cookieMode: false };
   state.transactions = []; state.accounts = []; state.transfers = []; lastUsedAccountId = null; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set(); state.budgetProposal = null;
   reminderRecordedForProposalId = null;
   chatInitialized = false;
@@ -1983,12 +2005,14 @@ document.getElementById('loginForm').addEventListener('submit', async (e)=>{
   showAuthMsg('');
   const phone = document.getElementById('loginPhone').value.trim();
   const pin = document.getElementById('loginPin').value.trim();
+  const rememberMe = document.getElementById('loginRemember').checked;
   const btn = document.getElementById('loginSubmitBtn');
   btn.disabled = true; btn.textContent = 'Connexion...';
   try {
     const data = await rawApiFetch('/auth/login', { method:'POST', body:{
-      phone, pin, device: { fingerprint: deviceFingerprint, name: 'Navigateur web', platform: 'web' },
+      phone, pin, rememberMe, device: { fingerprint: deviceFingerprint, name: 'Navigateur web', platform: 'web' },
     }});
+    storageSet(REMEMBER_PREF_KEY, rememberMe ? '1' : '0');
     await onAuthenticated(data);
   } catch(err){
     showAuthMsg(authErrorMessage(err));
@@ -2064,6 +2088,9 @@ document.getElementById('logoutBtn').addEventListener('click', async ()=>{
   try {
     if(session.refreshToken){
       await rawApiFetch('/auth/logout', { method:'POST', auth:true, body:{ refreshToken: session.refreshToken } });
+    } else if(session.cookieMode){
+      // Le serveur révoque la session du cookie et efface le cookie.
+      await apiFetch('/auth/logout', { method:'POST', auth:true, body:{} });
     }
   } catch { /* on se déconnecte localement même si l'appel réseau échoue */ }
   forceLogout();
@@ -6775,6 +6802,36 @@ if ('serviceWorker' in navigator) {
     });
   });
 }
+
+/* ===================== Connexion automatique (« Rester connecté ») =====================
+ * À l'ouverture, si l'utilisateur avait coché « Rester connecté sur cet
+ * appareil », le navigateur détient un cookie HttpOnly (invisible ici) : un
+ * simple POST /auth/refresh sans corps suffit à rouvrir la session, sans
+ * ressaisir le numéro ni le PIN. Pas de cookie, cookie expiré (30 jours sans
+ * utilisation) ou révoqué : l'écran de connexion habituel reste affiché. Le
+ * mode démo (?demo=1) garde son propre fonctionnement. */
+(function restoreRememberedSession(){
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('demo') === '1') return;
+  const rememberBox = document.getElementById('loginRemember');
+  if (rememberBox) rememberBox.checked = storageGet(REMEMBER_PREF_KEY) === '1';
+  if (storageGet(REMEMBER_PREF_KEY) !== '1') return; // jamais coché sur cet appareil : rien à tenter
+
+  window.addEventListener('DOMContentLoaded', async () => {
+    showAuthMsg('Reconnexion automatique…', 'info');
+    try {
+      const tokens = await rawApiFetch('/auth/refresh', { method: 'POST', body: {} });
+      session.accessToken = tokens.accessToken;
+      session.cookieMode = true;
+      const user = await rawApiFetch('/auth/me', { auth: true });
+      showAuthMsg('');
+      await onAuthenticated({ user, accessToken: tokens.accessToken });
+    } catch (err) {
+      session = { accessToken: null, refreshToken: null, user: null, cookieMode: false };
+      showAuthMsg('');
+    }
+  });
+})();
 
 /* ===================== Mode démo : connexion automatique =====================
  * Activé UNIQUEMENT via le paramètre d'URL ?demo=1 (c'est la valeur portée
