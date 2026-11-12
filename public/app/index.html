@@ -812,6 +812,8 @@
        voir migrations/029_accounts_transfers.sql et accountService.ts côté
        serveur, et le bloc JS "COMPTES ET VIREMENTS" plus bas. -->
   <section class="view" id="view-comptes">
+    <!-- ----- état liste ----- -->
+    <div id="accountListState">
     <div class="page-head">
       <div>
         <h1>Comptes</h1>
@@ -890,6 +892,63 @@
     <div class="card">
       <h3>Derniers virements</h3>
       <table id="transfersTable"><thead><tr><th>Date</th><th>Depuis → Vers</th><th>Note</th><th style="text-align:right">Frais</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+    </div>
+
+    <!-- ----- état détail d'un compte (clic sur une carte) ----- -->
+    <div id="accountDetailState" style="display:none;">
+      <button type="button" class="btn btn-ghost" id="backToAccounts" style="margin-bottom:16px;">← Tous les comptes</button>
+      <div class="project-detail-head" id="accountDetailHead"></div>
+      <div class="tiles" id="accountDetailTiles"></div>
+
+      <div class="card" id="accountOpCard" style="margin-bottom:18px;">
+        <h3>Nouvelle opération sur ce compte</h3>
+        <div class="sub">Enregistrez une entrée ou une sortie d'argent : le solde du compte se met à jour aussitôt.</div>
+        <div class="filters" id="accountOpTypeChips" style="margin-top:12px;"></div>
+        <form id="accountOpForm" class="form-grid">
+          <div class="field">
+            <label>Catégorie</label>
+            <select id="accountOpCategory"></select>
+          </div>
+          <div class="field">
+            <label id="accountOpAmountLabel">Montant (FCFA)</label>
+            <input type="number" id="accountOpAmount" min="1" step="any" placeholder="Ex: 15000" required>
+          </div>
+          <div class="field">
+            <label>Date</label>
+            <input type="date" id="accountOpDate">
+          </div>
+          <div class="field">
+            <label>Méthode</label>
+            <select id="accountOpMethod">
+              <option>Mobile Money</option>
+              <option>Espèces</option>
+              <option>Virement bancaire</option>
+              <option>Autre</option>
+            </select>
+          </div>
+          <div class="field" style="grid-column: span 3;">
+            <label>Note (optionnel)</label>
+            <input type="text" id="accountOpNote" maxlength="280" placeholder="Ex: Courses au marché">
+          </div>
+          <div class="field">
+            <button type="submit" class="btn btn-primary" id="accountOpSubmit">Enregistrer la dépense</button>
+          </div>
+        </form>
+      </div>
+      <div class="card" id="accountOpArchivedNote" style="margin-bottom:18px; display:none;">
+        <div class="sub">Ce compte est archivé : réactivez-le pour y enregistrer de nouvelles opérations.</div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+          <h3 style="margin:0;">Mouvements du compte</h3>
+          <span class="sub" id="accountMovesCount" style="margin:0;"></span>
+        </div>
+        <div class="sub" style="margin-top:4px;">Revenus, dépenses et virements, du plus récent au plus ancien, avec le solde du compte après chaque opération.</div>
+        <div class="filters" id="accountMovesFilters" style="margin-top:12px;"></div>
+        <table id="accountMovesTable"><thead><tr><th>Date</th><th>Opération</th><th>Détail</th><th style="text-align:right">Entrée</th><th style="text-align:right">Sortie</th><th style="text-align:right">Solde après</th></tr></thead><tbody></tbody></table>
+      </div>
     </div>
   </section>
 
@@ -1958,7 +2017,9 @@ async function onAuthenticated(data){
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
   session = { accessToken: null, refreshToken: null, user: null, cookieMode: false };
-  state.transactions = []; state.accounts = []; state.transfers = []; lastUsedAccountId = null; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set(); state.budgetProposal = null;
+  state.transactions = []; state.accounts = []; state.transfers = []; lastUsedAccountId = null; selectedAccountId = null;
+  document.getElementById('accountDetailState').style.display = 'none';
+  document.getElementById('accountListState').style.display = 'block'; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set(); state.budgetProposal = null;
   reminderRecordedForProposalId = null;
   chatInitialized = false;
   selectedProjectId = null;
@@ -2173,6 +2234,7 @@ function applyCurrencyLabels(){
   set('accountOpeningLabel', `Solde actuel (${u})`);
   set('transferAmountLabel', `Montant (${u})`);
   set('transferFeeLabel', `Frais (${u}, optionnel)`);
+  set('accountOpAmountLabel', `Montant (${u})`);
 }
 function monthLabel(offset){
   const months = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
@@ -3386,9 +3448,13 @@ function renderDashAccountsCard(){
       <button type="button" class="btn btn-ghost" id="dashGotoAccounts" style="padding:6px 12px; font-size:12.5px;">Gérer les comptes</button>
     </div>
     <div class="filters" style="margin:12px 0 0;">
-      ${list.map(a=>`<span class="pill">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} · <span class="${accountBalance(a.id)>=0?'amt-pos':'amt-neg'}">${fmt(accountBalance(a.id))}</span></span>`).join('')}
+      ${list.map(a=>`<button type="button" class="pill" data-dash-account="${a.id}" style="cursor:pointer;" title="Voir le détail de ce compte">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} · <span class="${accountBalance(a.id)>=0?'amt-pos':'amt-neg'}">${fmt(accountBalance(a.id))}</span></button>`).join('')}
     </div>`;
-  document.getElementById('dashGotoAccounts').addEventListener('click', ()=> switchToView('comptes'));
+  document.getElementById('dashGotoAccounts').addEventListener('click', ()=>{ backToAccountList(); switchToView('comptes'); });
+  card.querySelectorAll('[data-dash-account]').forEach(btn=>btn.addEventListener('click', ()=>{
+    switchToView('comptes');
+    showAccountDetail(btn.dataset.dashAccount);
+  }));
 }
 
 function renderAccounts(){
@@ -3415,7 +3481,7 @@ function renderAccounts(){
     const bal = accountBalance(a.id);
     const used = accountMovementCount(a.id);
     return `
-    <div class="goal-card project-card" style="cursor:default;${a.archived ? ' opacity:.6;' : ''}" data-account-card="${a.id}">
+    <div class="goal-card project-card" style="${a.archived ? 'opacity:.6;' : ''}" data-account-card="${a.id}" title="Voir le détail et les mouvements de ce compte">
       <div class="project-card-top">
         <div style="display:flex; gap:12px; align-items:center;">
           <div class="project-icon-badge">${ACCOUNT_TYPE_ICONS[a.type] || '📁'}</div>
@@ -3440,6 +3506,11 @@ function renderAccounts(){
     </div>`;
   }).join('') || '<div class="empty-state">Aucun compte pour le moment.</div>';
 
+  // Clic sur une carte (hors boutons) = fiche détaillée du compte.
+  grid.querySelectorAll('[data-account-card]').forEach(card=>card.addEventListener('click', (e)=>{
+    if(e.target.closest('button')) return;
+    showAccountDetail(card.dataset.accountCard);
+  }));
   grid.querySelectorAll('[data-acc-edit]').forEach(btn=>btn.addEventListener('click', ()=> openAccountForm(accountById(btn.dataset.accEdit))));
   grid.querySelectorAll('[data-acc-archive]').forEach(btn=>btn.addEventListener('click', ()=> toggleAccountArchived(btn.dataset.accArchive, btn)));
   grid.querySelectorAll('[data-acc-del]').forEach(btn=>btn.addEventListener('click', ()=> deleteAccountWithConfirm(btn.dataset.accDel, btn)));
@@ -3461,6 +3532,8 @@ function renderAccounts(){
   document.getElementById('transferSubmit').disabled = !canTransfer;
   document.getElementById('transferSubmit').title = canTransfer ? '' : 'Créez au moins deux comptes pour faire un virement';
   if(!document.getElementById('transferDate').value) document.getElementById('transferDate').value = todayISO(0);
+
+  if(selectedAccountId) renderAccountDetail();
 }
 
 function openAccountForm(account){
@@ -3581,6 +3654,191 @@ async function deleteTransfer(id, btn){
     btn.disabled = false;
   }
 }
+
+
+/* ----- Fiche détaillée d'un compte -----
+ * Clic sur une carte de compte : solde, entrées/sorties du mois, tous les
+ * mouvements du compte (revenus, dépenses, frais et virements) avec le solde
+ * après chaque opération, comme un relevé bancaire, et un formulaire pour
+ * enregistrer directement un revenu ou une dépense sur ce compte. */
+let selectedAccountId = null;
+let accountOpType = 'depense';
+let accountMovesFilter = 'all';
+
+function showAccountDetail(id){
+  if(!accountById(id)) return;
+  if(selectedAccountId !== id){
+    accountOpType = 'depense';
+    accountMovesFilter = 'all';
+    document.getElementById('accountOpForm').reset();
+    document.getElementById('accountOpDate').value = todayISO(0);
+    delete document.getElementById('accountOpMethod').dataset.touched;
+  }
+  selectedAccountId = id;
+  document.getElementById('accountListState').style.display = 'none';
+  document.getElementById('accountDetailState').style.display = 'block';
+  renderAccountDetail();
+  window.scrollTo({ top: 0 });
+}
+function backToAccountList(){
+  selectedAccountId = null;
+  document.getElementById('accountDetailState').style.display = 'none';
+  document.getElementById('accountListState').style.display = 'block';
+  renderAccounts();
+}
+document.getElementById('backToAccounts').addEventListener('click', backToAccountList);
+
+/**
+ * Tous les mouvements d'un compte, avec le solde après chaque opération.
+ * Ordre chronologique pour le calcul (solde de départ + opérations
+ * successives) ; le dernier solde est donc toujours égal à accountBalance().
+ * À date égale, l'ordre de saisie est conservé.
+ */
+function accountMovements(id){
+  const account = accountById(id);
+  if(!account) return [];
+  const rows = [];
+  // Les frais d'un virement se placent juste après leur virement (même date).
+  const transferSeq = id => 100000 + state.transfers.findIndex(tr => tr.id === id);
+  state.transactions.forEach((t, i)=>{
+    if(t.accountId !== id) return;
+    const inflow = t.type === 'revenu' ? t.amount : 0;
+    const outflow = t.type === 'depense' ? t.amount : 0;
+    rows.push({ key: 'tx-' + t.id, date: t.date, seq: t.transferId ? transferSeq(t.transferId) + 0.5 : i, kind: t.transferId ? 'fee' : t.type, label: t.category,
+      detail: t.transferId ? 'Frais de virement' : (t.note || ''), projectId: t.projectId, inflow, outflow });
+  });
+  state.transfers.forEach((tr, i)=>{
+    if(tr.toAccountId === id){
+      rows.push({ key: 'tr-in-' + tr.id, date: tr.date, seq: 100000 + i, kind: 'transfer-in', label: 'Virement reçu',
+        detail: 'Depuis ' + accountName(tr.fromAccountId) + (tr.note ? ' · ' + tr.note : ''), inflow: tr.amount, outflow: 0 });
+    }
+    if(tr.fromAccountId === id){
+      rows.push({ key: 'tr-out-' + tr.id, date: tr.date, seq: 100000 + i, kind: 'transfer-out', label: 'Virement émis',
+        detail: 'Vers ' + accountName(tr.toAccountId) + (tr.note ? ' · ' + tr.note : ''), inflow: 0, outflow: tr.amount });
+    }
+  });
+  rows.sort((a,b)=> a.date.localeCompare(b.date) || a.seq - b.seq);
+  let balance = account.openingBalance;
+  rows.forEach(r=>{ balance = Math.round((balance + r.inflow - r.outflow) * 100) / 100; r.balanceAfter = balance; });
+  return rows.reverse(); // affichage : du plus récent au plus ancien
+}
+
+const ACCOUNT_MOVE_KIND_LABELS = { revenu: 'Revenu', depense: 'Dépense', fee: 'Frais', 'transfer-in': 'Virement', 'transfer-out': 'Virement' };
+
+function renderAccountOpForm(account){
+  document.getElementById('accountOpTypeChips').innerHTML = [['depense','− Dépense'],['revenu','+ Revenu']].map(([v,l])=>
+    `<button type="button" class="chip ${accountOpType===v?'active':''}" data-op-type="${v}">${l}</button>`).join('');
+  document.querySelectorAll('#accountOpTypeChips [data-op-type]').forEach(btn=>btn.addEventListener('click', ()=>{
+    accountOpType = btn.dataset.opType;
+    renderAccountOpForm(account);
+  }));
+  const catSel = document.getElementById('accountOpCategory');
+  const previous = catSel.value;
+  const cats = accountOpType === 'revenu' ? revenuCategories() : depenseCategories().filter(c => c !== TRANSFER_FEE_CATEGORY);
+  catSel.innerHTML = cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  if(cats.includes(previous)) catSel.value = previous;
+  const methodSel = document.getElementById('accountOpMethod');
+  if(!methodSel.dataset.touched) methodSel.value = METHOD_BY_ACCOUNT_TYPE[account.type] || 'Autre';
+  if(!document.getElementById('accountOpDate').value) document.getElementById('accountOpDate').value = todayISO(0);
+  document.getElementById('accountOpSubmit').textContent = accountOpType === 'revenu' ? 'Enregistrer le revenu' : 'Enregistrer la dépense';
+}
+document.getElementById('accountOpMethod').addEventListener('change', (e)=>{ e.target.dataset.touched = '1'; });
+
+function renderAccountDetail(){
+  const a = accountById(selectedAccountId);
+  if(!a){ backToAccountList(); return; }
+  const balance = accountBalance(a.id);
+  const isDefault = a.id === defaultAccountId();
+  document.getElementById('accountDetailHead').innerHTML = `
+    <div>
+      <h1><span class="project-icon-badge" style="width:34px; height:34px; font-size:17px;">${ACCOUNT_TYPE_ICONS[a.type] || '📁'}</span> ${escapeHtml(a.name)}
+        <span class="pill">${ACCOUNT_TYPE_LABELS[a.type] || a.type}</span>
+        ${isDefault ? '<span class="pill">Par défaut</span>' : ''}
+        ${a.archived ? '<span class="pill">Archivé</span>' : ''}
+      </h1>
+      <p style="margin:0; color:var(--text-secondary); font-size:13px;">Solde de départ : ${fmt(a.openingBalance)}</p>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button type="button" class="btn btn-ghost" id="accDetailEdit">✏️ Modifier</button>
+      <button type="button" class="btn btn-ghost" id="accDetailArchive">${a.archived ? '↺ Réactiver' : 'Archiver'}</button>
+    </div>`;
+  document.getElementById('accDetailEdit').addEventListener('click', ()=>{ backToAccountList(); openAccountForm(a); });
+  document.getElementById('accDetailArchive').addEventListener('click', (e)=> toggleAccountArchived(a.id, e.currentTarget));
+
+  const all = accountMovements(a.id);
+  const ym = todayISO(0).slice(0, 7);
+  const month = all.filter(r => r.date.slice(0, 7) === ym);
+  const monthIn = month.reduce((sum, r) => sum + r.inflow, 0);
+  const monthOut = month.reduce((sum, r) => sum + r.outflow, 0);
+  const tiles = [
+    { label: 'Solde actuel', value: fmt(balance), delta: a.archived ? 'Compte archivé' : 'Disponible sur ce compte', cls: balance >= 0 ? 'good' : 'bad' },
+    { label: 'Entrées ce mois', value: fmt(monthIn), delta: `${month.filter(r=>r.inflow>0).length} opération(s)`, cls: '' },
+    { label: 'Sorties ce mois', value: fmt(monthOut), delta: `${month.filter(r=>r.outflow>0).length} opération(s)`, cls: '' },
+    { label: 'Mouvements', value: String(all.length), delta: 'Depuis l\'ouverture du compte', cls: '' },
+  ];
+  document.getElementById('accountDetailTiles').innerHTML = tiles.map(t=>`
+    <div class="tile">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value}</div>
+      <div class="delta ${t.cls}">${t.delta}</div>
+    </div>`).join('');
+
+  document.getElementById('accountOpCard').style.display = a.archived ? 'none' : '';
+  document.getElementById('accountOpArchivedNote').style.display = a.archived ? '' : 'none';
+  if(!a.archived) renderAccountOpForm(a);
+
+  document.getElementById('accountMovesFilters').innerHTML = [['all','Tous'],['in','Entrées'],['out','Sorties'],['transfer','Virements']].map(([v,l])=>
+    `<button type="button" class="chip ${accountMovesFilter===v?'active':''}" data-moves-filter="${v}">${l}</button>`).join('');
+  document.querySelectorAll('#accountMovesFilters [data-moves-filter]').forEach(btn=>btn.addEventListener('click', ()=>{
+    accountMovesFilter = btn.dataset.movesFilter;
+    renderAccountDetail();
+  }));
+  const rows = all.filter(r =>
+    accountMovesFilter === 'all' ||
+    (accountMovesFilter === 'in' && r.inflow > 0) ||
+    (accountMovesFilter === 'out' && r.outflow > 0) ||
+    (accountMovesFilter === 'transfer' && (r.kind === 'transfer-in' || r.kind === 'transfer-out' || r.kind === 'fee')));
+  document.getElementById('accountMovesCount').textContent = accountMovesFilter === 'all' ? `${all.length} mouvement(s)` : `${rows.length} / ${all.length} mouvement(s)`;
+  document.querySelector('#accountMovesTable tbody').innerHTML = rows.map(r=>`
+    <tr>
+      <td>${r.date}</td>
+      <td><span class="pill">${ACCOUNT_MOVE_KIND_LABELS[r.kind] || ''}</span> ${escapeHtml(r.label)}${r.projectId ? projectTag(r.projectId) : ''}</td>
+      <td>${r.detail ? escapeHtml(r.detail) : '—'}</td>
+      <td style="text-align:right" class="${r.inflow ? 'amt-pos' : ''}">${r.inflow ? '+ ' + fmt(r.inflow) : ''}</td>
+      <td style="text-align:right" class="${r.outflow ? 'amt-neg' : ''}">${r.outflow ? '- ' + fmt(r.outflow) : ''}</td>
+      <td style="text-align:right; font-weight:600;" class="${r.balanceAfter >= 0 ? '' : 'amt-neg'}">${fmt(r.balanceAfter)}</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="empty-state">${all.length ? 'Aucun mouvement pour ce filtre.' : 'Aucun mouvement sur ce compte pour le moment.'}</td></tr>`;
+}
+
+document.getElementById('accountOpForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const account = accountById(selectedAccountId);
+  if(!account || account.archived) return;
+  const type = accountOpType;
+  const category = document.getElementById('accountOpCategory').value;
+  const amount = parseFloat(document.getElementById('accountOpAmount').value);
+  const occurredOn = document.getElementById('accountOpDate').value || todayISO(0);
+  const method = document.getElementById('accountOpMethod').value;
+  const note = document.getElementById('accountOpNote').value.trim();
+  if(!category || !amount || amount <= 0) return;
+  const btn = document.getElementById('accountOpSubmit');
+  btn.disabled = true;
+  try {
+    const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
+      type, category, amount, occurredOn, method, note: note || undefined, accountId: account.id,
+    }});
+    state.transactions.push(mapTxFromApi(transaction));
+    lastUsedAccountId = account.id;
+    document.getElementById('accountOpAmount').value = '';
+    document.getElementById('accountOpNote').value = '';
+    renderAll();
+    if(type === 'depense') checkBudgetAlertAfterAdd(category);
+  } catch(err){
+    alert("Impossible d'enregistrer l'opération : " + authErrorMessage(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 /* ===================== BUDGET VIEW ===================== */
 function populateBudgetCategorySelect(){
