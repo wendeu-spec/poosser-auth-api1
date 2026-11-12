@@ -24,6 +24,14 @@
   "TONTINE_ROUND_NOT_READY": "Not all members have contributed for this round yet.",
   "CATEGORY_NOT_FOUND": "Category not found.",
   "CATEGORY_ALREADY_EXISTS": "This category already exists.",
+  "BUDGET_PROPOSAL_NOT_FOUND": "Budget proposal not found.",
+  "ACCOUNT_NOT_FOUND": "Account not found.",
+  "ACCOUNT_NAME_TAKEN": "You already have an account with this name.",
+  "ACCOUNT_IN_USE": "This account already has transactions: archive it instead of deleting it.",
+  "ACCOUNT_ARCHIVED": "This account is archived: it can no longer receive new transactions.",
+  "ACCOUNT_LAST_ACTIVE": "You must keep at least one active account.",
+  "TRANSFER_NOT_FOUND": "Transfer not found.",
+  "TRANSACTION_LINKED_TO_TRANSFER": "This fee belongs to a transfer: edit or delete the transfer instead.",
 
   "otp_sent": "A verification code has been sent if this number can receive SMS.",
   "new_device_notification": "New sign-in detected on your POOSSER account."
