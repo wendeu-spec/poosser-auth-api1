@@ -207,6 +207,9 @@
   /* forms */
   .form-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: end; margin-bottom: 18px; }
   .field { display: flex; flex-direction: column; gap: 5px; }
+  /* Un champ de grille peut rétrécir sous la largeur de son contenu (ex. une
+     liste déroulante au libellé long) au lieu de faire déborder la carte. */
+  .form-grid > * { min-width: 0; }
   .field label { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
   .field input, .field select, .field textarea {
     font-family: inherit; font-size: 13.5px; padding: 8px 10px;
@@ -550,6 +553,7 @@
   <nav>
     <button class="nav-btn active" data-view="dashboard"><span class="ic">◆</span> Tableau de bord</button>
     <button class="nav-btn" data-view="transactions"><span class="ic">↕</span> Revenus &amp; Dépenses</button>
+    <button class="nav-btn" data-view="comptes"><span class="ic">◧</span> Comptes</button>
     <button class="nav-btn" data-view="projets"><span class="ic">▣</span> Projets</button>
     <button class="nav-btn" data-view="budget"><span class="ic">▤</span> Budget</button>
     <button class="nav-btn" data-view="epargne"><span class="ic">●</span> Épargne</button>
@@ -611,6 +615,8 @@
     </div>
 
     <div class="tiles" id="dashTiles"></div>
+
+    <div class="card" id="dashAccountsCard" style="margin-bottom:18px;"></div>
 
     <div id="dashAlerts"></div>
 
@@ -686,11 +692,16 @@
           <input type="number" id="txAmount" min="1" placeholder="Ex: 15000" required>
         </div>
         <div class="field">
+          <label>Compte</label>
+          <select id="txAccount" required></select>
+        </div>
+        <div class="field">
           <label>Méthode</label>
           <select id="txMethod">
             <option>Mobile Money</option>
             <option>Espèces</option>
             <option>Virement bancaire</option>
+            <option>Autre</option>
           </select>
         </div>
         <div class="field">
@@ -772,6 +783,10 @@
             </select>
           </div>
           <div class="field">
+            <label>Compte</label>
+            <select id="txAdvAccount"><option value="">Tous</option></select>
+          </div>
+          <div class="field">
             <label>Montant min.</label>
             <input type="number" id="txAdvAmountMin" min="0" placeholder="Ex: 5000">
           </div>
@@ -782,7 +797,93 @@
         </div>
       </div>
 
-      <table id="txTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody></tbody></table>
+      <table id="txTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Compte</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- ================= COMPTES ================= -->
+  <!-- Comptes (Espèces, Mobile Money, banque...) et virements entre comptes —
+       voir migrations/029_accounts_transfers.sql et accountService.ts côté
+       serveur, et le bloc JS "COMPTES ET VIREMENTS" plus bas. -->
+  <section class="view" id="view-comptes">
+    <div class="page-head">
+      <div>
+        <h1>Comptes</h1>
+        <p>Où se trouve votre argent : le solde de chaque compte, et les virements entre eux.</p>
+      </div>
+      <button class="btn btn-primary" id="openAccountForm">+ Nouveau compte</button>
+    </div>
+
+    <div class="tiles" id="accountTiles"></div>
+
+    <div class="card" id="accountFormCard" style="margin-bottom:18px; display:none;">
+      <h3 id="accountFormTitle">Nouveau compte</h3>
+      <form id="accountForm" class="form-grid">
+        <div class="field">
+          <label>Nom du compte</label>
+          <input type="text" id="accountName" maxlength="60" placeholder="Ex: MTN MoMo" required>
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select id="accountType">
+            <option value="especes">Espèces</option>
+            <option value="mobile_money" selected>Mobile Money</option>
+            <option value="banque">Banque</option>
+            <option value="epargne">Épargne</option>
+            <option value="autre">Autre</option>
+          </select>
+        </div>
+        <div class="field">
+          <label id="accountOpeningLabel">Solde actuel (FCFA)</label>
+          <input type="number" id="accountOpening" step="any" placeholder="Ex: 25000" value="0">
+        </div>
+        <div class="field" style="flex-direction:row; gap:8px; align-items:end;">
+          <button type="submit" class="btn btn-primary" id="accountFormSubmit">Créer le compte</button>
+          <button type="button" class="btn btn-ghost" id="accountFormCancel">Annuler</button>
+        </div>
+      </form>
+      <div class="sub" style="margin-top:4px;">Le solde actuel sert de point de départ : les mouvements et virements enregistrés ensuite le font évoluer.</div>
+    </div>
+
+    <div class="goals-grid" id="accountsGrid" style="margin-bottom:18px;"></div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Virement entre comptes</h3>
+      <div class="sub">Un retrait Mobile Money, un dépôt à la banque… Un virement n'est ni un revenu ni une dépense. Les frais éventuels sont enregistrés comme dépense « Frais Mobile Money ».</div>
+      <form id="transferForm" class="form-grid" style="margin-top:12px;">
+        <div class="field">
+          <label>Depuis</label>
+          <select id="transferFrom" required></select>
+        </div>
+        <div class="field">
+          <label>Vers</label>
+          <select id="transferTo" required></select>
+        </div>
+        <div class="field">
+          <label id="transferAmountLabel">Montant (FCFA)</label>
+          <input type="number" id="transferAmount" min="1" step="any" placeholder="Ex: 30000" required>
+        </div>
+        <div class="field">
+          <label id="transferFeeLabel">Frais (FCFA, optionnel)</label>
+          <input type="number" id="transferFee" min="0" step="any" placeholder="Ex: 450">
+        </div>
+        <div class="field">
+          <label>Date</label>
+          <input type="date" id="transferDate">
+        </div>
+        <div class="field" style="grid-column: span 2;">
+          <label>Note (optionnel)</label>
+          <input type="text" id="transferNote" maxlength="280" placeholder="Ex: Retrait pour le marché">
+        </div>
+        <div class="field">
+          <button type="submit" class="btn btn-primary" id="transferSubmit">Enregistrer le virement</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Derniers virements</h3>
+      <table id="transfersTable"><thead><tr><th>Date</th><th>Depuis → Vers</th><th>Note</th><th style="text-align:right">Frais</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody></tbody></table>
     </div>
   </section>
 
@@ -1397,7 +1498,7 @@
 
 <script>
 /* ===================== DATA MODEL (in-memory) ===================== */
-const CATEGORIES_DEPENSE = ["Alimentation","Transport","Logement","Santé","Éducation","Loisirs","Tontine","Autres"];
+const CATEGORIES_DEPENSE = ["Alimentation","Transport","Logement","Santé","Éducation","Loisirs","Tontine","Frais Mobile Money","Autres"];
 const CATEGORIES_REVENU = ["Salaire","Commerce","Freelance","Autres"];
 const CAT_COLORS = { // fixed categorical order, per dataviz palette
   "Alimentation": "var(--s1)",
@@ -1407,11 +1508,12 @@ const CAT_COLORS = { // fixed categorical order, per dataviz palette
   "Éducation": "var(--s5)",
   "Loisirs": "var(--s6)",
   "Tontine": "var(--s7)",
+  "Frais Mobile Money": "#6b7a8f",
   "Autres": "var(--s8)"
 };
 const CAT_HEX = { // resolved hex (light) for conic-gradient which can't read CSS vars reliably across themes
   "Alimentation": "#2a78d6", "Transport": "#eb6834", "Logement": "#1baf7a", "Santé": "#eda100",
-  "Éducation": "#e87ba4", "Loisirs": "#008300", "Tontine": "#4a3aa7", "Autres": "#e34948"
+  "Éducation": "#e87ba4", "Loisirs": "#008300", "Tontine": "#4a3aa7", "Frais Mobile Money": "#6b7a8f", "Autres": "#e34948"
 };
 // Option spéciale ajoutée en bas de chaque <select> de catégorie (Transaction,
 // Budget, Planner) pour créer une catégorie personnalisée sans changer d'écran
@@ -1453,6 +1555,11 @@ function todayISO(offsetDays=0){
 // jamais avec des données de démonstration en dur.
 let state = {
   transactions: [],
+  // Comptes (avec solde d'ouverture) et virements — les soldes sont
+  // recalculés côté client à partir des mouvements (accountBalance), avec la
+  // même formule que le serveur (accountService.listAccounts).
+  accounts: [],
+  transfers: [],
   favorites: [],
   budgets: [],
   goals: [],
@@ -1574,7 +1681,13 @@ function authErrorMessage(err){
 
 /* ---- adaptateurs API -> forme interne du prototype (inchangée pour le rendu) ---- */
 function mapTxFromApi(t){
-  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null };
+  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null, accountId: t.account_id || null, transferId: t.transfer_id || null };
+}
+function mapAccountFromApi(a){
+  return { id: a.id, name: a.name, type: a.type, openingBalance: Number(a.opening_balance), archived: !!a.archived };
+}
+function mapTransferFromApi(t){
+  return { id: t.id, fromAccountId: t.from_account_id, toAccountId: t.to_account_id, amount: Number(t.amount), fee: Number(t.fee), date: t.occurred_on, note: t.note || '' };
 }
 // Gabarit de transaction réutilisable (bouton "☆ Favori") — voir
 // applyFavoriteToForm() pour comment il pré-remplit le formulaire.
@@ -1753,7 +1866,11 @@ function tontineDueInfo(t){
  */
 async function bootstrapAfterAuth(){
   try {
-    const [txRes, favRes, budRes, goalRes, contribRes, tonRes, evRes, projRes, rubRes, catRes] = await Promise.all([
+    // /api/accounts AVANT /api/transactions dans le même lot : sa lecture
+    // crée au besoin le compte « Espèces » par défaut côté serveur.
+    const [accRes, trfRes, txRes, favRes, budRes, goalRes, contribRes, tonRes, evRes, projRes, rubRes, catRes] = await Promise.all([
+      apiFetch('/api/accounts', { auth: true }),
+      apiFetch('/api/transfers', { auth: true }),
       apiFetch('/api/transactions', { auth: true }),
       apiFetch('/api/transaction-favorites', { auth: true }),
       apiFetch('/api/budgets', { auth: true }),
@@ -1765,6 +1882,8 @@ async function bootstrapAfterAuth(){
       apiFetch('/api/rubriques', { auth: true }),
       apiFetch('/api/categories', { auth: true }),
     ]);
+    state.accounts = accRes.accounts.map(mapAccountFromApi);
+    state.transfers = trfRes.transfers.map(mapTransferFromApi);
     state.transactions = txRes.transactions.map(mapTxFromApi);
     state.favorites = favRes.transactionFavorites.map(mapFavoriteFromApi);
     state.budgets = budRes.budgets.map(mapBudgetFromApi);
@@ -1791,6 +1910,8 @@ async function bootstrapAfterAuth(){
   populateBudgetCategorySelect();
   populateEventCategorySelect();
   populateProjectSelect();
+  populateAccountSelects();
+  syncTxMethodWithAccount();
   renderAll();
 }
 
@@ -1815,7 +1936,7 @@ async function onAuthenticated(data){
 function forceLogout(message){
   Object.keys(notifTimers).forEach(k => { clearTimeout(notifTimers[k]); delete notifTimers[k]; });
   session = { accessToken: null, refreshToken: null, user: null };
-  state.transactions = []; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set(); state.budgetProposal = null;
+  state.transactions = []; state.accounts = []; state.transfers = []; lastUsedAccountId = null; state.budgets = []; state.goals = []; state.projects = []; state.rubriques = []; state.tontines = []; state.plannerEvents = []; state.chatMessages = []; state.customCategories = []; state.expandedRubriqueIds = new Set(); state.budgetProposal = null;
   reminderRecordedForProposalId = null;
   chatInitialized = false;
   selectedProjectId = null;
@@ -1956,10 +2077,10 @@ let txTypeFilter = 'all';
 // s'appliquent en ET). Voir renderTxFilters()/renderTxTable().
 let txSearchField = 'note';
 let txSearchValue = '';
-const txAdvFilters = { dateFrom: '', dateTo: '', category: '', method: '', amountMin: '', amountMax: '' };
+const txAdvFilters = { dateFrom: '', dateTo: '', category: '', method: '', account: '', amountMin: '', amountMax: '' };
 function txFiltersActive(){
   return txTypeFilter !== 'all' || txSearchValue !== ''
-    || !!txAdvFilters.dateFrom || !!txAdvFilters.dateTo || !!txAdvFilters.category || !!txAdvFilters.method
+    || !!txAdvFilters.dateFrom || !!txAdvFilters.dateTo || !!txAdvFilters.category || !!txAdvFilters.method || !!txAdvFilters.account
     || txAdvFilters.amountMin !== '' || txAdvFilters.amountMax !== '';
 }
 // Transaction en cours de modification (bouton "Modifier" de l'historique) —
@@ -2022,6 +2143,9 @@ function applyCurrencyLabels(){
   set('goalTargetLabel', `Montant cible (${u})`);
   set('tonAmountLabel', `Cotisation (${u} / tour)`);
   set('evAmountLabel', `Montant (${u})`);
+  set('accountOpeningLabel', `Solde actuel (${u})`);
+  set('transferAmountLabel', `Montant (${u})`);
+  set('transferFeeLabel', `Frais (${u}, optionnel)`);
 }
 function monthLabel(offset){
   const months = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
@@ -2381,6 +2505,8 @@ function renderDashboard(){
       <div class="delta ${t.cls}">${t.delta}</div>
     </div>`).join('');
 
+  renderDashAccountsCard();
+
   // Alerts: budgets over 90%
   const overBudget = state.budgets.filter(b => spentByCategory(b.category) / b.limit >= 0.9);
   const alertsEl = document.getElementById('dashAlerts');
@@ -2644,6 +2770,8 @@ function prefillTxFormFields(t){
   const catSel = document.getElementById('txCategory');
   if([...catSel.options].some(o=>o.value===t.category)) catSel.value = t.category;
   document.getElementById('txAmount').value = t.amount;
+  // Un favori n'a pas de compte : on garde alors le compte déjà sélectionné.
+  if(t.accountId) populateAccountSelects(t.accountId);
   document.getElementById('txMethod').value = t.method;
   document.getElementById('txNote').value = t.note || '';
   const projSel = document.getElementById('txProject');
@@ -2761,6 +2889,8 @@ function exitTxEditMode(){
   document.getElementById('txDate').value = todayISO(0);
   populateCategorySelect();
   populateRubriqueSelectForProject('');
+  populateAccountSelects();
+  syncTxMethodWithAccount();
 }
 
 document.getElementById('txCancelEdit').addEventListener('click', exitTxEditMode);
@@ -2775,6 +2905,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const note = document.getElementById('txNote').value;
   const projectId = document.getElementById('txProject').value || undefined;
   const rubriqueId = document.getElementById('txRubrique').value || undefined;
+  const accountId = document.getElementById('txAccount').value || undefined;
   if(!amount || amount<=0) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
@@ -2788,17 +2919,22 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
         note: note ? note : null,
         projectId: projectId ?? null,
         rubriqueId: rubriqueId ?? null,
+        accountId,
       }});
       const idx = state.transactions.findIndex(x=>x.id===editingTxId);
       if(idx !== -1) state.transactions[idx] = mapTxFromApi(transaction);
       exitTxEditMode();
     } else {
-      const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId } });
+      const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId, accountId } });
       state.transactions.push(mapTxFromApi(transaction));
+      // Le formulaire repropose ensuite le dernier compte utilisé.
+      if(accountId) lastUsedAccountId = accountId;
       e.target.reset();
       document.getElementById('txDate').value = todayISO(0);
       populateCategorySelect();
       populateRubriqueSelectForProject('');
+      populateAccountSelects();
+      syncTxMethodWithAccount();
       if(type === 'depense') checkBudgetAlertAfterAdd(category);
     }
     renderAll();
@@ -2836,6 +2972,9 @@ function renderTxFilters(){
   document.getElementById('txAdvDateTo').value = txAdvFilters.dateTo;
   advCategory.value = txAdvFilters.category;
   document.getElementById('txAdvMethod').value = txAdvFilters.method;
+  const advAccount = document.getElementById('txAdvAccount');
+  advAccount.innerHTML = '<option value="">Tous</option>' + state.accounts.map(a=>`<option value="${a.id}">${escapeHtml(a.name)}${a.archived?' (archivé)':''}</option>`).join('');
+  advAccount.value = state.accounts.some(a=>a.id===txAdvFilters.account) ? txAdvFilters.account : '';
   document.getElementById('txAdvAmountMin').value = txAdvFilters.amountMin;
   document.getElementById('txAdvAmountMax').value = txAdvFilters.amountMax;
 
@@ -2843,6 +2982,7 @@ function renderTxFilters(){
   document.getElementById('txAdvDateTo').onchange = (e) => { txAdvFilters.dateTo = e.target.value; renderTxTable(); updateTxResetVisibility(); };
   advCategory.onchange = (e) => { txAdvFilters.category = e.target.value; renderTxTable(); updateTxResetVisibility(); };
   document.getElementById('txAdvMethod').onchange = (e) => { txAdvFilters.method = e.target.value; renderTxTable(); updateTxResetVisibility(); };
+  advAccount.onchange = (e) => { txAdvFilters.account = e.target.value; renderTxTable(); updateTxResetVisibility(); };
   document.getElementById('txAdvAmountMin').oninput = (e) => { txAdvFilters.amountMin = e.target.value; renderTxTable(); updateTxResetVisibility(); };
   document.getElementById('txAdvAmountMax').oninput = (e) => { txAdvFilters.amountMax = e.target.value; renderTxTable(); updateTxResetVisibility(); };
 
@@ -2855,7 +2995,7 @@ function renderTxFilters(){
 
   document.getElementById('txResetFilters').onclick = () => {
     txTypeFilter = 'all'; txSearchField = 'note'; txSearchValue = '';
-    txAdvFilters.dateFrom = ''; txAdvFilters.dateTo = ''; txAdvFilters.category = ''; txAdvFilters.method = ''; txAdvFilters.amountMin = ''; txAdvFilters.amountMax = '';
+    txAdvFilters.dateFrom = ''; txAdvFilters.dateTo = ''; txAdvFilters.category = ''; txAdvFilters.method = ''; txAdvFilters.account = ''; txAdvFilters.amountMin = ''; txAdvFilters.amountMax = '';
     renderTxFilters();
     renderTxTable();
   };
@@ -2938,6 +3078,7 @@ function filteredTransactionRows(){
   if(txAdvFilters.dateTo) rows = rows.filter(t => t.date <= txAdvFilters.dateTo);
   if(txAdvFilters.category) rows = rows.filter(t => t.category === txAdvFilters.category);
   if(txAdvFilters.method) rows = rows.filter(t => t.method === txAdvFilters.method);
+  if(txAdvFilters.account) rows = rows.filter(t => t.accountId === txAdvFilters.account);
   if(txAdvFilters.amountMin !== '') rows = rows.filter(t => t.amount >= Number(txAdvFilters.amountMin));
   if(txAdvFilters.amountMax !== '') rows = rows.filter(t => t.amount <= Number(txAdvFilters.amountMax));
   return rows;
@@ -2950,16 +3091,23 @@ function renderTxTable(){
       <td>${t.date}</td>
       <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
       <td>${t.category}${projectTag(t.projectId)}${rubriqueTag(t.rubriqueId)}</td>
+      <td>${escapeHtml(accountName(t.accountId))}</td>
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
-      <td style="white-space:normal; min-width:260px;">
+      <td style="white-space:normal; min-width:260px;">${t.transferId ? `
+        <span class="pill" title="Ces frais suivent leur virement : gérez-les depuis l'onglet Comptes">↔ Frais de virement</span>
+        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:4px 0 0 0;" data-goto-comptes="1">Voir le virement</button>` : `
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-edit="${t.id}" title="Modifier ce mouvement">✏️ Modifier</button>
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-repeat="${t.id}" title="Pré-remplir le formulaire avec ce mouvement">↻ Répéter</button>
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-save-fav="${t.id}" title="Enregistrer comme favori pour le rejouer en un tap">☆ Favori</button>
-        <button class="btn-danger" style="margin:0 0 4px 0;" data-del="${t.id}">Suppr.</button>
+        <button class="btn-danger" style="margin:0 0 4px 0;" data-del="${t.id}">Suppr.</button>`}
       </td>
-    </tr>`).join('') || '<tr><td colspan="7" class="empty-state">Aucune transaction pour ce filtre</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="8" class="empty-state">Aucune transaction pour ce filtre</td></tr>';
+
+  document.querySelectorAll('#txTable [data-goto-comptes]').forEach(btn=>{
+    btn.addEventListener('click', ()=> switchToView('comptes'));
+  });
 
   document.querySelectorAll('[data-edit]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -3033,20 +3181,20 @@ function exportTransactionsPDF(){
   const body = rows.map(t=>[
     t.date,
     t.type==='revenu' ? 'Revenu' : 'Dépense',
-    t.category, t.method, t.note||'',
+    t.category, accountName(t.accountId), t.method, t.note||'',
     (t.type==='revenu'?'+':'-') + ' ' + fmtPdf(t.amount),
   ]);
 
   doc.autoTable({
     startY: 31,
-    head: [['Date','Type','Catégorie','Méthode','Note','Montant']],
+    head: [['Date','Type','Catégorie','Compte','Méthode','Note','Montant']],
     body,
     styles: { fontSize: 9 },
     headStyles: { fillColor: [42, 120, 214] },
     foot: [
-      ['', '', '', '', 'Total revenus', fmtPdf(totals.totalRevenu)],
-      ['', '', '', '', 'Total dépenses', fmtPdf(totals.totalDepense)],
-      ['', '', '', '', 'Solde', fmtPdf(totals.solde)],
+      ['', '', '', '', '', 'Total revenus', fmtPdf(totals.totalRevenu)],
+      ['', '', '', '', '', 'Total dépenses', fmtPdf(totals.totalDepense)],
+      ['', '', '', '', '', 'Solde', fmtPdf(totals.solde)],
     ],
     footStyles: { fillColor: [245,245,245], textColor: 20, fontStyle: 'bold' },
   });
@@ -3064,15 +3212,15 @@ function exportTransactionsExcel(){
     ['POOSSER — ' + transactionsExportTitle()],
     [`Généré le ${new Date().toLocaleDateString('fr-FR')} — ${rows.length} mouvement(s)`],
     [],
-    ['Date','Type','Catégorie','Méthode','Note','Montant'],
-    ...rows.map(t=>[t.date, t.type==='revenu'?'Revenu':'Dépense', t.category, t.method, t.note||'', (t.type==='revenu'?1:-1)*t.amount]),
+    ['Date','Type','Catégorie','Compte','Méthode','Note','Montant'],
+    ...rows.map(t=>[t.date, t.type==='revenu'?'Revenu':'Dépense', t.category, accountName(t.accountId), t.method, t.note||'', (t.type==='revenu'?1:-1)*t.amount]),
     [],
-    ['','','','','Total revenus', totals.totalRevenu],
-    ['','','','','Total dépenses', totals.totalDepense],
-    ['','','','','Solde', totals.solde],
+    ['','','','','','Total revenus', totals.totalRevenu],
+    ['','','','','','Total dépenses', totals.totalDepense],
+    ['','','','','','Solde', totals.solde],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:12},{wch:10},{wch:16},{wch:18},{wch:28},{wch:14}];
+  ws['!cols'] = [{wch:12},{wch:10},{wch:18},{wch:16},{wch:18},{wch:28},{wch:14}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Historique');
   XLSX.writeFile(wb, 'POOSSER - Historique revenus et depenses.xlsx');
@@ -3080,6 +3228,332 @@ function exportTransactionsExcel(){
 
 document.getElementById('txExportPdf').addEventListener('click', exportTransactionsPDF);
 document.getElementById('txExportExcel').addEventListener('click', exportTransactionsExcel);
+
+/* ===================== COMPTES ET VIREMENTS =====================
+ * Comptes (Espèces, Mobile Money, banque, épargne...) avec leur solde, et
+ * virements entre comptes — voir migrations/029_accounts_transfers.sql et
+ * accountService.ts côté serveur. Choix validés avec l'utilisateur :
+ *   - chaque mouvement porte un compte ; le formulaire repropose le dernier
+ *     compte utilisé (lastUsedAccountId), à défaut le compte par défaut ;
+ *   - un virement est neutre (ni revenu ni dépense) ; ses frais deviennent
+ *     une dépense « Frais Mobile Money » sur le compte débité, créée par le
+ *     serveur et liée au virement (non modifiable directement).
+ * Solde = solde de départ + revenus − dépenses + virements reçus − émis,
+ * recalculé ici à partir de l'état (même formule que le serveur). */
+
+// Échappement des textes saisis par l'utilisateur avant insertion dans la
+// page (noms de comptes, notes de virement) : un nom contenant du HTML doit
+// s'afficher tel quel, jamais s'exécuter.
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+const ACCOUNT_TYPE_LABELS = { especes: 'Espèces', mobile_money: 'Mobile Money', banque: 'Banque', epargne: 'Épargne', autre: 'Autre' };
+const ACCOUNT_TYPE_ICONS = { especes: '💵', mobile_money: '📱', banque: '🏦', epargne: '🐷', autre: '📁' };
+// Moyen de paiement proposé par défaut selon le type du compte choisi
+// (reste modifiable dans le formulaire) — même table que le serveur.
+const METHOD_BY_ACCOUNT_TYPE = { especes: 'Espèces', mobile_money: 'Mobile Money', banque: 'Virement bancaire', epargne: 'Autre', autre: 'Autre' };
+const TRANSFER_FEE_CATEGORY = 'Frais Mobile Money';
+
+let lastUsedAccountId = null;
+let editingAccountId = null;
+
+function accountById(id){ return state.accounts.find(a=>a.id===id); }
+function accountName(id){ const a = accountById(id); return a ? a.name : '—'; }
+function activeAccounts(){ return state.accounts.filter(a=>!a.archived); }
+// Compte par défaut = le plus ancien compte actif (ordre renvoyé par le
+// serveur : actifs d'abord, puis par date de création).
+function defaultAccountId(){ const a = activeAccounts()[0]; return a ? a.id : null; }
+function accountBalance(id){
+  const a = accountById(id);
+  if(!a) return 0;
+  let bal = a.openingBalance;
+  for(const t of state.transactions){ if(t.accountId === id) bal += t.type === 'revenu' ? t.amount : -t.amount; }
+  for(const tr of state.transfers){
+    if(tr.toAccountId === id) bal += tr.amount;
+    if(tr.fromAccountId === id) bal -= tr.amount;
+  }
+  return Math.round(bal * 100) / 100;
+}
+function accountMovementCount(id){
+  return state.transactions.filter(t=>t.accountId===id).length
+    + state.transfers.filter(tr=>tr.fromAccountId===id || tr.toAccountId===id).length;
+}
+function totalAvailable(){ return activeAccounts().reduce((sum, a) => sum + accountBalance(a.id), 0); }
+function monthTransferFees(){
+  return currentMonthTx().filter(t=>t.type==='depense' && t.category===TRANSFER_FEE_CATEGORY).reduce((sum, t) => sum + t.amount, 0);
+}
+
+async function refreshAccountsFromServer(){
+  const { accounts } = await apiFetch('/api/accounts', { auth: true });
+  state.accounts = accounts.map(mapAccountFromApi);
+}
+
+function accountOptionsHtml(list){
+  return list.map(a=>`<option value="${a.id}">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)}${a.archived ? ' (archivé)' : ''}</option>`).join('');
+}
+
+/**
+ * Remplit les listes de comptes du formulaire de mouvement et du formulaire
+ * de virement. `preferredId` (ex. le compte d'un mouvement qu'on modifie) est
+ * sélectionné en priorité, même s'il est archivé ; sinon le dernier compte
+ * utilisé, sinon le compte par défaut.
+ */
+function populateAccountSelects(preferredId){
+  const txSel = document.getElementById('txAccount');
+  if(txSel){
+    const list = activeAccounts();
+    const preferred = preferredId ? accountById(preferredId) : null;
+    if(preferred && preferred.archived) list.push(preferred);
+    txSel.innerHTML = accountOptionsHtml(list);
+    const candidates = [preferredId, lastUsedAccountId, defaultAccountId()];
+    const pick = candidates.find(id => id && list.some(a=>a.id===id));
+    if(pick) txSel.value = pick;
+  }
+  const fromSel = document.getElementById('transferFrom');
+  const toSel = document.getElementById('transferTo');
+  if(fromSel && toSel){
+    const list = activeAccounts();
+    const prevFrom = fromSel.value, prevTo = toSel.value;
+    fromSel.innerHTML = accountOptionsHtml(list);
+    toSel.innerHTML = accountOptionsHtml(list);
+    if(list.some(a=>a.id===prevFrom)) fromSel.value = prevFrom;
+    if(list.some(a=>a.id===prevTo)) toSel.value = prevTo;
+    ensureDistinctTransferAccounts();
+  }
+}
+
+// « Vers » ne doit jamais proposer le même compte que « Depuis ».
+function ensureDistinctTransferAccounts(){
+  const fromSel = document.getElementById('transferFrom');
+  const toSel = document.getElementById('transferTo');
+  if(fromSel.value && fromSel.value === toSel.value){
+    const other = activeAccounts().find(a=>a.id!==fromSel.value);
+    if(other) toSel.value = other.id;
+  }
+}
+document.getElementById('transferFrom').addEventListener('change', ensureDistinctTransferAccounts);
+
+// Aligne la méthode de paiement sur le type du compte choisi.
+function syncTxMethodWithAccount(){
+  const acc = accountById(document.getElementById('txAccount').value);
+  if(!acc) return;
+  const method = METHOD_BY_ACCOUNT_TYPE[acc.type];
+  const methodSel = document.getElementById('txMethod');
+  if([...methodSel.options].some(o=>o.value===method)) methodSel.value = method;
+}
+document.getElementById('txAccount').addEventListener('change', syncTxMethodWithAccount);
+
+function renderDashAccountsCard(){
+  const card = document.getElementById('dashAccountsCard');
+  if(!card) return;
+  const list = activeAccounts();
+  if(!list.length){ card.style.display = 'none'; return; }
+  card.style.display = '';
+  card.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <h3 style="margin:0;">Mes comptes</h3>
+        <div class="sub" style="margin-top:4px;">Disponible au total : <strong>${fmt(totalAvailable())}</strong></div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="dashGotoAccounts" style="padding:6px 12px; font-size:12.5px;">Gérer les comptes</button>
+    </div>
+    <div class="filters" style="margin:12px 0 0;">
+      ${list.map(a=>`<span class="pill">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} · <span class="${accountBalance(a.id)>=0?'amt-pos':'amt-neg'}">${fmt(accountBalance(a.id))}</span></span>`).join('')}
+    </div>`;
+  document.getElementById('dashGotoAccounts').addEventListener('click', ()=> switchToView('comptes'));
+}
+
+function renderAccounts(){
+  const grid = document.getElementById('accountsGrid');
+  if(!grid) return;
+  const list = activeAccounts();
+  const monthTransfers = state.transfers.filter(tr => tr.date.slice(0,7) === todayISO(0).slice(0,7));
+  const mobile = list.filter(a=>a.type==='mobile_money').reduce((sum, a) => sum + accountBalance(a.id), 0);
+  const tiles = [
+    { label: 'Disponible au total', value: fmt(totalAvailable()), delta: `${list.length} compte(s) actif(s)`, cls: totalAvailable() >= 0 ? 'good' : 'bad' },
+    { label: 'Sur Mobile Money', value: fmt(mobile), delta: `${list.filter(a=>a.type==='mobile_money').length} compte(s)`, cls: '' },
+    { label: 'Frais de virement ce mois', value: fmt(monthTransferFees()), delta: 'Argent parti en frais', cls: monthTransferFees() > 0 ? 'bad' : '' },
+    { label: 'Virements ce mois', value: String(monthTransfers.length), delta: `${fmt(monthTransfers.reduce((s, tr) => s + tr.amount, 0))} déplacés`, cls: '' },
+  ];
+  document.getElementById('accountTiles').innerHTML = tiles.map(t=>`
+    <div class="tile">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value}</div>
+      <div class="delta ${t.cls}">${t.delta}</div>
+    </div>`).join('');
+
+  const defId = defaultAccountId();
+  grid.innerHTML = state.accounts.map(a=>{
+    const bal = accountBalance(a.id);
+    const used = accountMovementCount(a.id);
+    return `
+    <div class="goal-card project-card" style="cursor:default;${a.archived ? ' opacity:.6;' : ''}" data-account-card="${a.id}">
+      <div class="project-card-top">
+        <div style="display:flex; gap:12px; align-items:center;">
+          <div class="project-icon-badge">${ACCOUNT_TYPE_ICONS[a.type] || '📁'}</div>
+          <div>
+            <h4 style="margin:0 0 4px;">${escapeHtml(a.name)}</h4>
+            <span class="pill">${ACCOUNT_TYPE_LABELS[a.type] || a.type}</span>
+            ${a.id===defId ? '<span class="pill" title="Compte utilisé quand aucun compte n\'est précisé">Par défaut</span>' : ''}
+            ${a.archived ? '<span class="pill">Archivé</span>' : ''}
+          </div>
+        </div>
+      </div>
+      <div class="project-balance ${bal>=0?'amt-pos':'amt-neg'}">${fmt(bal)}</div>
+      <div class="project-stats-row">
+        <span>${used} mouvement(s)</span>
+        <span>Solde de départ ${fmt(a.openingBalance)}</span>
+      </div>
+      <div class="project-card-actions">
+        <button type="button" class="btn btn-ghost" data-acc-edit="${a.id}">✏️ Modifier</button>
+        <button type="button" class="btn btn-ghost" data-acc-archive="${a.id}">${a.archived ? '↺ Réactiver' : 'Archiver'}</button>
+        ${used === 0 ? `<button type="button" class="btn-danger" data-acc-del="${a.id}">Supprimer</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty-state">Aucun compte pour le moment.</div>';
+
+  grid.querySelectorAll('[data-acc-edit]').forEach(btn=>btn.addEventListener('click', ()=> openAccountForm(accountById(btn.dataset.accEdit))));
+  grid.querySelectorAll('[data-acc-archive]').forEach(btn=>btn.addEventListener('click', ()=> toggleAccountArchived(btn.dataset.accArchive, btn)));
+  grid.querySelectorAll('[data-acc-del]').forEach(btn=>btn.addEventListener('click', ()=> deleteAccountWithConfirm(btn.dataset.accDel, btn)));
+
+  const rows = [...state.transfers].sort((a,b)=> b.date.localeCompare(a.date));
+  document.querySelector('#transfersTable tbody').innerHTML = rows.map(tr=>`
+    <tr>
+      <td>${tr.date}</td>
+      <td>${escapeHtml(accountName(tr.fromAccountId))} → ${escapeHtml(accountName(tr.toAccountId))}</td>
+      <td>${tr.note ? escapeHtml(tr.note) : '—'}</td>
+      <td style="text-align:right" class="${tr.fee>0?'amt-neg':''}">${tr.fee>0 ? '- ' + fmt(tr.fee) : '—'}</td>
+      <td style="text-align:right">${fmt(tr.amount)}</td>
+      <td><button type="button" class="btn-danger" data-transfer-del="${tr.id}">Suppr.</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="empty-state">Aucun virement pour le moment.</td></tr>';
+  document.querySelectorAll('[data-transfer-del]').forEach(btn=>btn.addEventListener('click', ()=> deleteTransfer(btn.dataset.transferDel, btn)));
+
+  // Un virement exige deux comptes actifs.
+  const canTransfer = list.length >= 2;
+  document.getElementById('transferSubmit').disabled = !canTransfer;
+  document.getElementById('transferSubmit').title = canTransfer ? '' : 'Créez au moins deux comptes pour faire un virement';
+  if(!document.getElementById('transferDate').value) document.getElementById('transferDate').value = todayISO(0);
+}
+
+function openAccountForm(account){
+  editingAccountId = account ? account.id : null;
+  document.getElementById('accountFormTitle').textContent = account ? 'Modifier le compte' : 'Nouveau compte';
+  document.getElementById('accountFormSubmit').textContent = account ? 'Enregistrer' : 'Créer le compte';
+  document.getElementById('accountName').value = account ? account.name : '';
+  document.getElementById('accountType').value = account ? account.type : 'mobile_money';
+  document.getElementById('accountOpening').value = account ? account.openingBalance : 0;
+  document.getElementById('accountFormCard').style.display = 'block';
+  document.getElementById('accountName').focus();
+}
+function closeAccountForm(){
+  editingAccountId = null;
+  document.getElementById('accountFormCard').style.display = 'none';
+  document.getElementById('accountForm').reset();
+}
+document.getElementById('openAccountForm').addEventListener('click', ()=> openAccountForm(null));
+document.getElementById('accountFormCancel').addEventListener('click', closeAccountForm);
+
+document.getElementById('accountForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const name = document.getElementById('accountName').value.trim();
+  const type = document.getElementById('accountType').value;
+  const openingBalance = Number(document.getElementById('accountOpening').value || 0);
+  if(!name || Number.isNaN(openingBalance)) return;
+  const btn = document.getElementById('accountFormSubmit');
+  btn.disabled = true;
+  try {
+    if(editingAccountId){
+      await apiFetch('/api/accounts/' + editingAccountId, { method:'PATCH', auth:true, body:{ name, type, openingBalance } });
+    } else {
+      await apiFetch('/api/accounts', { method:'POST', auth:true, body:{ name, type, openingBalance } });
+    }
+    await refreshAccountsFromServer();
+    closeAccountForm();
+    populateAccountSelects();
+    renderAll();
+  } catch(err){
+    alert("Impossible d'enregistrer le compte : " + authErrorMessage(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function toggleAccountArchived(id, btn){
+  const account = accountById(id);
+  if(!account) return;
+  btn.disabled = true;
+  try {
+    await apiFetch('/api/accounts/' + id, { method:'PATCH', auth:true, body:{ archived: !account.archived } });
+    await refreshAccountsFromServer();
+    if(lastUsedAccountId === id && !account.archived) lastUsedAccountId = null;
+    populateAccountSelects();
+    renderAll();
+  } catch(err){
+    alert('Action impossible : ' + authErrorMessage(err));
+    btn.disabled = false;
+  }
+}
+
+async function deleteAccountWithConfirm(id, btn){
+  const account = accountById(id);
+  if(!account || !confirm(`Supprimer le compte « ${account.name} » ? Il n'a aucun mouvement.`)) return;
+  btn.disabled = true;
+  try {
+    await apiFetch('/api/accounts/' + id, { method:'DELETE', auth:true });
+    await refreshAccountsFromServer();
+    if(lastUsedAccountId === id) lastUsedAccountId = null;
+    populateAccountSelects();
+    renderAll();
+  } catch(err){
+    alert('Suppression impossible : ' + authErrorMessage(err));
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('transferForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const fromAccountId = document.getElementById('transferFrom').value;
+  const toAccountId = document.getElementById('transferTo').value;
+  const amount = parseFloat(document.getElementById('transferAmount').value);
+  const feeRaw = document.getElementById('transferFee').value;
+  const fee = feeRaw === '' ? 0 : parseFloat(feeRaw);
+  const occurredOn = document.getElementById('transferDate').value || todayISO(0);
+  const note = document.getElementById('transferNote').value.trim();
+  if(fromAccountId === toAccountId){ alert('Choisissez deux comptes différents.'); return; }
+  if(!amount || amount <= 0 || Number.isNaN(fee) || fee < 0) return;
+  const btn = document.getElementById('transferSubmit');
+  btn.disabled = true;
+  try {
+    const { transfer, feeTransaction } = await apiFetch('/api/transfers', { method:'POST', auth:true, body:{
+      fromAccountId, toAccountId, amount, fee: fee || undefined, occurredOn, note: note || undefined,
+    }});
+    state.transfers.push(mapTransferFromApi(transfer));
+    if(feeTransaction) state.transactions.push(mapTxFromApi(feeTransaction));
+    document.getElementById('transferAmount').value = '';
+    document.getElementById('transferFee').value = '';
+    document.getElementById('transferNote').value = '';
+    renderAll();
+  } catch(err){
+    alert("Impossible d'enregistrer le virement : " + authErrorMessage(err));
+  } finally {
+    btn.disabled = activeAccounts().length < 2;
+  }
+});
+
+async function deleteTransfer(id, btn){
+  if(!confirm('Supprimer ce virement ? Ses frais éventuels seront supprimés avec lui.')) return;
+  btn.disabled = true;
+  try {
+    await apiFetch('/api/transfers/' + id, { method:'DELETE', auth:true });
+    state.transfers = state.transfers.filter(tr=>tr.id !== id);
+    state.transactions = state.transactions.filter(t=>t.transferId !== id);
+    renderAll();
+  } catch(err){
+    alert('Suppression impossible : ' + authErrorMessage(err));
+    btn.disabled = false;
+  }
+}
 
 /* ===================== BUDGET VIEW ===================== */
 function populateBudgetCategorySelect(){
@@ -5403,6 +5877,8 @@ function buildAssistantContext(){
       nom: t.name, montantCotisation: t.amount, tourActuel: t.currentRound,
       membresNonCotises: t.members.filter(m=>!t.paidThisRound[m]),
     })),
+    comptes: activeAccounts().map(a => ({ nom: a.name, type: ACCOUNT_TYPE_LABELS[a.type] || a.type, solde: accountBalance(a.id) })),
+    disponibleTotal: totalAvailable(),
     plannerAVenir: state.plannerEvents.filter(e=>e.status!=='realise').length,
     plannerEnRetard: state.plannerEvents.filter(e=>e.status!=='realise' && e.date<todayISO(0)).length,
   };
@@ -6232,6 +6708,7 @@ function renderStats(){
 /* ===================== RENDER ALL ===================== */
 function renderAll(){
   renderDashboard();
+  renderAccounts();
   renderTxFilters();
   renderTxTable();
   renderFavorites();
