@@ -68,6 +68,11 @@ const envSchema = z.object({
 
   RATE_LIMIT_ASSISTANT_PER_USER: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_ASSISTANT_PER_USER_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  // Filets anti-abus génériques par IP (compteurs séparés pour /auth et /api).
+  RATE_LIMIT_GLOBAL_AUTH_PER_IP: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_GLOBAL_AUTH_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_GLOBAL_API_PER_IP: z.coerce.number().int().positive().default(300),
+  RATE_LIMIT_GLOBAL_API_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
 
   // Proposition automatique de budget mensuel (reprise des éléments du mois
   // précédent) : génération déclenchée paresseusement à partir du jour
