@@ -14,6 +14,7 @@ import {
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
   askAssistantSchema,
   decideBudgetProposalSchema,
+  createAccountSchema, updateAccountSchema, createTransferSchema,
 } from "../validators/businessSchemas.js";
 
 import * as transactions from "../services/transactionService.js";
@@ -27,6 +28,7 @@ import * as tontines from "../services/tontineService.js";
 import * as plannerEvents from "../services/plannerEventService.js";
 import { askAssistant } from "../services/assistantService.js";
 import * as budgetProposals from "../services/budgetProposalService.js";
+import * as accounts from "../services/accountService.js";
 
 export const businessRouter = Router();
 
@@ -57,6 +59,41 @@ businessRouter.patch("/transactions/:id", validateBody(updateTransactionSchema),
 businessRouter.delete("/transactions/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await transactions.deleteTransaction(req.auth!.userId, id);
+  res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Comptes (Espèces, Mobile Money, banque...) et virements entre comptes —
+// voir accountService.ts et migrations/029_accounts_transfers.sql. Chaque
+// compte est renvoyé avec son solde calculé (`balance`).
+// ---------------------------------------------------------------------------
+businessRouter.get("/accounts", async (req, res) => {
+  res.json({ accounts: await accounts.listAccounts(req.auth!.userId) });
+});
+businessRouter.post("/accounts", validateBody(createAccountSchema), async (req, res) => {
+  const account = await accounts.createAccount(req.auth!.userId, req.body);
+  res.status(201).json({ account });
+});
+businessRouter.patch("/accounts/:id", validateBody(updateAccountSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  res.json({ account: await accounts.updateAccount(req.auth!.userId, id, req.body) });
+});
+businessRouter.delete("/accounts/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  await accounts.deleteAccount(req.auth!.userId, id);
+  res.status(204).send();
+});
+
+businessRouter.get("/transfers", async (req, res) => {
+  res.json({ transfers: await accounts.listTransfers(req.auth!.userId) });
+});
+businessRouter.post("/transfers", validateBody(createTransferSchema), async (req, res) => {
+  const result = await accounts.createTransfer(req.auth!.userId, req.body);
+  res.status(201).json(result);
+});
+businessRouter.delete("/transfers/:id", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  await accounts.deleteTransfer(req.auth!.userId, id);
   res.status(204).send();
 });
 
