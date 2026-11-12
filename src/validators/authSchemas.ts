@@ -38,14 +38,18 @@ export const loginSchema = z.object({
   phone: phoneSchema,
   pin: pinSchema,
   device: deviceSchema,
+  // « Rester connecté sur cet appareil » : le refresh token est alors posé dans
+  // un cookie HttpOnly au lieu d'être renvoyé dans le corps (voir lib/refreshCookie.ts).
+  rememberMe: z.boolean().optional(),
 });
 
+// refreshToken absent du corps = celui du cookie « rester connecté », s'il existe.
 export const refreshSchema = z.object({
-  refreshToken: z.string().min(10),
+  refreshToken: z.string().min(10).optional(),
 });
 
 export const logoutSchema = z.object({
-  refreshToken: z.string().min(10),
+  refreshToken: z.string().min(10).optional(),
 });
 
 export const forgotPinSchema = z.object({
