@@ -241,6 +241,35 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
   `occurredOn`, `method`) ne prennent qu'une valeur ou sont absents (jamais `null`).
 - `DELETE /api/transactions/:id` → `204`.
 - Erreurs : `404 TRANSACTION_NOT_FOUND`.
+- Compte : `accountId` (facultatif) rattache le mouvement à un compte de l'utilisateur ;
+  absent = compte par défaut (son plus ancien compte actif, « Espèces » créé au besoin).
+  Chaque transaction renvoyée porte `account_id` et `transfer_id` (renseigné seulement
+  pour les frais d'un virement). Erreurs : `404 ACCOUNT_NOT_FOUND`, `409 ACCOUNT_ARCHIVED`,
+  `409 TRANSACTION_LINKED_TO_TRANSFER` (modifier ou supprimer des frais de virement :
+  passer par le virement).
+
+## Comptes et virements
+
+Voir `migrations/029_accounts_transfers.sql`. Solde d'un compte = `opening_balance`
++ revenus − dépenses (frais compris) + virements reçus − virements émis, calculé à la lecture.
+
+- `GET /api/accounts` → `{ accounts: [...] }`, chaque compte avec `balance`. Crée le compte
+  « Espèces » par défaut si l'utilisateur n'en a aucun.
+- `POST /api/accounts` → `{ name, type, openingBalance? }` (`type` : `especes`,
+  `mobile_money`, `banque`, `epargne`, `autre` ; `openingBalance` peut être négatif) →
+  `201 { account }`.
+- `PATCH /api/accounts/:id` → `{ name?, type?, openingBalance?, archived? }` → `200 { account }`.
+  Un compte archivé ne reçoit plus de nouveaux mouvements ni virements.
+- `DELETE /api/accounts/:id` → `204`, seulement pour un compte jamais utilisé.
+- `GET /api/transfers` → `{ transfers: [...] }`, triés par date décroissante.
+- `POST /api/transfers` → `{ fromAccountId, toAccountId, amount, fee?, occurredOn, note? }` →
+  `201 { transfer, feeTransaction }`. Le virement est neutre ; si `fee > 0`, une dépense
+  « Frais Mobile Money » est créée sur le compte débité et liée au virement.
+- `DELETE /api/transfers/:id` → `204` ; supprime aussi ses frais.
+- Erreurs : `404 ACCOUNT_NOT_FOUND`, `409 ACCOUNT_NAME_TAKEN`, `409 ACCOUNT_IN_USE`
+  (supprimer un compte utilisé : l'archiver), `409 ACCOUNT_ARCHIVED`,
+  `409 ACCOUNT_LAST_ACTIVE` (archiver ou supprimer le dernier compte actif),
+  `404 TRANSFER_NOT_FOUND`, `400 VALIDATION_ERROR` (même compte des deux côtés).
 - `category` est une **chaîne libre** (1 à 60 caractères), pas un enum fermé : elle
   accepte aussi bien les catégories de base (`src/lib/categories.ts`) que les
   catégories personnalisées de l'utilisateur (voir section Catégories ci-dessous).
@@ -451,4 +480,7 @@ est toujours recalculé côté client, jamais stocké.
 `FORBIDDEN` (step-up manquant sur un endpoint qui l'exige), `INTERNAL_ERROR`,
 `TRANSACTION_NOT_FOUND`, `BUDGET_NOT_FOUND`, `SAVINGS_GOAL_NOT_FOUND`, `PROJECT_NOT_FOUND`,
 `TONTINE_NOT_FOUND`, `TONTINE_MEMBER_NOT_FOUND`, `TONTINE_ROUND_NOT_READY`,
-`PLANNER_EVENT_NOT_FOUND`, `CATEGORY_NOT_FOUND`, `CATEGORY_ALREADY_EXISTS`.
+`PLANNER_EVENT_NOT_FOUND`, `CATEGORY_NOT_FOUND`, `CATEGORY_ALREADY_EXISTS`,
+`BUDGET_PROPOSAL_NOT_FOUND`, `ACCOUNT_NOT_FOUND`, `ACCOUNT_NAME_TAKEN`, `ACCOUNT_IN_USE`,
+`ACCOUNT_ARCHIVED`, `ACCOUNT_LAST_ACTIVE`, `TRANSFER_NOT_FOUND`,
+`TRANSACTION_LINKED_TO_TRANSFER`.
