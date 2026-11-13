@@ -111,7 +111,7 @@ Le serveur sert aussi le prototype front-end lui-même, en tant qu'application w
 - en local : http://localhost:4000/app/
 - en production : https://poosser-backend.onrender.com/app/
 
-Ouvert avec `?demo=1` (c'est la valeur portée par `start_url` dans le manifest, donc automatique une fois l'app installée), l'appli se connecte toute seule avec le compte de test ci-dessus — pratique pour tester sur un téléphone sans ressaisir d'identifiants à chaque lancement. Sans ce paramètre, le comportement est inchangé : écran de connexion normal. C'est aussi ce point d'entrée (`/app/`) qui sert de base pour générer un fichier `.apk` installable via un outil externe type PWABuilder.
+L'ancien mode démo (`?demo=1`, connexion automatique au compte de test avec un PIN écrit dans le code public) a été retiré : pour ne pas ressaisir son PIN, on coche « Rester connecté sur cet appareil » à la connexion (cookie HttpOnly de 30 jours). Le `start_url` du manifest est `/app/?source=pwa`. La page est servie « réseau d'abord » par `sw.js` : une nouvelle version s'affiche dès l'ouverture suivante. C'est aussi ce point d'entrée (`/app/`) qui sert de base pour générer un fichier `.apk` installable via un outil externe type PWABuilder.
 
 ## 9. Résumé de l'architecture
 
