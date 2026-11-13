@@ -62,4 +62,5 @@ export const Errors = {
   accountLastActive: () => new AppError("ACCOUNT_LAST_ACTIVE", 409),
   transferNotFound: () => new AppError("TRANSFER_NOT_FOUND", 404),
   transactionLinkedToTransfer: () => new AppError("TRANSACTION_LINKED_TO_TRANSFER", 409),
+  transactionIsFee: () => new AppError("TRANSACTION_IS_FEE", 409),
 };

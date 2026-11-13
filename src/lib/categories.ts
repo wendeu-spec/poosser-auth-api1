@@ -14,9 +14,12 @@ export const CATEGORIES = [
   "Éducation",
   "Loisirs",
   "Tontine",
-  // Dépense générée automatiquement par les frais d'un virement entre
-  // comptes (voir accountService.createTransfer).
+  // Frais : dépenses générées automatiquement par le champ « Frais » d'une
+  // opération ou d'un virement, rangées selon le type de compte (voir
+  // accountService.feeCategoryFor).
   "Frais Mobile Money",
+  "Frais bancaires",
+  "Frais",
   "Salaire",
   "Commerce",
   "Freelance",
