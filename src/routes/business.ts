@@ -50,13 +50,15 @@ businessRouter.get("/transactions", async (req, res) => {
   const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
   res.json({ transactions: await transactions.listTransactions(req.auth!.userId, projectId) });
 });
+// Réponse : { transaction, feeTransaction } — feeTransaction est la dépense
+// de frais liée (ou null s'il n'y a pas de frais).
 businessRouter.post("/transactions", validateBody(createTransactionSchema), async (req, res) => {
-  const tx = await transactions.createTransaction(req.auth!.userId, req.body);
-  res.status(201).json({ transaction: tx });
+  const result = await transactions.createTransaction(req.auth!.userId, req.body);
+  res.status(201).json(result);
 });
 businessRouter.patch("/transactions/:id", validateBody(updateTransactionSchema), async (req, res) => {
   const id = requireParamId(req.params.id);
-  res.json({ transaction: await transactions.updateTransaction(req.auth!.userId, id, req.body) });
+  res.json(await transactions.updateTransaction(req.auth!.userId, id, req.body));
 });
 businessRouter.delete("/transactions/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
