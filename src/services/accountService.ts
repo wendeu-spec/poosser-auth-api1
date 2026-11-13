@@ -18,7 +18,7 @@ export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 // Moyen de paiement implicite d'un compte : reporté sur la dépense « frais »
 // d'un virement (la colonne transactions.method reste obligatoire).
-const METHOD_BY_ACCOUNT_TYPE: Record<AccountType, string> = {
+export const METHOD_BY_ACCOUNT_TYPE: Record<AccountType, string> = {
   especes: "Espèces",
   mobile_money: "Mobile Money",
   banque: "Virement bancaire",
