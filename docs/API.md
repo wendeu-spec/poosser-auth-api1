@@ -248,6 +248,21 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
   `409 TRANSACTION_LINKED_TO_TRANSFER` (modifier ou supprimer des frais de virement :
   passer par le virement).
 
+## Frais d'une opération (maj21, migration 031)
+
+- `POST /api/transactions` et `PATCH /api/transactions/:id` acceptent `fee?: number` (≥ 0).
+  Si `fee` > 0, une dépense de frais **liée** est créée dans la même transaction SQL :
+  même compte, même date, même moyen de paiement, note `Frais · <note ou catégorie>`,
+  catégorie selon le type de compte (`Frais Mobile Money`, `Frais bancaires`, `Frais`),
+  `fee_parent_id` = l'opération. Réponse : `{ transaction, feeTransaction }`
+  (`feeTransaction` = `null` sans frais).
+- En `PATCH` : `fee` absent = montant des frais inchangé (mais date, compte, moyen de
+  paiement et catégorie suivent l'opération) ; `0` = frais supprimés ; valeur = créés ou
+  remplacés.
+- `DELETE` d'une opération supprime ses frais. Une dépense de frais ne se modifie ni ne se
+  supprime seule : `409 TRANSACTION_IS_FEE`.
+- Les frais de virement utilisent la même règle de catégorie (compte débité).
+
 ## Comptes et virements
 
 Voir `migrations/029_accounts_transfers.sql`. Solde d'un compte = `opening_balance`
