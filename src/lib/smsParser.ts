@@ -157,11 +157,17 @@ function detectDate(folded: string): string | null {
 }
 
 function detectReference(original: string): string | null {
-  const m =
-    /(?:id\s+de\s+(?:la\s+)?transaction|transaction\s+id|txn\s*id|financial\s+transaction\s+id|r[ée]f[ée]rence|\bref\b\.?|\bid\b)\s*[:#.]?\s*([A-Za-z0-9][A-Za-z0-9.\-]{5,40})/i.exec(
-      original,
-    );
-  return m ? m[1]!.replace(/\.$/, "") : null;
+  // Une référence contient toujours au moins un chiffre : « ID externe »,
+  // « Ref interne » ou « ID de transaction : » suivi d'un mot ne sont pas des
+  // références. On prend la première candidate valable.
+  const re =
+    /(?:id\s+de\s+(?:la\s+)?transaction|transaction\s+id|txn\s*id|financial\s+transaction\s+id|r[ée]f[ée]rence|\bref\b\.?|\bid\b)(?:\s+(?:externe|interne|financier|financi[eè]re))?\s*[:#.]?\s*([A-Za-z0-9][A-Za-z0-9.\-]{5,40})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(original))) {
+    const value = m[1]!.replace(/\.$/, "");
+    if (/\d/.test(value)) return value;
+  }
+  return null;
 }
 
 function detectCounterparty(original: string, folded: string, kind: SmsKind | null): string | null {
@@ -182,7 +188,10 @@ function detectCounterparty(original: string, folded: string, kind: SmsKind | nu
       const value = name[1]!.trim();
       const low = fold(value);
       // Écarte les faux noms (« votre compte », unités, mots génériques).
-      if (!/^(votre|your|compte|account|fcfa|xaf|cfa|la|le|l'|un|une)\b/.test(low) && value.length >= 2) return value;
+      // Écarte les faux noms : possessifs (« à tes transactions », « de votre
+      // compte »), unités, articles et mots génériques des messages.
+      const generic = /^(votre|vos|ton|ta|tes|mon|ma|mes|son|sa|ses|notre|nos|leur|leurs|your|my|the|compte|account|fcfa|xaf|cfa|la|le|les|l'|un|une|des|du|partir|travers|ce|cette|tout|toute|tous)\b/;
+      if (!generic.test(low) && value.length >= 2) return value;
     }
     // Pas de nom mais un numéro : on le garde comme contrepartie.
     const phone = /^\(?(\+?\d[\d ]{7,14}\d)\)?/.exec(rest);
