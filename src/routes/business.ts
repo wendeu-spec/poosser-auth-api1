@@ -15,6 +15,7 @@ import {
   askAssistantSchema,
   decideBudgetProposalSchema,
   createAccountSchema, updateAccountSchema, createTransferSchema,
+  parseSmsSchema,
 } from "../validators/businessSchemas.js";
 
 import * as transactions from "../services/transactionService.js";
@@ -29,6 +30,7 @@ import * as plannerEvents from "../services/plannerEventService.js";
 import { askAssistant } from "../services/assistantService.js";
 import * as budgetProposals from "../services/budgetProposalService.js";
 import * as accounts from "../services/accountService.js";
+import { parseMobileMoneySms } from "../lib/smsParser.js";
 
 export const businessRouter = Router();
 
@@ -95,6 +97,13 @@ businessRouter.delete("/transfers/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await accounts.deleteTransfer(req.auth!.userId, id);
   res.status(204).send();
+});
+
+// Lecture d'un SMS de confirmation Mobile Money. Ne lit ni n'écrit rien en
+// base et ne journalise pas le texte : le résultat ne sert qu'à pré-remplir
+// un formulaire que l'utilisateur vérifie avant d'enregistrer.
+businessRouter.post("/sms/parse", validateBody(parseSmsSchema), (req, res) => {
+  res.json({ parsed: parseMobileMoneySms(req.body.text) });
 });
 
 // ---------------------------------------------------------------------------
@@ -307,8 +316,11 @@ businessRouter.post("/planner-events/:id/status", validateBody(setPlannerEventSt
   // la prochaine occurrence vient d'être créée automatiquement (voir
   // plannerEventService.setPlannerEventStatus) et le client doit l'ajouter à
   // sa liste sans attendre un rechargement complet.
-  const { event, nextEvent } = await plannerEvents.setPlannerEventStatus(req.auth!.userId, id, req.body.status);
-  res.json({ plannerEvent: event, nextPlannerEvent: nextEvent });
+  const { event, nextEvent, transaction } = await plannerEvents.setPlannerEventStatus(req.auth!.userId, id, req.body.status, {
+    createTransaction: req.body.createTransaction === true,
+    occurredOn: req.body.occurredOn,
+  });
+  res.json({ plannerEvent: event, nextPlannerEvent: nextEvent, transaction });
 });
 businessRouter.delete("/planner-events/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
