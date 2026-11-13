@@ -1,7 +1,8 @@
-import { pool } from "../db/pool.js";
+import type { PoolClient } from "pg";
+import { pool, withTransaction } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
 import { assertRubriqueBelongsToProject } from "./rubriqueService.js";
-import { assertAccountUsable, ensureDefaultAccount } from "./accountService.js";
+import { assertAccountUsable, ensureDefaultAccount, feeCategoryFor, type AccountType } from "./accountService.js";
 
 export interface TransactionRow {
   id: string;
@@ -17,6 +18,8 @@ export interface TransactionRow {
   // dépense « frais » générée par un virement, le virement d'origine.
   account_id: string;
   transfer_id: string | null;
+  // Dépense « frais » d'une opération : l'opération d'origine (migration 031).
+  fee_parent_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -40,6 +43,9 @@ export interface TransactionInput {
   // ancien compte actif, « Espèces » créé au besoin) : garde compatibles les
   // appels qui ne connaissent pas encore les comptes.
   accountId?: string;
+  // Frais payés pour cette opération (0 ou absent = aucun). Enregistrés comme
+  // une dépense de frais liée, voir createTransaction.
+  fee?: number;
 }
 
 // La rubrique n'a de sens qu'à l'intérieur d'un projet donné : on exige donc
@@ -88,7 +94,61 @@ export async function listTransactions(userId: string, projectId?: string): Prom
   return rows;
 }
 
-export async function createTransaction(userId: string, input: TransactionInput): Promise<TransactionRow> {
+type Queryable = Pick<PoolClient, "query">;
+
+function feeNote(note: string | null, category: string): string {
+  return `Frais · ${note || category}`.slice(0, 280);
+}
+
+async function accountTypeOf(db: Queryable, accountId: string): Promise<AccountType> {
+  const { rows } = await db.query<{ type: AccountType }>(`SELECT type FROM accounts WHERE id = $1`, [accountId]);
+  return rows[0]!.type;
+}
+
+/**
+ * Crée, met à jour ou supprime la dépense de frais liée à une opération,
+ * pour qu'elle suive toujours son opération (même compte, même date, même
+ * moyen de paiement, catégorie selon le type de compte). `fee` absent =
+ * montant inchangé ; 0 = plus de frais.
+ */
+async function syncFee(db: Queryable, userId: string, parent: TransactionRow, fee: number | undefined): Promise<TransactionRow | null> {
+  const { rows: existingRows } = await db.query<TransactionRow>(
+    `SELECT * FROM transactions WHERE fee_parent_id = $1 AND user_id = $2`,
+    [parent.id, userId],
+  );
+  const existing = existingRows[0] ?? null;
+  const amount = fee === undefined ? (existing ? Number(existing.amount) : 0) : fee;
+
+  if (amount <= 0) {
+    if (existing) await db.query(`DELETE FROM transactions WHERE id = $1 AND user_id = $2`, [existing.id, userId]);
+    return null;
+  }
+  const category = feeCategoryFor(await accountTypeOf(db, parent.account_id));
+  const note = feeNote(parent.note, parent.category);
+  if (existing) {
+    const { rows } = await db.query<TransactionRow>(
+      `UPDATE transactions SET amount = $3, occurred_on = $4, method = $5, account_id = $6, category = $7, note = $8
+       WHERE id = $1 AND user_id = $2 RETURNING *`,
+      [existing.id, userId, amount, parent.occurred_on, parent.method, parent.account_id, category, note],
+    );
+    return rows[0]!;
+  }
+  const { rows } = await db.query<TransactionRow>(
+    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id, fee_parent_id)
+     VALUES ($1, 'depense', $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [userId, category, amount, parent.occurred_on, parent.method, note, parent.account_id, parent.id],
+  );
+  return rows[0]!;
+}
+
+/**
+ * Crée une opération et, si `fee` > 0, sa dépense de frais liée — dans une
+ * seule transaction SQL : jamais l'une sans l'autre.
+ */
+export async function createTransaction(
+  userId: string,
+  input: TransactionInput,
+): Promise<{ transaction: TransactionRow; feeTransaction: TransactionRow | null }> {
   if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
   await assertProjectAndRubriqueConsistent(userId, input.projectId, input.rubriqueId);
 
@@ -96,24 +156,30 @@ export async function createTransaction(userId: string, input: TransactionInput)
     ? (await assertAccountUsable(userId, input.accountId)).id
     : await ensureDefaultAccount(userId);
 
-  const { rows } = await pool.query<TransactionRow>(
-    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id, account_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-    [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId],
-  );
-  return rows[0]!;
+  return withTransaction(async (client) => {
+    const { rows } = await client.query<TransactionRow>(
+      `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id, account_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId],
+    );
+    const transaction = rows[0]!;
+    const feeTransaction = input.fee && input.fee > 0 ? await syncFee(client, userId, transaction, input.fee) : null;
+    return { transaction, feeTransaction };
+  });
 }
 
 export async function updateTransaction(
   userId: string,
   id: string,
   input: Partial<TransactionInput> & { note?: string | null; projectId?: string | null; rubriqueId?: string | null },
-): Promise<TransactionRow> {
+): Promise<{ transaction: TransactionRow; feeTransaction: TransactionRow | null }> {
   const existing = await pool.query<TransactionRow>(`SELECT * FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!existing.rows[0]) throw Errors.transactionNotFound();
   const current = existing.rows[0]!;
-  // Les frais d'un virement suivent leur virement : on ne les modifie pas ici.
+  // Les frais d'un virement suivent leur virement, ceux d'une opération
+  // suivent leur opération : on ne les modifie pas directement.
   if (current.transfer_id) throw Errors.transactionLinkedToTransfer();
+  if (current.fee_parent_id) throw Errors.transactionIsFee();
 
   // note/projectId/rubriqueId sont traités en tri-état (absent du body =
   // inchangé, null = effacé/détaché, valeur = remplacé) plutôt qu'avec
@@ -136,30 +202,36 @@ export async function updateTransaction(
     await assertAccountUsable(userId, input.accountId);
   }
 
-  const { rows } = await pool.query<TransactionRow>(
-    `UPDATE transactions SET
-       type = COALESCE($3, type),
-       category = COALESCE($4, category),
-       amount = COALESCE($5, amount),
-       occurred_on = COALESCE($6, occurred_on),
-       method = COALESCE($7, method),
-       note = $8,
-       project_id = $9,
-       rubrique_id = $10,
-       account_id = COALESCE($11, account_id)
-     WHERE id = $1 AND user_id = $2
-     RETURNING *`,
-    [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId, input.accountId ?? null],
-  );
-  return rows[0]!;
+  return withTransaction(async (client) => {
+    const { rows } = await client.query<TransactionRow>(
+      `UPDATE transactions SET
+         type = COALESCE($3, type),
+         category = COALESCE($4, category),
+         amount = COALESCE($5, amount),
+         occurred_on = COALESCE($6, occurred_on),
+         method = COALESCE($7, method),
+         note = $8,
+         project_id = $9,
+         rubrique_id = $10,
+         account_id = COALESCE($11, account_id)
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId, input.accountId ?? null],
+    );
+    const transaction = rows[0]!;
+    const feeTransaction = await syncFee(client, userId, transaction, input.fee);
+    return { transaction, feeTransaction };
+  });
 }
 
+/** Supprime une opération ; sa dépense de frais éventuelle part avec elle (ON DELETE CASCADE). */
 export async function deleteTransaction(userId: string, id: string): Promise<void> {
-  const existing = await pool.query<{ transfer_id: string | null }>(
-    `SELECT transfer_id FROM transactions WHERE id = $1 AND user_id = $2`,
+  const existing = await pool.query<{ transfer_id: string | null; fee_parent_id: string | null }>(
+    `SELECT transfer_id, fee_parent_id FROM transactions WHERE id = $1 AND user_id = $2`,
     [id, userId],
   );
   if (!existing.rows[0]) throw Errors.transactionNotFound();
   if (existing.rows[0].transfer_id) throw Errors.transactionLinkedToTransfer();
+  if (existing.rows[0].fee_parent_id) throw Errors.transactionIsFee();
   await pool.query(`DELETE FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
 }

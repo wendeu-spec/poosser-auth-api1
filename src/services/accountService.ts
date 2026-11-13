@@ -27,6 +27,16 @@ export const METHOD_BY_ACCOUNT_TYPE: Record<AccountType, string> = {
 };
 
 export const TRANSFER_FEE_CATEGORY = "Frais Mobile Money";
+
+/** Catégories de frais (champ « Frais » d'une opération ou d'un virement). */
+export const FEE_CATEGORIES = ["Frais Mobile Money", "Frais bancaires", "Frais"] as const;
+
+/** Catégorie des frais selon le compte qui les paie (choix validé avec Yannis). */
+export function feeCategoryFor(type: AccountType): string {
+  if (type === "mobile_money") return "Frais Mobile Money";
+  if (type === "banque") return "Frais bancaires";
+  return "Frais";
+}
 export const DEFAULT_ACCOUNT_NAME = "Espèces";
 
 export interface AccountRow {
@@ -238,7 +248,8 @@ export interface TransferInput {
 
 /**
  * Crée un virement neutre entre deux comptes de l'utilisateur. Si des frais
- * sont indiqués, une vraie dépense « Frais Mobile Money » est créée sur le
+ * sont indiqués, une vraie dépense de frais (« Frais Mobile Money »,
+ * « Frais bancaires » ou « Frais » selon le compte) est créée sur le
  * compte débité, liée au virement (transfer_id) — le tout dans une seule
  * transaction SQL : jamais un virement sans ses frais, ni l'inverse.
  */
@@ -268,7 +279,7 @@ export async function createTransfer(
          VALUES ($1, 'depense', $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
         [
           userId,
-          TRANSFER_FEE_CATEGORY,
+          feeCategoryFor(from.type),
           fee,
           input.occurredOn,
           METHOD_BY_ACCOUNT_TYPE[from.type],
