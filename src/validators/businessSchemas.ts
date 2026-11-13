@@ -25,6 +25,10 @@ export const createTransactionSchema = z.object({
   rubriqueId: z.string().uuid().optional(),
   // Absent = compte par défaut de l'utilisateur (voir accountService).
   accountId: z.string().uuid().optional(),
+  // Frais payés pour l'opération (Mobile Money, banque...) : enregistrés comme
+  // une dépense de frais liée. 0 / absent = aucun ; en modification, absent =
+  // inchangés, 0 = supprimés.
+  fee: z.number().min(0).max(1_000_000_000).optional(),
 });
 // note/projectId/rubriqueId sont nullables (en plus d'optionnels) ici pour
 // pouvoir les effacer/détacher explicitement en modification (bouton
