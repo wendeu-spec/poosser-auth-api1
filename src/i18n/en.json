@@ -14,7 +14,6 @@
   "UNAUTHORIZED": "Please sign in again.",
   "FORBIDDEN": "This action is not allowed.",
   "INTERNAL_ERROR": "Something went wrong. Please try again.",
-
   "TRANSACTION_NOT_FOUND": "Transaction not found.",
   "BUDGET_NOT_FOUND": "Budget not found.",
   "SAVINGS_GOAL_NOT_FOUND": "Savings goal not found.",
@@ -32,7 +31,7 @@
   "ACCOUNT_LAST_ACTIVE": "You must keep at least one active account.",
   "TRANSFER_NOT_FOUND": "Transfer not found.",
   "TRANSACTION_LINKED_TO_TRANSFER": "This fee belongs to a transfer: edit or delete the transfer instead.",
-
+  "TRANSACTION_IS_FEE": "This fee belongs to a transaction: edit or delete the transaction instead.",
   "otp_sent": "A verification code has been sent if this number can receive SMS.",
   "new_device_notification": "New sign-in detected on your POOSSER account."
 }

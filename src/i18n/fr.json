@@ -14,7 +14,6 @@
   "UNAUTHORIZED": "Veuillez vous reconnecter.",
   "FORBIDDEN": "Action non autorisée.",
   "INTERNAL_ERROR": "Une erreur est survenue. Veuillez réessayer.",
-
   "TRANSACTION_NOT_FOUND": "Transaction introuvable.",
   "BUDGET_NOT_FOUND": "Budget introuvable.",
   "SAVINGS_GOAL_NOT_FOUND": "Objectif d'épargne introuvable.",
@@ -32,7 +31,7 @@
   "ACCOUNT_LAST_ACTIVE": "Il faut garder au moins un compte actif.",
   "TRANSFER_NOT_FOUND": "Virement introuvable.",
   "TRANSACTION_LINKED_TO_TRANSFER": "Ces frais appartiennent à un virement : modifiez ou supprimez le virement.",
-
+  "TRANSACTION_IS_FEE": "Ces frais appartiennent à une opération : modifiez ou supprimez l'opération.",
   "otp_sent": "Un code de vérification a été envoyé si ce numéro peut recevoir des SMS.",
   "new_device_notification": "Nouvelle connexion détectée sur votre compte POOSSER."
 }
