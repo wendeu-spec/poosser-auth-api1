@@ -113,6 +113,21 @@ describe("Lecture des SMS Mobile Money", () => {
     expect(p.balanceAfter).toBe(61950);
   });
 
+  it("« à tes transactions » n'est pas un destinataire, « ID externe » n'est pas une référence", () => {
+    const p = parseMobileMoneySms(
+      "Vous avez payé 50250 FCFA le 29/10/2026. Frais 0 FCFA. Nouveau solde: 98 000 FCFA. ID externe: N/A. Accède à tes transactions sur MoMo App.",
+    );
+    expect(p.amount).toBe(50250);
+    expect(p.counterparty).toBeNull();
+    expect(p.reference).toBeNull();
+  });
+
+  it("« ID externe : 123... » garde le numéro comme référence", () => {
+    const p = parseMobileMoneySms("Vous avez reçu 4000 FCFA de PAUL le 28/10/2026. ID externe: 77012345. Solde 9000 FCFA");
+    expect(p.reference).toBe("77012345");
+    expect(p.counterparty).toBe("PAUL");
+  });
+
   it("« Montant : » sans unité est reconnu", () => {
     const p = parseMobileMoneySms("Paiement réussi. Montant: 12500, Frais: 0 FCFA. Ref: AB12345678");
     expect(p.amount).toBe(12500);
