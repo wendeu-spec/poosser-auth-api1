@@ -689,6 +689,8 @@
   .tx-saved .btn { justify-self: start; padding: 6px 12px; font-size: 12.5px; }
   @keyframes rowFlash { 0%, 60% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
   tr.row-flash td { animation: rowFlash 2.4s ease-out 1; }
+
+  .fee-hint { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -957,6 +959,10 @@
           <input type="number" id="txAmount" min="1" placeholder="Ex: 15000" required>
         </div>
         <div class="field">
+          <label id="txFeeLabel" for="txFee">Frais (FCFA)</label>
+          <input type="number" id="txFee" min="0" step="any" placeholder="0" inputmode="decimal">
+        </div>
+        <div class="field">
           <label>Compte</label>
           <select id="txAccount" required></select>
         </div>
@@ -985,10 +991,6 @@
           <label>Note (optionnel)</label>
           <input type="text" id="txNote" placeholder="Ex: Marché du dimanche">
         </div>
-        <label class="sms-fee" id="smsFeeRow" hidden>
-          <input type="checkbox" id="smsFeeCheck" checked>
-          <span>Ajouter aussi les frais de <b id="smsFeeAmt"></b> en dépense « Frais Mobile Money »</span>
-        </label>
         <div class="field">
           <button type="submit" class="btn btn-primary" id="txSubmitBtn">Ajouter le mouvement</button>
         </div>
@@ -1120,7 +1122,7 @@
 
     <div class="card" style="margin-bottom:18px;">
       <h3>Virement entre comptes</h3>
-      <div class="sub">Un retrait Mobile Money, un dépôt à la banque… Un virement n'est ni un revenu ni une dépense. Les frais éventuels sont enregistrés comme dépense « Frais Mobile Money ».</div>
+      <div class="sub">Un retrait Mobile Money, un dépôt à la banque… Un virement n'est ni un revenu ni une dépense. Les frais éventuels sont enregistrés comme dépense « Frais Mobile Money », « Frais bancaires » ou « Frais » selon le compte débité.</div>
       <form id="transferForm" class="form-grid" style="margin-top:12px;">
         <div class="field">
           <label>Depuis</label>
@@ -1176,6 +1178,10 @@
           <div class="field">
             <label id="accountOpAmountLabel">Montant (FCFA)</label>
             <input type="number" id="accountOpAmount" min="1" step="any" placeholder="Ex: 15000" required>
+          </div>
+          <div class="field">
+            <label id="accountOpFeeLabel" for="accountOpFee">Frais (FCFA)</label>
+            <input type="number" id="accountOpFee" min="0" step="any" placeholder="0" inputmode="decimal">
           </div>
           <div class="field">
             <label>Date</label>
@@ -1860,7 +1866,10 @@
 
 <script>
 /* ===================== DATA MODEL (in-memory) ===================== */
-const CATEGORIES_DEPENSE = ["Alimentation","Transport","Logement","Santé","Éducation","Loisirs","Tontine","Frais Mobile Money","Autres"];
+const CATEGORIES_DEPENSE = ["Alimentation","Transport","Logement","Santé","Éducation","Loisirs","Tontine","Frais Mobile Money","Frais bancaires","Frais","Autres"];
+// Catégories des dépenses de frais (champ « Frais » d'une opération, frais de
+// virement) : rangées selon le type de compte, voir feeCategoryFor().
+const FEE_CATEGORIES = ["Frais Mobile Money","Frais bancaires","Frais"];
 const CATEGORIES_REVENU = ["Salaire","Commerce","Freelance","Autres"];
 const CAT_COLORS = { // fixed categorical order, per dataviz palette
   "Alimentation": "var(--s1)",
@@ -1871,11 +1880,13 @@ const CAT_COLORS = { // fixed categorical order, per dataviz palette
   "Loisirs": "var(--s6)",
   "Tontine": "var(--s7)",
   "Frais Mobile Money": "#6b7a8f",
+  "Frais bancaires": "#8b95a7",
+  "Frais": "#a7adb9",
   "Autres": "var(--s8)"
 };
 const CAT_HEX = { // resolved hex (light) for conic-gradient which can't read CSS vars reliably across themes
   "Alimentation": "#2f7be0", "Transport": "#f26b3a", "Logement": "#0f9d6b", "Santé": "#e9a91c",
-  "Éducation": "#d9578f", "Loisirs": "#14a3b8", "Tontine": "#6d5bd0", "Frais Mobile Money": "#6b7a8f", "Autres": "#e0484d"
+  "Éducation": "#d9578f", "Loisirs": "#14a3b8", "Tontine": "#6d5bd0", "Frais Mobile Money": "#6b7a8f", "Frais bancaires": "#8b95a7", "Frais": "#a7adb9", "Autres": "#e0484d"
 };
 // Option spéciale ajoutée en bas de chaque <select> de catégorie (Transaction,
 // Budget, Planner) pour créer une catégorie personnalisée sans changer d'écran
@@ -2058,7 +2069,7 @@ function authErrorMessage(err){
 
 /* ---- adaptateurs API -> forme interne du prototype (inchangée pour le rendu) ---- */
 function mapTxFromApi(t){
-  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null, accountId: t.account_id || null, transferId: t.transfer_id || null };
+  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null, accountId: t.account_id || null, transferId: t.transfer_id || null, feeParentId: t.fee_parent_id || null };
 }
 function mapAccountFromApi(a){
   return { id: a.id, name: a.name, type: a.type, openingBalance: Number(a.opening_balance), archived: !!a.archived };
@@ -2532,6 +2543,8 @@ function applyCurrencyLabels(){
   set('transferAmountLabel', `Montant (${u})`);
   set('transferFeeLabel', `Frais (${u}, optionnel)`);
   set('accountOpAmountLabel', `Montant (${u})`);
+  set('txFeeLabel', `Frais (${u})`);
+  set('accountOpFeeLabel', `Frais (${u})`);
 }
 function monthLabel(offset){
   // Mois réel (aujourd'hui + offset) — l'ancienne version partait d'un
@@ -3001,7 +3014,7 @@ function renderDashboard(){
       <div><small>Entrées du mois</small><b>+ ${fmt(rev)}</b><small>${nbIn} mouvement(s)</small></div>
       <div><small>Sorties du mois</small><b>− ${fmt(dep)}</b><small>${nbOut} mouvement(s)</small></div>
       <div><small>Épargne totale</small><b>${fmt(ep)}</b><small>${state.goals.length} objectif(s)</small></div>
-      <div><small>Frais Mobile Money</small><b>${fmt(fees)}</b><small>ce mois-ci</small></div>
+      <div><small>Frais payés</small><b>${fmt(fees)}</b><small>ce mois-ci</small></div>
     </div>`;
 
   renderDashAccountsCard();
@@ -3278,6 +3291,9 @@ function prefillTxFormFields(t){
   const catSel = document.getElementById('txCategory');
   if([...catSel.options].some(o=>o.value===t.category)) catSel.value = t.category;
   document.getElementById('txAmount').value = t.amount;
+  // Frais : ceux de l'opération reprise (un favori n'en a pas).
+  const prefillFee = t.id ? feeOf(t.id) : 0;
+  document.getElementById('txFee').value = prefillFee > 0 ? prefillFee : '';
   // Un favori n'a pas de compte : on garde alors le compte déjà sélectionné.
   if(t.accountId) populateAccountSelects(t.accountId);
   document.getElementById('txMethod').value = t.method;
@@ -3406,12 +3422,24 @@ function exitTxEditMode(){
 document.getElementById('txCancelEdit').addEventListener('click', exitTxEditMode);
 
 /* ===================== COLLER UN SMS MOBILE MONEY ===================== */
-var pendingSmsFee = null; // frais lus dans le SMS, ajoutés à l'enregistrement si la case est cochée
+// Ancienne case « ajouter les frais » du SMS, remplacée par le champ Frais
+// du formulaire : conservée comme fonction vide pour les appels existants.
+function clearSmsFee(){}
 
-function clearSmsFee(){
-  pendingSmsFee = null;
-  const row = document.getElementById('smsFeeRow');
-  if(row) row.hidden = true;
+// Frais liés à une opération (dépense de frais créée avec elle, voir
+// migrations/031_transaction_fees.sql).
+function feeTxOf(parentId){ return state.transactions.find(t => t.feeParentId === parentId) || null; }
+function feeOf(parentId){ const f = feeTxOf(parentId); return f ? f.amount : 0; }
+function isFeeCategory(c){ return FEE_CATEGORIES.includes(c); }
+// Après création / modification : remplace dans l'état local les frais de
+// l'opération par ceux renvoyés par le serveur (ou les retire).
+function applyFeeFromServer(parentId, feeTransaction){
+  state.transactions = state.transactions.filter(t => t.feeParentId !== parentId);
+  if(feeTransaction) state.transactions.push(mapTxFromApi(feeTransaction));
+}
+function readFeeInput(id){
+  const v = parseFloat(document.getElementById(id).value);
+  return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 function setSmsPanelOpen(open){
@@ -3470,7 +3498,7 @@ async function analyzeSms(){
   // Solde attendu sur un compte une fois l'opération enregistrée.
   const expectedAfter = (acc) => accountBalance(acc.id)
     + (p.direction === 'revenu' ? p.amount : -p.amount)
-    - (p.direction === 'depense' && p.fee ? p.fee : 0);
+    - (p.fee > 0 ? p.fee : 0); // frais enregistrés aussi pour un revenu (champ Frais)
   let exactAcc = accountForOperator(p.operator);
   // Opérateur absent du message : le compte dont le solde correspond
   // exactement au « nouveau solde » annoncé est forcément le bon.
@@ -3522,12 +3550,7 @@ async function analyzeSms(){
   document.getElementById('txDate').value = p.date || todayISO(0);
   const who = p.counterparty ? (p.kind === 'reception' ? 'Reçu de ' : p.kind === 'paiement' ? 'Paiement ' : 'Envoi à ') + p.counterparty : '';
   document.getElementById('txNote').value = smsNote(p, who);
-  if(p.direction === 'depense' && p.fee > 0){
-    pendingSmsFee = p.fee;
-    document.getElementById('smsFeeAmt').textContent = fmt(p.fee);
-    document.getElementById('smsFeeCheck').checked = true;
-    document.getElementById('smsFeeRow').hidden = false;
-  }
+  document.getElementById('txFee').value = p.fee > 0 ? p.fee : '';
 
   const kindLabel = { reception:'Argent reçu', envoi:'Transfert envoyé', paiement:'Paiement' }[p.kind] || 'Opération';
   lines.unshift(`<span class="ok">${kindLabel} de ${fmt(p.amount)} : formulaire rempli.</span> Choisissez la catégorie puis validez.`);
@@ -3565,7 +3588,10 @@ function showTxSaved(t){
   const monthLabelTx = d.toLocaleDateString('fr-FR', { month:'long', year:'numeric' });
   const thisMonth = new Date().toLocaleDateString('fr-FR', { month:'long' });
   const otherMonth = t.date.slice(0,7) !== todayISO(0).slice(0,7);
+  const feeAmt = feeOf(t.id);
+  const feeTx = feeTxOf(t.id);
   box.innerHTML = `<div><b>✓ Enregistré :</b> ${t.type==='revenu'?'+':'−'} ${fmt(t.amount)} · ${escapeHtml(t.category)} · ${escapeHtml(accountName(t.accountId))} · ${dayLabel}.</div>`
+    + (feeAmt ? `<div>Frais : − ${fmt(feeAmt)} en « ${escapeHtml(feeTx.category)} ».</div>` : '')
     + (otherMonth ? `<div>Il compte pour <b>${monthLabelTx}</b> : il n'entre donc pas dans les totaux de ${thisMonth} du tableau de bord, mais il est bien dans l'Historique et dans le solde du compte.</div>` : '')
     + `<button type="button" class="btn btn-ghost" id="txSavedShow">Voir dans l'historique</button>`;
   box.hidden = false;
@@ -3592,6 +3618,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const projectId = document.getElementById('txProject').value || undefined;
   const rubriqueId = document.getElementById('txRubrique').value || undefined;
   const accountId = document.getElementById('txAccount').value || undefined;
+  const fee = readFeeInput('txFee');
   if(!amount || amount<=0) return;
   // Même référence opérateur déjà enregistrée (SMS collé deux fois) : on
   // demande confirmation avant de créer un doublon.
@@ -3606,34 +3633,25 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       // null explicite (et non undefined) pour pouvoir détacher un projet,
       // une rubrique ou effacer la note en modification — voir le traitement
       // tri-état de PATCH /api/transactions/:id côté serveur.
-      const { transaction } = await apiFetch('/api/transactions/' + editingTxId, { method:'PATCH', auth:true, body:{
+      const { transaction, feeTransaction } = await apiFetch('/api/transactions/' + editingTxId, { method:'PATCH', auth:true, body:{
         type, category, amount, occurredOn: date, method,
         note: note ? note : null,
         projectId: projectId ?? null,
         rubriqueId: rubriqueId ?? null,
-        accountId,
+        accountId, fee,
       }});
       const idx = state.transactions.findIndex(x=>x.id===editingTxId);
       if(idx !== -1) state.transactions[idx] = mapTxFromApi(transaction);
+      applyFeeFromServer(transaction.id, feeTransaction);
       exitTxEditMode();
       renderAll();
     } else {
-      const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId, accountId } });
+      // Frais éventuels : le serveur crée la dépense de frais liée dans la
+      // même transaction SQL que l'opération (catégorie selon le compte).
+      const { transaction, feeTransaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId, accountId, fee } });
       const savedTx = mapTxFromApi(transaction);
       state.transactions.push(savedTx);
-      // Frais lus dans un SMS collé : une dépense « Frais Mobile Money » à
-      // part, sur le même compte et à la même date, si la case est cochée.
-      if(pendingSmsFee && type === 'depense' && document.getElementById('smsFeeCheck').checked){
-        try {
-          const feeRes = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
-            type: 'depense', category: TRANSFER_FEE_CATEGORY, amount: pendingSmsFee, occurredOn: date, method,
-            note: ('Frais · ' + (note || category)).slice(0, 280), accountId,
-          }});
-          state.transactions.push(mapTxFromApi(feeRes.transaction));
-        } catch(err){
-          alert("Le mouvement est enregistré, mais pas ses frais : " + authErrorMessage(err));
-        }
-      }
+      applyFeeFromServer(savedTx.id, feeTransaction);
       clearSmsFee();
       // Le formulaire repropose ensuite le dernier compte utilisé.
       if(accountId) lastUsedAccountId = accountId;
@@ -3803,8 +3821,10 @@ function renderTxTable(){
       <td>${escapeHtml(accountName(t.accountId))}</td>
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
-      <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
-      <td style="white-space:normal; min-width:260px;">${t.transferId ? `
+      <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}${feeOf(t.id) ? `<div class="fee-hint">frais ${fmt(feeOf(t.id))}</div>` : ''}</td>
+      <td style="white-space:normal; min-width:260px;">${t.feeParentId ? `
+        <span class="pill" title="Frais payés pour une opération : ils se modifient avec elle">⤷ Frais de l'opération</span>
+        <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:4px 0 0 0;" data-goto-parent="${t.feeParentId}">Voir l'opération</button>` : t.transferId ? `
         <span class="pill" title="Ces frais suivent leur virement : gérez-les depuis l'onglet Comptes">↔ Frais de virement</span>
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:4px 0 0 0;" data-goto-comptes="1">Voir le virement</button>` : `
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:0 6px 4px 0;" data-edit="${t.id}" title="Modifier ce mouvement">✏️ Modifier</button>
@@ -3816,6 +3836,9 @@ function renderTxTable(){
 
   document.querySelectorAll('#txTable [data-goto-comptes]').forEach(btn=>{
     btn.addEventListener('click', ()=> switchToView('comptes'));
+  });
+  document.querySelectorAll('#txTable [data-goto-parent]').forEach(btn=>{
+    btn.addEventListener('click', ()=> revealTxRow(btn.dataset.gotoParent));
   });
 
   document.querySelectorAll('[data-edit]').forEach(btn=>{
@@ -3842,7 +3865,8 @@ function renderTxTable(){
       btn.disabled = true;
       try {
         await apiFetch('/api/transactions/' + id, { method:'DELETE', auth:true });
-        state.transactions = state.transactions.filter(t=>t.id !== id);
+        // Ses frais éventuels sont supprimés avec elle côté serveur.
+        state.transactions = state.transactions.filter(t=>t.id !== id && t.feeParentId !== id);
         if(editingTxId === id) exitTxEditMode();
         renderAll();
       } catch(err){
@@ -3989,8 +4013,9 @@ function accountMovementCount(id){
     + state.transfers.filter(tr=>tr.fromAccountId===id || tr.toAccountId===id).length;
 }
 function totalAvailable(){ return activeAccounts().reduce((sum, a) => sum + accountBalance(a.id), 0); }
+// Tous les frais du mois (opérations et virements, Mobile Money, banque...).
 function monthTransferFees(){
-  return currentMonthTx().filter(t=>t.type==='depense' && t.category===TRANSFER_FEE_CATEGORY).reduce((sum, t) => sum + t.amount, 0);
+  return currentMonthTx().filter(t=>t.type==='depense' && isFeeCategory(t.category)).reduce((sum, t) => sum + t.amount, 0);
 }
 
 async function refreshAccountsFromServer(){
@@ -4099,7 +4124,7 @@ function renderAccounts(){
   const tiles = [
     { label: 'Disponible au total', value: fmt(totalAvailable()), delta: `${list.length} compte(s) actif(s)`, cls: totalAvailable() >= 0 ? 'good' : 'bad' },
     { label: 'Sur Mobile Money', value: fmt(mobile), delta: `${list.filter(a=>a.type==='mobile_money').length} compte(s)`, cls: '' },
-    { label: 'Frais de virement ce mois', value: fmt(monthTransferFees()), delta: 'Argent parti en frais', cls: monthTransferFees() > 0 ? 'bad' : '' },
+    { label: 'Frais payés ce mois', value: fmt(monthTransferFees()), delta: 'Mobile Money, banque et virements', cls: monthTransferFees() > 0 ? 'bad' : '' },
     { label: 'Virements ce mois', value: String(monthTransfers.length), delta: `${fmt(monthTransfers.reduce((s, tr) => s + tr.amount, 0))} déplacés`, cls: '' },
   ];
   document.getElementById('accountTiles').innerHTML = tiles.map(t=>`
@@ -4337,8 +4362,12 @@ function accountMovements(id){
     if(t.accountId !== id) return;
     const inflow = t.type === 'revenu' ? t.amount : 0;
     const outflow = t.type === 'depense' ? t.amount : 0;
-    rows.push({ key: 'tx-' + t.id, date: t.date, seq: t.transferId ? transferSeq(t.transferId) + 0.5 : i, kind: t.transferId ? 'fee' : t.type, label: t.category,
-      detail: t.transferId ? 'Frais de virement' : (t.note || ''), projectId: t.projectId, inflow, outflow });
+    // Frais d'une opération : juste après leur opération.
+    const parentIdx = t.feeParentId ? state.transactions.findIndex(x => x.id === t.feeParentId) : -1;
+    rows.push({ key: 'tx-' + t.id, date: t.date,
+      seq: t.transferId ? transferSeq(t.transferId) + 0.5 : parentIdx !== -1 ? parentIdx + 0.5 : i,
+      kind: (t.transferId || t.feeParentId) ? 'fee' : t.type, label: t.category,
+      detail: t.transferId ? 'Frais de virement' : t.feeParentId ? "Frais de l'opération" : (t.note || ''), projectId: t.projectId, inflow, outflow });
   });
   state.transfers.forEach((tr, i)=>{
     if(tr.toAccountId === id){
@@ -4367,7 +4396,7 @@ function renderAccountOpForm(account){
   }));
   const catSel = document.getElementById('accountOpCategory');
   const previous = catSel.value;
-  const cats = accountOpType === 'revenu' ? revenuCategories() : depenseCategories().filter(c => c !== TRANSFER_FEE_CATEGORY);
+  const cats = accountOpType === 'revenu' ? revenuCategories() : depenseCategories().filter(c => !isFeeCategory(c));
   catSel.innerHTML = cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   if(cats.includes(previous)) catSel.value = previous;
   const methodSel = document.getElementById('accountOpMethod');
@@ -4457,12 +4486,14 @@ document.getElementById('accountOpForm').addEventListener('submit', async (e)=>{
   const btn = document.getElementById('accountOpSubmit');
   btn.disabled = true;
   try {
-    const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
-      type, category, amount, occurredOn, method, note: note || undefined, accountId: account.id,
+    const { transaction, feeTransaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
+      type, category, amount, occurredOn, method, note: note || undefined, accountId: account.id, fee: readFeeInput('accountOpFee'),
     }});
     state.transactions.push(mapTxFromApi(transaction));
+    applyFeeFromServer(transaction.id, feeTransaction);
     lastUsedAccountId = account.id;
     document.getElementById('accountOpAmount').value = '';
+    document.getElementById('accountOpFee').value = '';
     document.getElementById('accountOpNote').value = '';
     renderAll();
     if(type === 'depense') checkBudgetAlertAfterAdd(category);
