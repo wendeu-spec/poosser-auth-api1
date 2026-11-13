@@ -466,8 +466,30 @@ est toujours recalculé côté client, jamais stocké.
   mois cible pour une récurrence mensuelle/trimestrielle plutôt que de déborder sur le
   mois suivant) et renvoyée dans `nextPlannerEvent` ; sinon `nextPlannerEvent` vaut
   `null`.
+- Compte de l'échéance (maj19, migration 030) : `accountId?` (UUID) à la création ;
+  en `PATCH`, tri-état (absent = inchangé, `null` = compte par défaut, valeur = le
+  remplace). Le compte doit appartenir à l'utilisateur et être actif
+  (`404 ACCOUNT_NOT_FOUND`, `409 ACCOUNT_ARCHIVED`). Champs renvoyés : `account_id`,
+  `transaction_id`.
+- Validation avec mouvement côté serveur : `POST /api/planner-events/:id/status` accepte
+  aussi `createTransaction?: boolean` et `occurredOn?: "AAAA-MM-JJ"`. Avec
+  `status: "realise"` et `createTransaction: true`, le serveur crée le mouvement (compte
+  de l'échéance, ou compte par défaut s'il est absent ou archivé ; moyen de paiement
+  déduit du type de compte ; note = titre) dans la même transaction SQL, le lie à
+  l'échéance (`transaction_id`) et le renvoie dans `transaction`. Une échéance déjà liée
+  ne recrée jamais de mouvement, et une prochaine occurrence n'est jamais créée deux fois.
+  Sans `createTransaction`, `transaction` vaut `null` (comportement d'origine).
 - `DELETE /api/planner-events/:id` → `204`.
 - Erreurs : `404 PLANNER_EVENT_NOT_FOUND`.
+
+## Lecture d'un SMS Mobile Money
+
+- `POST /api/sms/parse` → `{ text }` (10 à 1000 caractères) → `200 { parsed: { operator,
+  kind, direction, amount, fee, balanceAfter, date, counterparty, reference, missing } }`.
+  `operator` : `"mtn" | "orange" | null` ; `kind` : `"reception" | "envoi" | "paiement" |
+  "retrait" | "depot" | null` ; `direction` : `"revenu" | "depense" | null` (null pour un
+  retrait/dépôt, qui est un virement entre comptes). Rien n'est lu ni écrit en base et le
+  texte n'est pas journalisé : le résultat sert uniquement à pré-remplir un formulaire.
 
 ---
 
