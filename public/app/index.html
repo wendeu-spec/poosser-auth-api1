@@ -21,73 +21,101 @@
 <meta name="apple-mobile-web-app-title" content="POOSSER">
 
 <style>
-  /* Bandeau discret affiché uniquement en mode démo (?demo=1), pour que
-     l'utilisateur sache toujours qu'il regarde le compte de test et non un
-     vrai compte. Totalement invisible en usage normal. */
-  #demoModeBanner {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-    background: #0c2340; color: #fff; font: 600 12px/1 system-ui, sans-serif;
-    text-align: center; padding: 6px 10px; letter-spacing: .02em;
-  }
-  body.demo-mode { padding-top: 26px; }
-</style>
-<style>
+  /* Polices auto-hébergées (public/app/fonts, licence OFL) : pas de serveur
+     externe, la CSP reste « font-src 'self' » et l'app installée garde ses
+     polices hors connexion. */
+  @font-face { font-family: "Plus Jakarta Sans"; src: url("fonts/plus-jakarta-sans.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
+  @font-face { font-family: "Sora"; src: url("fonts/sora.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+
+  /* Palette « Marine & Corail » — reprend l'icône de l'app (bleu nuit,
+     carte bleue, pastille orange). Vert = argent qui entre, rouge = argent
+     qui sort, partout. */
   :root {
     color-scheme: light;
-    --surface-0: #f9f9f7;
-    --surface-1: #fcfcfb;
-    --surface-2: #ffffff;
-    --text-primary: #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted: #898781;
-    --grid: #e1e0d9;
-    --baseline: #c3c2b7;
-    --border: rgba(11,11,11,0.10);
-    --success-text: #006300;
+    --font-ui: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-num: "Sora", "Plus Jakarta Sans", system-ui, sans-serif;
 
-    --s1: #2a78d6; /* blue - revenus */
-    --s2: #eb6834; /* orange - depenses */
-    --s3: #1baf7a; /* aqua */
-    --s4: #eda100; /* yellow */
-    --s5: #e87ba4; /* magenta */
-    --s6: #008300; /* green */
-    --s7: #4a3aa7; /* violet */
-    --s8: #e34948; /* red */
+    --surface-0: #f3f6fb;
+    --surface-1: #ffffff;
+    --surface-2: #f6f8fc;
+    --text-primary: #0f1b2d;
+    --text-secondary: #46566d;
+    --text-muted: #7a879a;
+    --grid: #e3e9f2;
+    --baseline: #c5cfdd;
+    --border: rgba(15,35,64,0.10);
+    --success-text: #0b7a52;
 
-    --good: #0ca30c;
-    --warning: #fab219;
-    --serious: #ec835a;
-    --critical: #d03b3b;
+    --navy: #0c2340;
+    --navy-2: #1f5596;
+    --primary: #2f7be0;
+    --primary-soft: #e6f0fd;
+    --accent: #f26b3a;
+    --in: #0f9d6b;
+    --in-soft: #e3f6ee;
+    --out: #e0484d;
+    --out-soft: #fdecec;
+    --shadow: 0 1px 2px rgba(15,35,64,.05), 0 6px 18px -10px rgba(15,35,64,.18);
 
-    --radius: 14px;
+    --s1: #2f7be0; /* bleu */
+    --s2: #f26b3a; /* corail */
+    --s3: #0f9d6b; /* vert */
+    --s4: #e9a91c; /* or */
+    --s5: #d9578f; /* rose */
+    --s6: #2e9e57; /* vert prairie */
+    --s7: #6d5bd0; /* violet */
+    --s8: #e0484d; /* rouge */
+
+    --good: #0f9d6b;
+    --warning: #e9a91c;
+    --serious: #ef7a45;
+    --critical: #e0484d;
+
+    --radius: 16px;
   }
   [data-theme="dark"] {
     color-scheme: dark;
-    --surface-0: #0d0d0d;
-    --surface-1: #1a1a19;
-    --surface-2: #201f1e;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --grid: #2c2c2a;
-    --baseline: #383835;
-    --border: rgba(255,255,255,0.10);
-    --success-text: #0ca30c;
+    --surface-0: #0a1424;
+    --surface-1: #111f36;
+    --surface-2: #16284a;
+    --text-primary: #e8eef8;
+    --text-secondary: #b3c1d6;
+    --text-muted: #8fa2bf;
+    --grid: #1d2f4d;
+    --baseline: #2a4066;
+    --border: rgba(255,255,255,0.09);
+    --success-text: #34c993;
 
-    --s1: #3987e5;
-    --s2: #d95926;
-    --s3: #199e70;
-    --s4: #c98500;
-    --s5: #d55181;
-    --s6: #008300;
-    --s7: #9085e9;
-    --s8: #e66767;
+    --navy: #071020;
+    --navy-2: #1f5596;
+    --primary: #5b9cf0;
+    --primary-soft: #16304f;
+    --accent: #ff8a5c;
+    --in: #34c993;
+    --in-soft: #0f3529;
+    --out: #ff6b70;
+    --out-soft: #3a1b22;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px -12px rgba(0,0,0,.6);
+
+    --s1: #5b9cf0;
+    --s2: #ff8a5c;
+    --s3: #34c993;
+    --s4: #f2bd45;
+    --s5: #ee7aa9;
+    --s6: #4cc070;
+    --s7: #a68bfa;
+    --s8: #ff6b70;
+
+    --good: #34c993;
+    --warning: #f2bd45;
+    --serious: #ff9a6b;
+    --critical: #ff6b70;
   }
 
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: var(--font-ui);
     background: var(--surface-0);
     color: var(--text-primary);
   }
@@ -470,7 +498,6 @@
       position: sticky; top: 0; z-index: 40;
       padding: 10px 16px; background: var(--surface-1); border-bottom: 1px solid var(--border);
     }
-    body.demo-mode .mobile-topbar { top: 26px; }
     .menu-btn {
       display: flex; align-items: center; justify-content: center;
       width: 40px; height: 40px; flex-shrink: 0; border-radius: 10px;
@@ -511,16 +538,157 @@
     #wizardRowsHead { display: none !important; }
     .wizard-row { grid-template-columns: 1fr 1fr !important; }
   }
+
+  /* =====================================================================
+     RELOOKING « MARINE & CORAIL »
+     Placé en dernier pour l'emporter sur les règles plus haut sans les
+     réécrire une à une. Le menu latéral est toujours bleu nuit : il
+     redéfinit localement les variables de couleur, si bien que tout ce qu'il
+     contient (boutons, badge utilisateur, sélecteurs) s'adapte seul.
+     ===================================================================== */
+  body { -webkit-font-smoothing: antialiased; }
+  h1, h2, h3, .page-head h1, .project-detail-head h1 { font-family: var(--font-num); letter-spacing: -0.015em; }
+  .tile .value, .project-balance, .beneficiary-box .n, .donut-center .v { font-family: var(--font-num); letter-spacing: -0.01em; }
+  td, .tile .value, .lval, .nums { font-variant-numeric: tabular-nums; }
+
+  .sidebar {
+    --surface-1: transparent;
+    --surface-2: rgba(255,255,255,.06);
+    --text-primary: #ffffff;
+    --text-secondary: #c3d0e4;
+    --text-muted: #8ea3c2;
+    --border: rgba(255,255,255,.12);
+    background: var(--navy); color: var(--text-secondary); border-right: 0;
+  }
+  .sidebar select { color-scheme: dark; }
+  .sidebar select option { background: #0c2340; color: #fff; }
+  .brand-text strong { font-family: var(--font-num); letter-spacing: .06em; color: #fff; }
+  .nav-btn { font-weight: 500; transition: background .15s, color .15s; }
+  .nav-btn:hover { background: rgba(255,255,255,.06); color: #fff; }
+  .nav-btn.active { background: rgba(255,255,255,.11); color: #fff; font-weight: 600; }
+  .nav-btn .ic { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .nav-btn .ic svg { width: 18px; height: 18px; }
+  .nav-btn.active .ic { color: var(--accent); }
+
+  .card, .tile, .goal-card, .tontine-card { border-color: var(--border); box-shadow: var(--shadow); }
+  .tile { position: relative; overflow: hidden; }
+  .btn-primary { background: var(--primary); }
+  .chip.active { background: var(--primary); border-color: var(--primary); }
+  .field input:focus, .field select:focus, .auth-field input:focus, .auth-field select:focus { outline-color: var(--primary); }
+  .project-card:hover { border-color: var(--primary); }
+  .amt-pos { color: var(--in); }
+  .amt-neg { color: var(--out); }
+  .tile .delta.good { color: var(--in); }
+  .tile .delta.bad { color: var(--out); }
+  .bar-track, .hbar-track { background: var(--primary-soft); }
+  .auth-brand strong { font-family: var(--font-num); }
+
+  /* ---------- Carte « Solde disponible » du tableau de bord ---------- */
+  .dash-hero {
+    border-radius: 20px; padding: 22px 24px; margin-bottom: 18px; color: #fff;
+    background:
+      radial-gradient(120% 150% at 100% 0%, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 44%),
+      linear-gradient(135deg, var(--navy), var(--navy-2));
+    box-shadow: 0 18px 36px -22px rgba(12,35,64,.65);
+    display: grid; gap: 14px;
+  }
+  .dash-hero .lbl { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #b9cbe6; }
+  .dash-hero .big { font-family: var(--font-num); font-size: clamp(28px, 5vw, 38px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .dash-hero .big.neg { color: #ffc2b0; }
+  .dash-hero .trend { display: inline-flex; align-items: center; gap: 6px; width: fit-content; font-size: 12.5px; font-weight: 600; padding: 5px 11px; border-radius: 99px; background: rgba(255,255,255,.14); }
+  .dash-hero .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .dash-hero .stats > div { background: rgba(255,255,255,.10); border-radius: 13px; padding: 10px 13px; min-width: 0; }
+  .dash-hero .stats small { display: block; font-size: 11.5px; color: #b9cbe6; margin-bottom: 2px; }
+  .dash-hero .stats b { font-family: var(--font-num); font-size: 16px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .dash-hero .stats small + b + small { margin: 2px 0 0; }
+  @media (max-width: 720px) { .dash-hero .stats { grid-template-columns: 1fr 1fr; } .dash-hero { padding: 18px; } }
+
+  /* ---------- Petits écrans : barre du haut bleu nuit ---------- */
+  @media (max-width: 900px) {
+    .mobile-topbar { background: var(--navy); border-bottom: 0; color: #fff; }
+    .mobile-topbar .menu-btn { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); color: #fff; }
+    .topbar-brand strong { font-family: var(--font-num); letter-spacing: .06em; }
+    .topbar-brand span { color: #b9cbe6; }
+  }
+
+  /* ---------- Barre d'onglets + bouton « + » (petits écrans) ---------- */
+  .tabbar { display: none; }
+  @media (max-width: 900px) {
+    .tabbar {
+      display: grid; grid-template-columns: repeat(5, 1fr); align-items: end;
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+      background: var(--surface-1); border-top: 1px solid var(--border);
+      box-shadow: 0 -6px 20px -14px rgba(15,35,64,.35);
+      padding: 6px 4px calc(8px + env(safe-area-inset-bottom, 0px));
+    }
+    .tab {
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      background: none; border: 0; padding: 4px 0; cursor: pointer;
+      font: 600 10.5px var(--font-ui); color: var(--text-muted);
+    }
+    .tab svg { width: 21px; height: 21px; }
+    .tab.on { color: var(--primary); }
+    .tab:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
+    .tab .fab {
+      width: 52px; height: 52px; border-radius: 17px; margin-top: -26px;
+      display: grid; place-items: center; color: #fff; background: var(--accent);
+      box-shadow: 0 10px 20px -8px color-mix(in srgb, var(--accent) 75%, transparent);
+    }
+    .tab .fab svg { width: 24px; height: 24px; }
+    main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+    body.nav-open .tabbar { visibility: hidden; }
+    #dashQuickAdd { display: none; }
+  }
+  /* Repère visuel quand le « + » amène sur le formulaire de saisie. */
+  @keyframes poosserPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+  .card.flash { animation: poosserPulse .9s ease-out 1; }
+  @media (prefers-reduced-motion: reduce) { .card.flash { animation: none; } .sidebar, .bar-fill { transition: none !important; } }
+
+  #pinDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 380px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
+  #pinDialog::backdrop { background: rgba(8,18,34,.55); }
+  #pinDialog .field input { width: 100%; letter-spacing: .3em; }
+
+  .sidebar .brand-mark { box-shadow: 0 0 0 1px rgba(255,255,255,.16); }
+  .user-badge { flex-wrap: wrap; row-gap: 4px; }
+  .user-badge .name { flex: 1 1 100%; }
+  .theme-toggle select { max-width: 150px; min-width: 0; }
+
+  /* ---------- Coller un SMS ---------- */
+  .sms-panel { display: grid; gap: 8px; margin: -4px 0 16px; padding: 14px; border-radius: 14px; background: var(--primary-soft); border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent); }
+  .sms-panel[hidden] { display: none; }
+  .sms-panel label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+  .sms-panel textarea { width: 100%; min-width: 0; font: 13.5px/1.45 var(--font-ui); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); resize: vertical; }
+  .sms-panel textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+  .sms-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .sms-result { font-size: 13px; color: var(--text-secondary); display: grid; gap: 4px; }
+  .sms-result:empty { display: none; }
+  .sms-result .ok { color: var(--success-text); font-weight: 600; }
+  .sms-result .warn { color: var(--critical); font-weight: 600; }
+  .sms-fee { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); padding: 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px dashed var(--border); }
+  .sms-fee[hidden] { display: none; }
+  .sms-fee input { width: 16px; height: 16px; accent-color: var(--primary); margin: 0; }
+  .field-attn { outline: 2px solid var(--accent) !important; outline-offset: 1px; }
+
+  /* ---------- Carte « À confirmer » ---------- */
+  .due-list { display: grid; margin-top: 6px; }
+  .due-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--grid); }
+  .due-row:last-child { border-bottom: 0; }
+  .due-title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+  .due-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .due-amt { font-family: var(--font-num); font-weight: 600; font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .due-btn { padding: 7px 12px; font-size: 12.5px; white-space: nowrap; }
+  @media (max-width: 560px) {
+    .due-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .due-btn { grid-column: 1 / -1; justify-self: start; }
+  }
 </style>
 </head>
 <body>
 
-<div id="demoModeBanner" hidden>🧪 Mode test — connecté automatiquement avec le compte de démonstration</div>
-
 <div id="authScreen">
   <div class="auth-card">
     <div class="auth-brand">
-      <div class="brand-mark" style="background:var(--s1); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:17px;">P</div>
+      <div class="brand-mark"><img src="icons/icon-192.png" alt="Logo POOSSER"></div>
       <div>
         <strong>POOSSER</strong>
         <span>Où va votre argent</span>
@@ -620,25 +788,25 @@
 
 <aside class="sidebar" id="appSidebar">
   <div class="brand">
-    <div class="brand-mark"><img src="data:image/png;base64,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" alt="Logo POOSSER"></div>
+    <div class="brand-mark"><img src="icons/icon-192.png" alt="Logo POOSSER"></div>
     <div class="brand-text"><strong>POOSSER</strong><span>Où va votre argent</span></div>
   </div>
   <nav>
-    <button class="nav-btn active" data-view="dashboard"><span class="ic">◆</span> Tableau de bord</button>
-    <button class="nav-btn" data-view="transactions"><span class="ic">↕</span> Revenus &amp; Dépenses</button>
-    <button class="nav-btn" data-view="comptes"><span class="ic">◧</span> Comptes</button>
-    <button class="nav-btn" data-view="projets"><span class="ic">▣</span> Projets</button>
-    <button class="nav-btn" data-view="budget"><span class="ic">▤</span> Budget</button>
-    <button class="nav-btn" data-view="epargne"><span class="ic">●</span> Épargne</button>
-    <button class="nav-btn" data-view="tontine"><span class="ic">◎</span> Tontine</button>
-    <button class="nav-btn" data-view="planner"><span class="ic">▦</span> Planner financier</button>
-    <button class="nav-btn" data-view="assistant"><span class="ic">✦</span> Assistant IA</button>
-    <button class="nav-btn" data-view="stats"><span class="ic">▲</span> Statistiques</button>
+    <button class="nav-btn active" data-view="dashboard"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg></span><span class="lbl">Tableau de bord</span></button>
+    <button class="nav-btn" data-view="transactions"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3"/></svg></span><span class="lbl">Revenus &amp; Dépenses</span></button>
+    <button class="nav-btn" data-view="comptes"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 15h2"/></svg></span><span class="lbl">Comptes</span></button>
+    <button class="nav-btn" data-view="projets"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="lbl">Projets</span></button>
+    <button class="nav-btn" data-view="budget"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4"/></svg></span><span class="lbl">Budget</span></button>
+    <button class="nav-btn" data-view="epargne"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11a7 7 0 0 1 14 0v3a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M9 20h6M12 7v4"/></svg></span><span class="lbl">Épargne</span></button>
+    <button class="nav-btn" data-view="tontine"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="16" r="3"/><circle cx="19" cy="16" r="3"/></svg></span><span class="lbl">Tontine</span></button>
+    <button class="nav-btn" data-view="planner"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span><span class="lbl">Planner financier</span></button>
+    <button class="nav-btn" data-view="assistant"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.4 5.6L20 11l-5.6 2.4L12 19l-2.4-5.6L4 11l5.6-2.4z"/></svg></span><span class="lbl">Assistant IA</span></button>
+    <button class="nav-btn" data-view="stats"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg></span><span class="lbl">Statistiques</span></button>
   </nav>
   <div class="sidebar-foot">
     <div class="user-badge">
       <span class="name" id="sidebarUserName">—</span>
-      <button type="button" id="logoutBtn">Déconnexion</button>
+      <span style="display:flex; gap:10px;"><button type="button" id="changePinBtn">Changer le PIN</button><button type="button" id="logoutBtn">Déconnexion</button></span>
     </div>
     <div class="theme-toggle">
       <span>Thème</span>
@@ -685,9 +853,12 @@
         <h1>Tableau de bord</h1>
         <p>Bonjour 👋 — voici la situation financière du mois en cours.</p>
       </div>
+      <button type="button" class="btn btn-primary" id="dashQuickAdd">+ Nouvelle opération</button>
     </div>
 
-    <div class="tiles" id="dashTiles"></div>
+    <div class="dash-hero" id="dashTiles" aria-live="polite"></div>
+
+    <div class="card" id="remindersCard" style="margin-bottom:18px; display:none;"></div>
 
     <div class="card" id="dashAccountsCard" style="margin-bottom:18px;"></div>
 
@@ -695,15 +866,13 @@
 
     <div class="card" id="weeklySummaryCard" style="margin-bottom:18px;"></div>
 
-    <div class="card" id="remindersCard" style="margin-bottom:18px; display:none;"></div>
-
     <div class="grid-2">
       <div class="card">
         <h3>Revenus vs Dépenses</h3>
         <div class="sub" id="revDepSubLabel">6 derniers mois, en FCFA</div>
         <div class="top-legend">
-          <div class="legend-row"><span class="swatch" style="background:var(--s1)"></span><span class="lname">Revenus</span></div>
-          <div class="legend-row"><span class="swatch" style="background:var(--s2)"></span><span class="lname">Dépenses</span></div>
+          <div class="legend-row"><span class="swatch" style="background:var(--in)"></span><span class="lname">Revenus</span></div>
+          <div class="legend-row"><span class="swatch" style="background:var(--out)"></span><span class="lname">Dépenses</span></div>
         </div>
         <div class="chart-wrap" id="barChartWrap"></div>
       </div>
@@ -746,7 +915,21 @@
       <div id="txBudgetAlert" style="display:none;"></div>
       <div class="voice-bar">
         <button type="button" class="btn btn-ghost mic-btn" id="txMicBtn">🎤 Dicter un mouvement</button>
+        <button type="button" class="btn btn-ghost" id="smsOpenBtn" aria-controls="smsPanel" aria-expanded="false">📋 Coller un SMS</button>
         <div class="voice-status" id="txVoiceStatus">Ex : « Dépense de 15000 FCFA pour Alimentation, marché du dimanche, payé en mobile money »</div>
+      </div>
+      <!-- Coller un SMS MTN MoMo / Orange Money : le texte est lu par
+           POST /api/sms/parse (rien n'est enregistré côté serveur) puis le
+           formulaire ci-dessous est pré-rempli ; l'utilisateur vérifie et
+           valide lui-même. Retrait / dépôt → formulaire de virement. -->
+      <div class="sms-panel" id="smsPanel" hidden>
+        <label for="smsText">Message de confirmation MTN MoMo ou Orange Money</label>
+        <textarea id="smsText" rows="4" maxlength="1000" placeholder="Appuyez longuement ici puis « Coller » : le formulaire se remplit tout seul."></textarea>
+        <div class="sms-actions">
+          <button type="button" class="btn btn-primary" id="smsAnalyze">Remplir le formulaire</button>
+          <button type="button" class="btn btn-ghost" id="smsClose">Fermer</button>
+        </div>
+        <div id="smsResult" class="sms-result" role="status"></div>
       </div>
       <form id="txForm" class="form-grid">
         <div class="field">
@@ -793,6 +976,10 @@
           <label>Note (optionnel)</label>
           <input type="text" id="txNote" placeholder="Ex: Marché du dimanche">
         </div>
+        <label class="sms-fee" id="smsFeeRow" hidden>
+          <input type="checkbox" id="smsFeeCheck" checked>
+          <span>Ajouter aussi les frais de <b id="smsFeeAmt"></b> en dépense « Frais Mobile Money »</span>
+        </label>
         <div class="field">
           <button type="submit" class="btn btn-primary" id="txSubmitBtn">Ajouter le mouvement</button>
         </div>
@@ -1506,6 +1693,10 @@
           </select>
         </div>
         <div class="field">
+          <label for="evAccount">Compte</label>
+          <select id="evAccount"></select>
+        </div>
+        <div class="field">
           <button type="submit" class="btn btn-primary" id="plannerSubmitBtn">Ajouter à l'agenda</button>
         </div>
       </form>
@@ -1619,6 +1810,36 @@
 
 </main>
 
+<!-- Changement du PIN de connexion (POST /auth/change-pin : le PIN actuel
+     est vérifié côté serveur, avec le même verrouillage après plusieurs
+     échecs que la connexion). -->
+<dialog id="pinDialog" aria-labelledby="pinDialogTitle">
+  <form id="pinForm" method="dialog">
+    <h3 id="pinDialogTitle" style="margin:0 0 4px;">Changer mon PIN</h3>
+    <p class="sub" style="margin:0 0 14px;">6 chiffres. Évitez 123456 ou une date de naissance.</p>
+    <div class="field"><label for="pinCurrent">PIN actuel</label><input id="pinCurrent" type="password" inputmode="numeric" autocomplete="current-password" pattern="\d{6}" maxlength="6" required></div>
+    <div class="field" style="margin-top:10px;"><label for="pinNew">Nouveau PIN</label><input id="pinNew" type="password" inputmode="numeric" autocomplete="new-password" pattern="\d{6}" maxlength="6" required></div>
+    <div class="field" style="margin-top:10px;"><label for="pinNew2">Confirmer le nouveau PIN</label><input id="pinNew2" type="password" inputmode="numeric" autocomplete="new-password" pattern="\d{6}" maxlength="6" required></div>
+    <div id="pinMsg" class="sub" role="status" style="margin:12px 0 0; min-height:1em;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
+      <button type="button" class="btn btn-ghost" id="pinCancel">Annuler</button>
+      <button type="submit" class="btn btn-primary" id="pinSubmit">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Barre d'onglets du bas (petits écrans uniquement, voir « Barre d'onglets »
+     dans le CSS) : les rubriques les plus utilisées au pouce, et le bouton
+     « + » qui ouvre directement la saisie d'une opération. « Menu » ouvre le
+     menu complet. -->
+<nav class="tabbar" id="mobileTabbar" aria-label="Navigation principale">
+  <button type="button" class="tab on" data-tab-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Accueil</span></button>
+  <button type="button" class="tab" data-tab-view="comptes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 15h2"/></svg><span>Comptes</span></button>
+  <button type="button" class="tab tab-fab" id="tabQuickAdd" aria-label="Nouvelle opération"><span class="fab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span></button>
+  <button type="button" class="tab" data-tab-view="budget"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4"/></svg><span>Budget</span></button>
+  <button type="button" class="tab" id="tabMenu" aria-controls="appSidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>Menu</span></button>
+</nav>
+
 </div><!-- /#appShell -->
 
 <div class="notif-center" id="notifCenter"></div>
@@ -1644,8 +1865,8 @@ const CAT_COLORS = { // fixed categorical order, per dataviz palette
   "Autres": "var(--s8)"
 };
 const CAT_HEX = { // resolved hex (light) for conic-gradient which can't read CSS vars reliably across themes
-  "Alimentation": "#2a78d6", "Transport": "#eb6834", "Logement": "#1baf7a", "Santé": "#eda100",
-  "Éducation": "#e87ba4", "Loisirs": "#008300", "Tontine": "#4a3aa7", "Frais Mobile Money": "#6b7a8f", "Autres": "#e34948"
+  "Alimentation": "#2f7be0", "Transport": "#f26b3a", "Logement": "#0f9d6b", "Santé": "#e9a91c",
+  "Éducation": "#d9578f", "Loisirs": "#14a3b8", "Tontine": "#6d5bd0", "Frais Mobile Money": "#6b7a8f", "Autres": "#e0484d"
 };
 // Option spéciale ajoutée en bas de chaque <select> de catégorie (Transaction,
 // Budget, Planner) pour créer une catégorie personnalisée sans changer d'écran
@@ -1959,7 +2180,7 @@ function mapEventFromApi(e){
   // le rappel 15 min avant ne se déclenchait alors jamais et l'heure de fin
   // affichée montrait "NaN:NaN", pour TOUS les événements du planner.
   const time = (e.event_time || '').slice(0, 5);
-  return { id: e.id, title: e.title, date: e.event_date, time, durationMinutes: e.duration_minutes, type: e.type, category: e.category, amount: Number(e.amount), status: e.status, recurrence: e.recurrence || null, notifiedStart: e.notified_start, notifiedEnd: e.notified_end };
+  return { id: e.id, title: e.title, date: e.event_date, time, durationMinutes: e.duration_minutes, type: e.type, category: e.category, amount: Number(e.amount), status: e.status, recurrence: e.recurrence || null, accountId: e.account_id || null, transactionId: e.transaction_id || null, notifiedStart: e.notified_start, notifiedEnd: e.notified_end };
 }
 const RECURRENCE_LABELS = { hebdomadaire: 'Hebdomadaire', mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle' };
 const FREQ_LABELS = { hebdomadaire: 'Hebdomadaire', mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle' };
@@ -2304,10 +2525,11 @@ function applyCurrencyLabels(){
   set('accountOpAmountLabel', `Montant (${u})`);
 }
 function monthLabel(offset){
+  // Mois réel (aujourd'hui + offset) — l'ancienne version partait d'un
+  // mois fixe (août) hérité du prototype.
   const months = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
-  const base = 7; // Août = index 7 (0-based)
-  let idx = (base + offset + 24) % 12;
-  return months[idx];
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + offset);
+  return months[d.getMonth()];
 }
 // Corrigé (bug préexistant repéré en construisant l'alerte de budget temps
 // réel) : cette fonction renvoyait TOUTES les transactions, jamais filtrées
@@ -2464,9 +2686,63 @@ function switchToView(viewName){
   // Petit écran : la barre du haut affiche la rubrique ouverte, et le menu se referme.
   const activeBtn = document.querySelector(`.nav-btn[data-view="${viewName}"]`);
   const title = document.getElementById('topbarViewTitle');
-  if(activeBtn && title) title.textContent = activeBtn.textContent.replace(/^\s*\S+\s+/, '').trim();
+  if(activeBtn && title) title.textContent = (activeBtn.querySelector('.lbl')?.textContent || activeBtn.textContent).trim();
+  document.querySelectorAll('#mobileTabbar [data-tab-view]').forEach(t=>t.classList.toggle('on', t.dataset.tabView===viewName));
   setMobileNavOpen(false);
 }
+
+// « + » (barre d'onglets) et « + Nouvelle opération » (tableau de bord) :
+// ouvrent le formulaire de saisie, champ Montant prêt à taper.
+function openQuickAdd(){
+  switchToView('transactions');
+  const form = document.getElementById('txForm');
+  const card = form && form.closest('.card');
+  if(!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
+  setTimeout(()=> document.getElementById('txAmount')?.focus({ preventScroll: true }), 350);
+}
+document.querySelectorAll('#mobileTabbar [data-tab-view]').forEach(t=> t.addEventListener('click', ()=> switchToView(t.dataset.tabView)));
+document.getElementById('tabQuickAdd').addEventListener('click', openQuickAdd);
+document.getElementById('dashQuickAdd').addEventListener('click', openQuickAdd);
+document.getElementById('tabMenu').addEventListener('click', ()=> setMobileNavOpen(true));
+
+// ---- Changer le PIN ----
+(function wirePinDialog(){
+  const dlg = document.getElementById('pinDialog');
+  const msg = document.getElementById('pinMsg');
+  const ids = ['pinCurrent','pinNew','pinNew2'];
+  document.getElementById('changePinBtn').addEventListener('click', ()=>{
+    ids.forEach(id=> document.getElementById(id).value = '');
+    msg.textContent = ''; msg.style.color = '';
+    setMobileNavOpen(false);
+    dlg.showModal();
+    document.getElementById('pinCurrent').focus();
+  });
+  document.getElementById('pinCancel').addEventListener('click', ()=> dlg.close());
+  document.getElementById('pinForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const [currentPin, newPin, newPinConfirmation] = ids.map(id=> document.getElementById(id).value.trim());
+    const bad = (t)=>{ msg.textContent = t; msg.style.color = 'var(--critical)'; };
+    if(![currentPin, newPin, newPinConfirmation].every(v=> /^\d{6}$/.test(v))) return bad('Chaque PIN doit contenir exactement 6 chiffres.');
+    if(newPin !== newPinConfirmation) return bad('Les deux nouveaux PIN ne sont pas identiques.');
+    if(newPin === currentPin) return bad('Le nouveau PIN doit être différent de l\'actuel.');
+    const btn = document.getElementById('pinSubmit');
+    btn.disabled = true; msg.style.color = ''; msg.textContent = 'Enregistrement…';
+    try {
+      // On s'assure d'abord d'avoir un jeton valide, puis on appelle
+      // change-pin SANS nouvelle tentative automatique : un PIN actuel
+      // erroné ne doit compter qu'une fois dans le verrouillage.
+      await apiFetch('/auth/me', { auth: true });
+      await rawApiFetch('/auth/change-pin', { method: 'POST', auth: true, body: { currentPin, newPin, newPinConfirmation } });
+      msg.style.color = 'var(--success-text)'; msg.textContent = 'PIN modifié. Utilisez le nouveau à la prochaine connexion.';
+      setTimeout(()=> dlg.close(), 1400);
+    } catch(err){
+      if(err && err.code === 'INVALID_CREDENTIALS') bad('PIN actuel incorrect.');
+      else bad(authErrorMessage(err));
+    } finally { btn.disabled = false; }
+  });
+})();
 
 // Menu latéral repliable (petits écrans).
 function setMobileNavOpen(open){
@@ -2625,11 +2901,21 @@ function renderWeeklySummary(){
  * événements ponctuels ont déjà leur propre liste complète dans l'onglet
  * Planner) + aux cotisations tontine, pour rester un résumé court plutôt que
  * de dupliquer l'agenda entier. */
+function eventAccountLabel(ev){
+  const acc = ev.accountId ? accountById(ev.accountId) : null;
+  return acc ? acc.name : 'Compte par défaut';
+}
+
+// Carte « À confirmer » de l'accueil : les échéances du Planner en retard ou
+// du jour, et les échéances récurrentes des 7 prochains jours, chacune avec
+// un bouton qui enregistre le mouvement en un geste (même action que
+// « Réalisé » dans le Planner), plus les cotisations tontine à venir.
 function renderRemindersCard(){
   const card = document.getElementById('remindersCard');
+  const today = todayISO(0), in7 = todayISO(7);
 
-  const recurringDue = state.plannerEvents
-    .filter(ev => ev.status === 'a_venir' && ev.recurrence && ev.date <= todayISO(7))
+  const dueEvents = state.plannerEvents
+    .filter(ev => ev.status === 'a_venir' && (ev.date <= today || (ev.recurrence && ev.date <= in7)))
     .sort((a,b)=> a.date.localeCompare(b.date));
 
   const tontinesDue = state.tontines
@@ -2642,43 +2928,72 @@ function renderRemindersCard(){
     .filter(Boolean)
     .sort((a,b)=> a.due.diffDays - b.due.diffDays);
 
-  if(!recurringDue.length && !tontinesDue.length){ card.style.display = 'none'; return; }
+  if(!dueEvents.length && !tontinesDue.length){ card.style.display = 'none'; return; }
   card.style.display = '';
 
-  const eventRows = recurringDue.map(ev => {
+  const eventRows = dueEvents.map(ev => {
     const st = eventStatusInfo(ev);
-    return `<div class="legend-row">
-      <span class="lname">🔁 ${ev.title} <span class="status-tag status-${st.cls}" style="margin-left:4px;">${st.label}</span></span>
-      <span class="lval">${ev.date.split('-').reverse().join('/')} · ${fmt(ev.amount)}</span>
+    const when = ev.date < today ? 'En retard' : ev.date === today ? "Aujourd'hui" : ev.date.split('-').reverse().slice(0,2).join('/');
+    return `<div class="due-row">
+      <div class="due-main">
+        <div class="due-title">${ev.recurrence ? '🔁 ' : ''}${escapeHtml(ev.title)} <span class="status-tag status-${st.cls}">${when}</span></div>
+        <div class="due-meta">${escapeHtml(ev.category)} · ${escapeHtml(eventAccountLabel(ev))}</div>
+      </div>
+      <div class="due-amt ${ev.type==='revenu'?'amt-pos':'amt-neg'}">${ev.type==='revenu'?'+':'−'} ${fmt(ev.amount)}</div>
+      <button type="button" class="btn btn-primary due-btn" data-confirm-event="${ev.id}">${ev.type==='revenu' ? '✓ Reçu' : '✓ Payé'}</button>
     </div>`;
   }).join('');
 
-  const tontineRows = tontinesDue.map(({t, due}) => `<div class="legend-row">
-      <span class="lname">🤝 ${t.name} <span class="status-tag status-${due.cls}" style="margin-left:4px;">${due.label}</span></span>
-      <span class="lval">${fmt(t.amount)} / membre</span>
+  const tontineRows = tontinesDue.map(({t, due}) => `<div class="due-row">
+      <div class="due-main">
+        <div class="due-title">🤝 ${escapeHtml(t.name)} <span class="status-tag status-${due.cls}">${due.label}</span></div>
+        <div class="due-meta">Cotisation tontine · par membre</div>
+      </div>
+      <div class="due-amt">${fmt(t.amount)}</div>
+      <button type="button" class="btn btn-ghost due-btn" data-goto-tontine="1">Voir</button>
     </div>`).join('');
 
   card.innerHTML = `
-    <h3>🔔 Rappels</h3>
-    <div class="sub">Paiements récurrents et cotisations tontine à venir ou en retard</div>
-    <div class="legend" style="margin-top:10px;">${eventRows}${tontineRows}</div>`;
+    <h3>🔔 À confirmer</h3>
+    <div class="sub">Échéances du Planner et cotisations à venir : un geste enregistre le mouvement sur le bon compte.</div>
+    <div class="due-list">${eventRows}${tontineRows}</div>`;
+
+  card.querySelectorAll('[data-confirm-event]').forEach(btn => btn.addEventListener('click', async () => {
+    const ev = state.plannerEvents.find(e => e.id === btn.dataset.confirmEvent);
+    if(!ev) return;
+    btn.disabled = true; btn.textContent = '…';
+    await markEventRealise(ev);
+    renderAll();
+  }));
+  card.querySelectorAll('[data-goto-tontine]').forEach(btn => btn.addEventListener('click', () => switchToView('tontine')));
 }
 
 /* ===================== DASHBOARD RENDER ===================== */
 function renderDashboard(){
   const rev = totalRevenu(), dep = totalDepense(), solde = rev - dep, ep = totalEpargne();
-  const tiles = [
-    {label:'Solde du mois', value: fmt(solde), delta: solde>=0 ? 'Positif ce mois-ci':'Attention: déficit', cls: solde>=0?'good':'bad'},
-    {label:'Revenus', value: fmt(rev), delta: `${currentMonthTx().filter(t=>t.type==='revenu').length} mouvement(s)`, cls:''},
-    {label:'Dépenses', value: fmt(dep), delta: `${currentMonthTx().filter(t=>t.type==='depense').length} mouvement(s)`, cls:''},
-    {label:'Épargne totale', value: fmt(ep), delta: `${state.goals.length} objectif(s) actif(s)`, cls:''},
-  ];
-  document.getElementById('dashTiles').innerHTML = tiles.map(t=>`
-    <div class="tile">
-      <div class="label">${t.label}</div>
-      <div class="value">${t.value}</div>
-      <div class="delta ${t.cls}">${t.delta}</div>
-    </div>`).join('');
+  // Carte « Solde disponible » : l'argent réellement disponible sur tous les
+  // comptes actifs (même calcul que la page Comptes), puis le mois en cours.
+  // Les virements entre comptes sont neutres, donc l'écart depuis le 1er du
+  // mois est exactement le solde du mois (revenus − dépenses, frais compris).
+  const dispo = totalAvailable();
+  const nbIn = currentMonthTx().filter(t=>t.type==='revenu').length;
+  const nbOut = currentMonthTx().filter(t=>t.type==='depense').length;
+  const fees = monthTransferFees();
+  const firstOfMonth = new Date(); firstOfMonth.setDate(1);
+  const since = '1er ' + firstOfMonth.toLocaleDateString('fr-FR', { month: 'long' });
+  const trendIcon = solde >= 0
+    ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l6-6 4 4 6-6"/></svg>'
+    : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8l6 6 4-4 6 6"/></svg>';
+  document.getElementById('dashTiles').innerHTML = `
+    <div class="lbl">Solde disponible · ${activeAccounts().length} compte(s)</div>
+    <div class="big${dispo < 0 ? ' neg' : ''}">${fmt(dispo)}</div>
+    <div class="trend">${trendIcon}${solde >= 0 ? '+' : '−'} ${fmt(Math.abs(solde))} depuis le ${since}</div>
+    <div class="stats">
+      <div><small>Entrées du mois</small><b>+ ${fmt(rev)}</b><small>${nbIn} mouvement(s)</small></div>
+      <div><small>Sorties du mois</small><b>− ${fmt(dep)}</b><small>${nbOut} mouvement(s)</small></div>
+      <div><small>Épargne totale</small><b>${fmt(ep)}</b><small>${state.goals.length} objectif(s)</small></div>
+      <div><small>Frais Mobile Money</small><b>${fmt(fees)}</b><small>ce mois-ci</small></div>
+    </div>`;
 
   renderDashAccountsCard();
 
@@ -2730,13 +3045,21 @@ function renderDonut(){
 }
 
 function renderBarChart(){
-  // 6 mois: simulate month totals — use current totals for month 0, softly varied synthetic history for context
-  const revBase = totalRevenu(), depBase = totalDepense();
-  const months = [-5,-4,-3,-2,-1,0].map(off=>({
-    label: monthLabel(off),
-    rev: off===0 ? revBase : Math.round(revBase * (0.82 + (off*-0.03) + ((off%2===0)?0.05:-0.02))),
-    dep: off===0 ? depBase : Math.round(depBase * (0.78 + (off*-0.02) + ((off%2===0)?-0.04:0.06))),
-  }));
+  // Six derniers mois RÉELS, calculés depuis les transactions (même règle
+  // que les totaux du mois : tous les revenus et toutes les dépenses du mois).
+  // Remplace l'ancien historique simulé hérité du prototype, qui inventait
+  // les cinq mois précédents à partir du mois en cours.
+  const now = new Date();
+  const months = [-5,-4,-3,-2,-1,0].map(off=>{
+    const d = new Date(now.getFullYear(), now.getMonth() + off, 1);
+    const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    const txs = state.transactions.filter(t => t.date.slice(0,7) === ym);
+    return {
+      label: monthLabel(off),
+      rev: txs.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0),
+      dep: txs.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0),
+    };
+  });
   // Math.max(1, ...) évite une division par zéro (NaN dans les attributs SVG)
   // quand un compte tout juste créé n'a encore aucune transaction.
   const maxVal = Math.max(1, Math.max(...months.flatMap(m=>[m.rev,m.dep])) * 1.15);
@@ -2746,8 +3069,9 @@ function renderBarChart(){
   const groupW = chartW / months.length;
   const barW = Math.min(20, groupW/2 - 8);
 
-  const s1 = getComputedStyle(document.documentElement).getPropertyValue('--s1').trim() || '#2a78d6';
-  const s2 = getComputedStyle(document.documentElement).getPropertyValue('--s2').trim() || '#eb6834';
+  // Vert pour les revenus, rouge pour les dépenses (palette Marine & Corail).
+  const s1 = getComputedStyle(document.documentElement).getPropertyValue('--in').trim() || '#0f9d6b';
+  const s2 = getComputedStyle(document.documentElement).getPropertyValue('--out').trim() || '#e0484d';
   const grid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
   const muted = getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim();
   const baseline = getComputedStyle(document.documentElement).getPropertyValue('--baseline').trim();
@@ -2800,7 +3124,7 @@ function renderRecentTx(){
   document.querySelector('#recentTxTable tbody').innerHTML = rows.map(t=>`
     <tr>
       <td>${t.date}</td>
-      <td><span class="swatch" style="background:${t.type==='revenu'?'var(--s1)':categoryColor(t.category)}; display:inline-block; margin-right:6px;"></span>${t.category}</td>
+      <td><span class="swatch" style="background:${t.type==='revenu'?'var(--in)':categoryColor(t.category)}; display:inline-block; margin-right:6px;"></span>${t.category}</td>
       <td><span class="method-pill">${t.method}</span></td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}</td>
@@ -3058,6 +3382,7 @@ function enterTxEditMode(t){
 // réutiliser le formulaire pour un autre usage (ex: "Répéter").
 function exitTxEditMode(){
   editingTxId = null;
+  clearSmsFee();
   document.getElementById('txEditBanner').style.display = 'none';
   document.getElementById('txSubmitBtn').textContent = 'Ajouter le mouvement';
   document.getElementById('txForm').reset();
@@ -3069,6 +3394,154 @@ function exitTxEditMode(){
 }
 
 document.getElementById('txCancelEdit').addEventListener('click', exitTxEditMode);
+
+/* ===================== COLLER UN SMS MOBILE MONEY ===================== */
+var pendingSmsFee = null; // frais lus dans le SMS, ajoutés à l'enregistrement si la case est cochée
+
+function clearSmsFee(){
+  pendingSmsFee = null;
+  const row = document.getElementById('smsFeeRow');
+  if(row) row.hidden = true;
+}
+
+function setSmsPanelOpen(open){
+  const panel = document.getElementById('smsPanel');
+  panel.hidden = !open;
+  document.getElementById('smsOpenBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+  if(open){ document.getElementById('smsResult').innerHTML = ''; document.getElementById('smsText').focus(); }
+}
+
+// Compte Mobile Money correspondant à l'opérateur du SMS (d'après son nom),
+// ou le seul compte Mobile Money s'il n'y en a qu'un.
+function accountForOperator(operator){
+  const momo = activeAccounts().filter(a=>a.type==='mobile_money');
+  const pattern = operator === 'orange' ? /orange|\bom\b/i : operator === 'mtn' ? /mtn|momo/i : null;
+  if(pattern){ const hit = momo.find(a=>pattern.test(a.name)); if(hit) return hit; }
+  return momo.length === 1 ? momo[0] : null;
+}
+// Opérateur non nommé dans le SMS : on propose le compte Mobile Money le
+// plus récemment utilisé (l'utilisateur en est averti et peut changer).
+function recentMobileMoneyAccount(){
+  const momoIds = new Set(activeAccounts().filter(a=>a.type==='mobile_money').map(a=>a.id));
+  const last = [...state.transactions].filter(t=>momoIds.has(t.accountId)).sort((a,b)=> b.date.localeCompare(a.date))[0];
+  return last ? accountById(last.accountId) : null;
+}
+
+function flashField(id){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.classList.add('field-attn');
+  setTimeout(()=> el.classList.remove('field-attn'), 2600);
+}
+
+function smsNote(p, prefix){
+  const parts = [];
+  if(prefix) parts.push(prefix);
+  if(p.reference) parts.push('Réf. ' + p.reference);
+  return parts.join(' · ').slice(0, 280);
+}
+
+async function analyzeSms(){
+  const text = document.getElementById('smsText').value.trim();
+  const out = document.getElementById('smsResult');
+  if(text.length < 10){ out.innerHTML = '<span class="warn">Collez d\'abord le SMS complet reçu de l\'opérateur.</span>'; return; }
+  out.textContent = 'Lecture du message…';
+  let p;
+  try {
+    ({ parsed: p } = await apiFetch('/api/sms/parse', { method:'POST', auth:true, body:{ text } }));
+  } catch(err){
+    out.innerHTML = `<span class="warn">${escapeHtml(authErrorMessage(err))}</span>`;
+    return;
+  }
+  if(p.amount == null){
+    out.innerHTML = '<span class="warn">Montant introuvable dans ce message.</span> Vérifiez qu\'il s\'agit bien d\'une confirmation MTN MoMo ou Orange Money, ou saisissez l\'opération à la main.';
+    return;
+  }
+  // Solde attendu sur un compte une fois l'opération enregistrée.
+  const expectedAfter = (acc) => accountBalance(acc.id)
+    + (p.direction === 'revenu' ? p.amount : -p.amount)
+    - (p.direction === 'depense' && p.fee ? p.fee : 0);
+  let exactAcc = accountForOperator(p.operator);
+  // Opérateur absent du message : le compte dont le solde correspond
+  // exactement au « nouveau solde » annoncé est forcément le bon.
+  if(!exactAcc && p.balanceAfter != null && p.direction){
+    const match = activeAccounts().filter(a=>a.type==='mobile_money').filter(a=> Math.round(expectedAfter(a)) === Math.round(p.balanceAfter));
+    if(match.length === 1) exactAcc = match[0];
+  }
+  const opAcc = exactAcc || recentMobileMoneyAccount();
+  const lines = [];
+  if(p.reference && state.transactions.some(t => (t.note||'').includes(p.reference))){
+    lines.push(`<span class="warn">Attention : une opération avec la référence ${escapeHtml(p.reference)} existe déjà. Ce SMS est peut-être déjà enregistré.</span>`);
+  }
+
+  // Retrait / dépôt chez un agent : l'argent change seulement de poche →
+  // virement entre le compte Mobile Money et les espèces.
+  if(p.kind === 'retrait' || p.kind === 'depot'){
+    const cash = activeAccounts().find(a=>a.type==='especes');
+    switchToView('comptes');
+    if(typeof backToAccountList === 'function') backToAccountList();
+    populateAccountSelects();
+    const fromSel = document.getElementById('transferFrom'), toSel = document.getElementById('transferTo');
+    const from = p.kind === 'retrait' ? opAcc : cash, to = p.kind === 'retrait' ? cash : opAcc;
+    if(from) fromSel.value = from.id;
+    ensureDistinctTransferAccounts();
+    if(to && to.id !== fromSel.value) toSel.value = to.id;
+    document.getElementById('transferAmount').value = p.amount;
+    document.getElementById('transferFee').value = p.kind === 'retrait' && p.fee ? p.fee : '';
+    document.getElementById('transferDate').value = p.date || todayISO(0);
+    document.getElementById('transferNote').value = smsNote(p, p.kind === 'retrait' ? 'Retrait chez un agent' : 'Dépôt chez un agent');
+    const card = document.getElementById('transferForm').closest('.card') || document.getElementById('transferForm');
+    card.scrollIntoView({ behavior:'smooth', block:'start' });
+    card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
+    if(!from) flashField('transferFrom');
+    if(!to) flashField('transferTo');
+    setSmsPanelOpen(false);
+    document.getElementById('smsText').value = '';
+    return;
+  }
+
+  exitTxEditMode();
+  if(p.direction){
+    const typeSel = document.getElementById('txType');
+    if(typeSel.value !== p.direction){ typeSel.value = p.direction; typeSel.dispatchEvent(new Event('change')); }
+  }
+  document.getElementById('txAmount').value = p.amount;
+  if(opAcc) populateAccountSelects(opAcc.id);
+  const methodSel = document.getElementById('txMethod');
+  if([...methodSel.options].some(o=>o.value==='Mobile Money')) methodSel.value = 'Mobile Money';
+  document.getElementById('txDate').value = p.date || todayISO(0);
+  const who = p.counterparty ? (p.kind === 'reception' ? 'Reçu de ' : p.kind === 'paiement' ? 'Paiement ' : 'Envoi à ') + p.counterparty : '';
+  document.getElementById('txNote').value = smsNote(p, who);
+  if(p.direction === 'depense' && p.fee > 0){
+    pendingSmsFee = p.fee;
+    document.getElementById('smsFeeAmt').textContent = fmt(p.fee);
+    document.getElementById('smsFeeCheck').checked = true;
+    document.getElementById('smsFeeRow').hidden = false;
+  }
+
+  const kindLabel = { reception:'Argent reçu', envoi:'Transfert envoyé', paiement:'Paiement' }[p.kind] || 'Opération';
+  lines.unshift(`<span class="ok">${kindLabel} de ${fmt(p.amount)} : formulaire rempli.</span> Choisissez la catégorie puis validez.`);
+  if(!p.direction) lines.push('Le sens (revenu ou dépense) n\'est pas clair dans ce message : vérifiez le champ Type.');
+  if(!opAcc){ lines.push('Compte Mobile Money non reconnu : choisissez le compte.'); flashField('txAccount'); }
+  else if(!exactAcc){ lines.push(`Opérateur non précisé dans le message : compte ${escapeHtml(opAcc.name)} proposé, vérifiez-le.`); flashField('txAccount'); }
+  if(!p.date) lines.push('Date absente du message : la date du jour a été mise.');
+  if(p.balanceAfter != null && exactAcc && p.direction){
+    const expected = expectedAfter(exactAcc);
+    const gap = Math.round(p.balanceAfter - expected);
+    lines.push(gap === 0
+      ? `Solde ${escapeHtml(exactAcc.name)} après enregistrement : ${fmt(expected)}, identique à celui annoncé par l'opérateur.`
+      : `Solde annoncé par l'opérateur : ${fmt(p.balanceAfter)}. Poosser affichera ${fmt(expected)} pour ${escapeHtml(exactAcc.name)} (écart de ${fmt(Math.abs(gap))}) : une opération manque peut-être.`);
+  }
+  out.innerHTML = lines.map(l=>`<div>${l}</div>`).join('');
+  document.getElementById('smsText').value = '';
+  flashField('txCategory');
+  document.getElementById('txCategory').focus();
+}
+
+document.getElementById('smsOpenBtn').addEventListener('click', ()=> setSmsPanelOpen(document.getElementById('smsPanel').hidden));
+document.getElementById('smsClose').addEventListener('click', ()=> setSmsPanelOpen(false));
+document.getElementById('smsAnalyze').addEventListener('click', analyzeSms);
+document.getElementById('smsText').addEventListener('paste', ()=> setTimeout(analyzeSms, 30));
 
 document.getElementById('txForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -3102,6 +3575,20 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
     } else {
       const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId, accountId } });
       state.transactions.push(mapTxFromApi(transaction));
+      // Frais lus dans un SMS collé : une dépense « Frais Mobile Money » à
+      // part, sur le même compte et à la même date, si la case est cochée.
+      if(pendingSmsFee && type === 'depense' && document.getElementById('smsFeeCheck').checked){
+        try {
+          const feeRes = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
+            type: 'depense', category: TRANSFER_FEE_CATEGORY, amount: pendingSmsFee, occurredOn: date, method,
+            note: ('Frais · ' + (note || category)).slice(0, 280), accountId,
+          }});
+          state.transactions.push(mapTxFromApi(feeRes.transaction));
+        } catch(err){
+          alert("Le mouvement est enregistré, mais pas ses frais : " + authErrorMessage(err));
+        }
+      }
+      clearSmsFee();
       // Le formulaire repropose ensuite le dernier compte utilisé.
       if(accountId) lastUsedAccountId = accountId;
       e.target.reset();
@@ -3474,7 +3961,20 @@ function accountOptionsHtml(list){
  * sélectionné en priorité, même s'il est archivé ; sinon le dernier compte
  * utilisé, sinon le compte par défaut.
  */
+// Compte d'une échéance du Planner : « compte par défaut » ou un compte actif
+// (un compte archivé depuis reste affiché pour l'échéance qui le porte).
+function populateEventAccountSelect(selectedId){
+  const sel = document.getElementById('evAccount');
+  if(!sel) return;
+  const list = activeAccounts();
+  const current = selectedId ? accountById(selectedId) : null;
+  if(current && current.archived) list.push(current);
+  sel.innerHTML = '<option value="">Compte par défaut</option>' + accountOptionsHtml(list);
+  sel.value = selectedId && list.some(a=>a.id===selectedId) ? selectedId : '';
+}
+
 function populateAccountSelects(preferredId){
+  populateEventAccountSelect(document.getElementById('evAccount')?.value || '');
   const txSel = document.getElementById('txAccount');
   if(txSel){
     const list = activeAccounts();
@@ -5339,6 +5839,7 @@ function enterPlannerEditMode(ev){
   document.getElementById('evCategory').value = ev.category;
   document.getElementById('evAmount').value = ev.amount;
   document.getElementById('evRecurrence').value = ev.recurrence || '';
+  populateEventAccountSelect(ev.accountId);
 
   document.getElementById('plannerFormTitle').textContent = "Modifier l'événement";
   document.getElementById('plannerEditBanner').style.display = '';
@@ -5354,6 +5855,7 @@ function exitPlannerEditMode(){
   document.getElementById('plannerSubmitBtn').textContent = "Ajouter à l'agenda";
   document.getElementById('plannerForm').reset();
   populateEventCategorySelect();
+  populateEventAccountSelect('');
   document.getElementById('plannerFormCard').style.display = 'none';
 }
 
@@ -5369,6 +5871,7 @@ document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
   const category = document.getElementById('evCategory').value;
   const amount = parseFloat(document.getElementById('evAmount').value);
   const recurrenceValue = document.getElementById('evRecurrence').value;
+  const eventAccountId = document.getElementById('evAccount').value;
   if(!title || !date || !amount) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
@@ -5379,13 +5882,14 @@ document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
       const { plannerEvent } = await apiFetch('/api/planner-events/' + editingPlannerEventId, { method:'PATCH', auth:true, body:{
         title, eventDate: date, eventTime: time, durationMinutes, type, category, amount,
         recurrence: recurrenceValue || null,
+        accountId: eventAccountId || null,
       }});
       const idx = state.plannerEvents.findIndex(x=>x.id===editingPlannerEventId);
       if(idx !== -1) state.plannerEvents[idx] = mapEventFromApi(plannerEvent);
       exitPlannerEditMode();
     } else {
       const recurrence = recurrenceValue || undefined;
-      const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{ title, eventDate: date, eventTime: time, durationMinutes, type, category, amount, recurrence } });
+      const { plannerEvent } = await apiFetch('/api/planner-events', { method:'POST', auth:true, body:{ title, eventDate: date, eventTime: time, durationMinutes, type, category, amount, recurrence, accountId: eventAccountId || undefined } });
       state.plannerEvents.push(mapEventFromApi(plannerEvent));
       e.target.reset();
       populateEventCategorySelect();
@@ -5928,14 +6432,16 @@ function showReminderToast(ev, phase){
 
 async function markEventRealise(ev){
   try {
-    const { plannerEvent, nextPlannerEvent } = await apiFetch('/api/planner-events/' + ev.id + '/status', { method:'POST', auth:true, body:{ status:'realise' } });
+    // Le serveur crée lui-même le mouvement (sur le compte de l'échéance),
+    // en même temps que le changement de statut et la prochaine occurrence,
+    // et jamais deux fois (voir plannerEventService.setPlannerEventStatus).
+    const { plannerEvent, nextPlannerEvent, transaction } = await apiFetch('/api/planner-events/' + ev.id + '/status', { method:'POST', auth:true, body:{
+      status:'realise', createTransaction: true,
+      occurredOn: ev.date < todayISO(0) ? todayISO(0) : ev.date,
+    }});
     Object.assign(ev, mapEventFromApi(plannerEvent));
     clearEventTimers(ev.id);
-    const { transaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{
-      type: ev.type, category: ev.category, amount: ev.amount,
-      occurredOn: ev.date < todayISO(0) ? todayISO(0) : ev.date, method: 'Mobile Money', note: ev.title,
-    }});
-    state.transactions.push(mapTxFromApi(transaction));
+    if(transaction && !state.transactions.some(t=>t.id===transaction.id)) state.transactions.push(mapTxFromApi(transaction));
     // Événement récurrent : la prochaine occurrence a été créée automatiquement
     // côté serveur (voir plannerEventService.setPlannerEventStatus) — on
     // l'ajoute à l'état local pour qu'elle apparaisse immédiatement dans
@@ -6006,7 +6512,7 @@ function renderPlanner(){
       <div class="event-date-badge"><div class="d">${badge.day}</div><div class="m">${badge.month}</div></div>
       <div class="event-info">
         <div class="event-title">${ev.title} <span class="status-tag status-${st.cls}">${st.label}</span>${ev.recurrence ? ` <span class="pill" title="Se recrée automatiquement à la prochaine échéance une fois validé">🔁 ${RECURRENCE_LABELS[ev.recurrence]}</span>` : ''}</div>
-        <div class="event-meta"><span class="swatch" style="background:${categoryColor(ev.category)}; display:inline-block; margin-right:4px;"></span>${ev.category} · ${ev.type==='revenu'?'Revenu attendu':'Dépense prévue'} · 🕐 ${eventTimeRangeLabel(ev)} (${durationLabel(ev.durationMinutes)})</div>
+        <div class="event-meta"><span class="swatch" style="background:${categoryColor(ev.category)}; display:inline-block; margin-right:4px;"></span>${ev.category} · ${ev.type==='revenu'?'Revenu attendu':'Dépense prévue'} · ${escapeHtml(eventAccountLabel(ev))} · 🕐 ${eventTimeRangeLabel(ev)} (${durationLabel(ev.durationMinutes)})</div>
       </div>
       <div class="event-amount ${ev.type==='revenu'?'amt-pos':'amt-neg'}">${ev.type==='revenu'?'+':'-'} ${fmt(ev.amount)}</div>
       <div class="event-actions">
@@ -7152,11 +7658,8 @@ if ('serviceWorker' in navigator) {
  * appareil », le navigateur détient un cookie HttpOnly (invisible ici) : un
  * simple POST /auth/refresh sans corps suffit à rouvrir la session, sans
  * ressaisir le numéro ni le PIN. Pas de cookie, cookie expiré (30 jours sans
- * utilisation) ou révoqué : l'écran de connexion habituel reste affiché. Le
- * mode démo (?demo=1) garde son propre fonctionnement. */
+ * utilisation) ou révoqué : l'écran de connexion habituel reste affiché. */
 (function restoreRememberedSession(){
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('demo') === '1') return;
   const rememberBox = document.getElementById('loginRemember');
   if (rememberBox) rememberBox.checked = storageGet(REMEMBER_PREF_KEY) === '1';
   if (storageGet(REMEMBER_PREF_KEY) !== '1') return; // jamais coché sur cet appareil : rien à tenter
@@ -7177,40 +7680,11 @@ if ('serviceWorker' in navigator) {
   });
 })();
 
-/* ===================== Mode démo : connexion automatique =====================
- * Activé UNIQUEMENT via le paramètre d'URL ?demo=1 (c'est la valeur portée
- * par start_url dans manifest.json, donc actif quand l'appli est lancée
- * depuis l'icône installée / l'APK). Ouvrir cette même page dans un onglet
- * classique sans ce paramètre continue d'exiger une vraie connexion, comme
- * avant — ce mode ne change donc rien pour un futur vrai utilisateur.
- * Se connecte avec le compte de test (voir README.md / scripts/seed-test-account.ts)
- * pour permettre de tester l'appli sur un téléphone sans ressaisir
- * d'identifiants à chaque lancement. */
-(function initDemoMode(){
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('demo') !== '1') return;
-
-  document.body.classList.add('demo-mode');
-  const banner = document.getElementById('demoModeBanner');
-  if (banner) banner.hidden = false;
-
-  const DEMO_PHONE = '+237690000099';
-  const DEMO_PIN = '246813';
-
-  window.addEventListener('DOMContentLoaded', () => {
-    showAuthMsg('Connexion automatique avec le compte de test…', 'info');
-    rawApiFetch('/auth/login', { method: 'POST', body: {
-      phone: DEMO_PHONE, pin: DEMO_PIN,
-      device: { fingerprint: deviceFingerprint, name: 'Appareil de test POOSSER', platform: 'web' },
-    }})
-      .then(onAuthenticated)
-      .catch((err) => {
-        // Échec (compte de test absent du serveur, réseau, etc.) : on retombe
-        // simplement sur l'écran de connexion normal plutôt que de bloquer.
-        showAuthMsg('Connexion automatique impossible (' + authErrorMessage(err) + '). Connectez-vous manuellement ci-dessous.');
-      });
-  });
-})();
+/* Mode démo retiré : il connectait automatiquement le compte de test avec
+ * un PIN écrit dans ce fichier public. L'ouverture sans mot de passe passe
+ * désormais uniquement par « Rester connecté sur cet appareil » (cookie
+ * HttpOnly, voir plus haut). Un ancien lien ou une ancienne icône installée
+ * contenant encore « ?demo=1 » ouvre simplement l'app normalement. */
 </script>
 </body>
 </html>

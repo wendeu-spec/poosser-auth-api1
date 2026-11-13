@@ -2,7 +2,7 @@
   "name": "POOSSER — Où va mon argent",
   "short_name": "POOSSER",
   "description": "Votre gestionnaire financier personnel : budget, projets, tontines, planner.",
-  "start_url": "/app/?demo=1&source=pwa",
+  "start_url": "/app/?source=pwa",
   "scope": "/app/",
   "display": "standalone",
   "orientation": "portrait",

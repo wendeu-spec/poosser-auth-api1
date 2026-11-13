@@ -8,7 +8,7 @@
 // de données obsolètes. Seul le "squelette" de l'appli (HTML/CSS/JS/icônes)
 // bénéficie du cache.
 
-const CACHE_NAME = 'poosser-shell-v1';
+const CACHE_NAME = 'poosser-shell-v2';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -17,6 +17,8 @@ const SHELL_FILES = [
   './icons/icon-512.png',
   './icons/icon-maskable-192.png',
   './icons/icon-maskable-512.png',
+  './fonts/plus-jakarta-sans.woff2',
+  './fonts/sora.woff2',
 ];
 
 self.addEventListener('install', (event) => {
@@ -48,6 +50,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // La page elle-même (index.html) : RÉSEAU D'ABORD. Une nouvelle version
+  // publiée s'affiche dès l'ouverture suivante ; le cache ne sert que hors
+  // connexion. (Avant : cache d'abord, il fallait rouvrir l'app deux fois.)
+  const isPage = event.request.mode === 'navigate'
+    || url.pathname.endsWith('/app/') || url.pathname.endsWith('/index.html');
+  if (isPage) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((c) => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // Le reste (icônes, polices, manifest) change rarement : cache d'abord,
+  // rafraîchi en arrière-plan.
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const network = fetch(event.request)
