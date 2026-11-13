@@ -167,6 +167,8 @@ export const createPlannerEventSchema = z.object({
   // automatiquement la prochaine occurrence à la date suivante (voir
   // plannerEventService.setPlannerEventStatus).
   recurrence: recurrenceSchema.optional(),
+  // Compte de paiement / d'encaissement de l'échéance (absent = compte par défaut).
+  accountId: z.string().uuid().optional(),
 });
 // recurrence nullable en plus d'optionnelle ici pour pouvoir l'effacer
 // explicitement (repasser un événement récurrent en ponctuel) : absent =
@@ -174,10 +176,17 @@ export const createPlannerEventSchema = z.object({
 // sémantique tri-état que note/projectId/rubriqueId sur les transactions.
 export const updatePlannerEventSchema = createPlannerEventSchema.partial().extend({
   recurrence: recurrenceSchema.nullable().optional(),
+  accountId: z.string().uuid().nullable().optional(),
 });
 
 export const setPlannerEventStatusSchema = z.object({
   status: z.enum(["a_venir", "realise", "non_realise"]),
+  // true : le serveur crée lui-même le mouvement de l'échéance validée
+  // (voir plannerEventService.setPlannerEventStatus).
+  createTransaction: z.boolean().optional(),
+  // Date du mouvement créé, calculée par l'app selon le jour LOCAL de
+  // l'utilisateur ; absente = règle par défaut du serveur (jour UTC).
+  occurredOn: dateSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -241,3 +250,10 @@ export const createTransferSchema = z
     message: "Le compte de destination doit être différent du compte d'origine",
     path: ["toAccountId"],
   });
+
+// ---------------------------------------------------------------------------
+// Lecture d'un SMS Mobile Money (pré-remplissage, rien n'est enregistré)
+// ---------------------------------------------------------------------------
+export const parseSmsSchema = z.object({
+  text: z.string().trim().min(10).max(1000),
+});
