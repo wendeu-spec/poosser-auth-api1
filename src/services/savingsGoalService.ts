@@ -1,4 +1,5 @@
 import { pool, withTransaction } from "../db/pool.js";
+import { assertCanCreate } from "./entitlementService.js";
 import { Errors } from "../lib/errors.js";
 
 export interface SavingsGoalRow {
@@ -35,6 +36,7 @@ export async function listSavingsGoals(userId: string): Promise<SavingsGoalRow[]
 }
 
 export async function createSavingsGoal(userId: string, input: SavingsGoalInput): Promise<SavingsGoalRow> {
+  await assertCanCreate(userId, "savings_goal");
   const { rows } = await pool.query<SavingsGoalRow>(
     `INSERT INTO savings_goals (user_id, name, target_amount, current_amount, deadline)
      VALUES ($1, $2, $3, $4, $5) RETURNING *`,

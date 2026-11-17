@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool, withTransaction } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
+import { assertCanCreate } from "./entitlementService.js";
 import type { TransactionRow } from "./transactionService.js";
 
 /**
@@ -162,6 +163,9 @@ export async function createAccount(userId: string, input: AccountInput): Promis
   // la première action est de créer « MoMo » n'aurait jamais de compte
   // Espèces, et MoMo deviendrait son compte par défaut.
   await ensureDefaultAccount(userId);
+  // Après ensureDefaultAccount : le compte « Espèces » d'office ne doit jamais
+  // être refusé par une limite de formule, il fait partie du socle.
+  await assertCanCreate(userId, "account");
   try {
     const { rows } = await pool.query<{ id: string }>(
       `INSERT INTO accounts (user_id, name, type, opening_balance) VALUES ($1, $2, $3, $4) RETURNING id`,

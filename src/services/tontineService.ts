@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { assertCanCreate } from "./entitlementService.js";
 import { pool, withTransaction } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
 
@@ -118,6 +119,7 @@ export async function getTontine(userId: string, tontineId: string): Promise<Ton
 }
 
 export async function createTontine(userId: string, input: CreateTontineInput): Promise<TontineView> {
+  await assertCanCreate(userId, "tontine");
   return withTransaction(async (client) => {
     const { rows } = await client.query<{ id: string }>(
       `INSERT INTO tontines (user_id, name, contribution_amount, frequency) VALUES ($1, $2, $3, $4) RETURNING id`,

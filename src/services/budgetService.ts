@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
+import { assertCanCreate } from "./entitlementService.js";
 
 export interface BudgetRow {
   id: string;
@@ -23,6 +24,16 @@ export async function listBudgets(userId: string): Promise<BudgetRow[]> {
  * présent et validé dans le prototype (voir migrations/015_budgets.sql).
  */
 export async function upsertBudget(userId: string, category: string, monthlyLimit: number): Promise<BudgetRow> {
+  // Seule la création d'une NOUVELLE catégorie suivie consomme une place :
+  // modifier la limite d'un budget existant doit rester possible même au
+  // plafond, sinon un utilisateur ne pourrait plus corriger ses propres
+  // budgets après un déclassement.
+  const existing = await pool.query(
+    `SELECT 1 FROM budgets WHERE user_id = $1 AND category = $2`,
+    [userId, category],
+  );
+  if (!existing.rows[0]) await assertCanCreate(userId, "budget");
+
   const { rows } = await pool.query<BudgetRow>(
     `INSERT INTO budgets (user_id, category, monthly_limit)
      VALUES ($1, $2, $3)

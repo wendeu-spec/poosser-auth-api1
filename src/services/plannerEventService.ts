@@ -1,6 +1,7 @@
 import { pool, withTransaction } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
 import { assertAccountUsable, ensureDefaultAccount, METHOD_BY_ACCOUNT_TYPE, type AccountType } from "./accountService.js";
+import { assertCanCreate } from "./entitlementService.js";
 import type { TransactionRow } from "./transactionService.js";
 
 export type RecurrenceFrequency = "hebdomadaire" | "mensuelle" | "trimestrielle";
@@ -46,6 +47,9 @@ export async function listPlannerEvents(userId: string): Promise<PlannerEventRow
 }
 
 export async function createPlannerEvent(userId: string, input: PlannerEventInput): Promise<PlannerEventRow> {
+  // Seules les échéances RÉCURRENTES sont limitées : un événement ponctuel est
+  // un simple rendez-vous d'agenda, le brider n'aurait pas de sens.
+  if (input.recurrence) await assertCanCreate(userId, "recurring_event");
   if (input.accountId) await assertAccountUsable(userId, input.accountId);
   const { rows } = await pool.query<PlannerEventRow>(
     `INSERT INTO planner_events (user_id, title, event_date, event_time, duration_minutes, type, category, amount, recurrence, account_id)
@@ -67,6 +71,15 @@ export async function updatePlannerEvent(
   // les transactions : absent du corps = inchangé, null = retire la
   // récurrence (redevient un événement ponctuel), valeur = la remplace.
   const hasRecurrence = "recurrence" in input;
+  // Rendre récurrent un événement qui ne l'était pas revient à en créer une :
+  // sans ce contrôle, la limite se contournerait en deux appels.
+  const current = await pool.query<{ recurrence: string | null }>(
+    `SELECT recurrence FROM planner_events WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  if (hasRecurrence && input.recurrence && !current.rows[0]?.recurrence) {
+    await assertCanCreate(userId, "recurring_event");
+  }
   // Même règle tri-état pour le compte (null = revenir au compte par défaut).
   const hasAccount = "accountId" in input;
   if (input.accountId) await assertAccountUsable(userId, input.accountId);

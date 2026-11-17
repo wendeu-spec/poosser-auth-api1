@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { assertCanCreate } from "./entitlementService.js";
 import { Errors } from "../lib/errors.js";
 
 export type ProjectStatus = "actif" | "termine" | "archive";
@@ -61,6 +62,7 @@ export async function getProject(userId: string, id: string): Promise<ProjectSum
 }
 
 export async function createProject(userId: string, input: ProjectInput): Promise<ProjectRow> {
+  await assertCanCreate(userId, "project");
   const { rows } = await pool.query<ProjectRow>(
     `INSERT INTO projects (user_id, name, icon, target_amount, target_date, status)
      VALUES ($1, $2, COALESCE($3, '📁'), $4, $5, COALESCE($6, 'actif')) RETURNING *`,

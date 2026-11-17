@@ -1,4 +1,5 @@
 import { env } from "../config/env.js";
+import { consumeQuota } from "./entitlementService.js";
 import { checkRateLimit } from "./rateLimiter.js";
 import { assistantProvider } from "./assistant/index.js";
 import { Errors } from "../lib/errors.js";
@@ -32,6 +33,11 @@ export async function askAssistant(
   if (!limit.allowed) {
     throw Errors.rateLimited(limit.retryAfterSeconds);
   }
+
+  // Quota mensuel de la formule, en plus du filet anti-abus horaire ci-dessus :
+  // l'un protège le service, l'autre fait partie de l'offre commerciale.
+  // Consommé AVANT l'appel au fournisseur : c'est lui qui coûte de l'argent.
+  await consumeQuota(userId, "assistant");
 
   const result = await assistantProvider.ask(question, context);
   if (!result) {
