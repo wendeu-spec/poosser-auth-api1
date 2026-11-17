@@ -31,6 +31,7 @@ import { askAssistant } from "../services/assistantService.js";
 import * as budgetProposals from "../services/budgetProposalService.js";
 import * as accounts from "../services/accountService.js";
 import { parseMobileMoneySms } from "../lib/smsParser.js";
+import { consumeQuota, getSubscriptionView } from "../services/entitlementService.js";
 
 export const businessRouter = Router();
 
@@ -88,6 +89,13 @@ businessRouter.delete("/accounts/:id", async (req, res) => {
   res.status(204).send();
 });
 
+// Formule courante, quotas consommés et grille tarifaire — lu par l'app au
+// démarrage pour griser ce qui n'est pas accessible. Confort d'affichage
+// seulement : c'est le serveur qui refuse, jamais ce que l'app croit.
+businessRouter.get("/subscription", async (req, res) => {
+  res.json({ subscription: await getSubscriptionView(req.auth!.userId) });
+});
+
 businessRouter.get("/transfers", async (req, res) => {
   res.json({ transfers: await accounts.listTransfers(req.auth!.userId) });
 });
@@ -104,7 +112,11 @@ businessRouter.delete("/transfers/:id", async (req, res) => {
 // Lecture d'un SMS de confirmation Mobile Money. Ne lit ni n'écrit rien en
 // base et ne journalise pas le texte : le résultat ne sert qu'à pré-remplir
 // un formulaire que l'utilisateur vérifie avant d'enregistrer.
-businessRouter.post("/sms/parse", validateBody(parseSmsSchema), (req, res) => {
+businessRouter.post("/sms/parse", validateBody(parseSmsSchema), async (req, res) => {
+  // Exception assumée à la règle « les contrôles vivent dans les services » :
+  // la lecture d'un SMS est une fonction pure sans service, et cette route est
+  // sa seule porte d'entrée.
+  await consumeQuota(req.auth!.userId, "sms_parse");
   res.json({ parsed: parseMobileMoneySms(req.body.text) });
 });
 
