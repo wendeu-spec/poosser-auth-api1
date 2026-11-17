@@ -691,6 +691,42 @@
   tr.row-flash td { animation: rowFlash 2.4s ease-out 1; }
 
   .fee-hint { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top: 2px; }
+
+  /* ---------- Abonnement ---------- */
+  .plan-link {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-top: 8px; padding: 8px 10px; border-radius: 10px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text-secondary); font: 600 12px var(--font-ui);
+  }
+  .plan-link:hover { color: var(--text-primary); }
+  .plan-badge {
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px;
+    background: var(--primary); color: #fff; white-space: nowrap;
+  }
+  .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: 12px; margin-top: 14px; }
+  .plan-card {
+    border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+    background: var(--surface-2); display: grid; gap: 8px; align-content: start; min-width: 0;
+  }
+  .plan-card.current { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+  .plan-card h4 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .plan-card .price { font-family: var(--font-num); font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .plan-card .price small { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+  .plan-card ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 4px; font-size: 12.5px; color: var(--text-secondary); }
+  .plan-card .btn { width: 100%; margin-top: 4px; }
+  .plan-card .btn[disabled] { opacity: .55; cursor: not-allowed; }
+  .plan-tag { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: var(--primary-soft); color: var(--primary); }
+  .quota-row { display: grid; gap: 6px; margin-bottom: 14px; }
+  .quota-row:last-child { margin-bottom: 0; }
+  .quota-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+  .quota-head b { font-variant-numeric: tabular-nums; }
+  /* .alert-banner pose display:flex, qui l'emporte sur le [hidden] du
+     navigateur : sans cette règle, le bandeau « formules non activées »
+     resterait affiché une fois les limites allumées, et mentirait. */
+  #subNotEnforced[hidden] { display: none !important; }
+  #planDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 420px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
+  #planDialog::backdrop { background: rgba(8,18,34,.55); }
 </style>
 </head>
 <body>
@@ -818,6 +854,10 @@
       <span class="name" id="sidebarUserName">—</span>
       <span style="display:flex; gap:10px;"><button type="button" id="changePinBtn">Changer le PIN</button><button type="button" id="logoutBtn">Déconnexion</button></span>
     </div>
+    <button type="button" class="plan-link" id="openSubscription">
+      <span class="plan-link-label">Mon abonnement</span>
+      <span class="plan-badge" id="sidebarPlanBadge">—</span>
+    </button>
     <div class="theme-toggle">
       <span>Thème</span>
       <button id="themeBtn" type="button">🌙 Sombre</button>
@@ -936,6 +976,7 @@
       <div class="sms-panel" id="smsPanel" hidden>
         <label for="smsText">Message de confirmation MTN MoMo ou Orange Money</label>
         <textarea id="smsText" rows="4" maxlength="1000" placeholder="Appuyez longuement ici puis « Coller » : le formulaire se remplit tout seul."></textarea>
+        <div class="sms-quota sub" id="smsQuota" style="margin:0;"></div>
         <div class="sms-actions">
           <button type="button" class="btn btn-primary" id="smsAnalyze">Remplir le formulaire</button>
           <button type="button" class="btn btn-ghost" id="smsClose">Fermer</button>
@@ -1823,7 +1864,51 @@
     </div>
   </section>
 
+  <!-- ================= MON ABONNEMENT =================
+       Écran de consultation : formule en cours, quotas consommés, grille
+       tarifaire. Le paiement n'est pas encore branché (étape 3) : les boutons
+       de souscription sont donc désactivés et le disent, plutôt que de faire
+       croire à un parcours qui n'existe pas. -->
+  <section class="view" id="view-abonnement" data-title="Mon abonnement">
+    <div class="page-head">
+      <div>
+        <h1>Mon abonnement</h1>
+        <p>Votre formule, ce qu'elle inclut et ce que vous avez consommé ce mois-ci.</p>
+      </div>
+      <button type="button" class="btn btn-ghost" id="backFromSubscription">← Retour</button>
+    </div>
+
+    <div id="subNotEnforced" class="alert-banner" hidden></div>
+
+    <div class="card" id="subCurrentCard" style="margin-bottom:18px;"></div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3>Consommation du mois</h3>
+      <div class="sub">Les compteurs se remettent à zéro le 1er de chaque mois.</div>
+      <div id="subUsage" style="margin-top:12px;"></div>
+    </div>
+
+    <div class="card">
+      <h3>Les formules</h3>
+      <div class="sub">Prix en FCFA, toutes taxes comprises.</div>
+      <div class="filters" id="subPeriodChips" style="margin-top:12px;"></div>
+      <div class="plan-grid" id="subPlanGrid"></div>
+    </div>
+  </section>
+
 </main>
+
+<!-- Refus lié à la formule (PLAN_LIMIT_REACHED, PLAN_QUOTA_EXHAUSTED,
+     PLAN_FEATURE_REQUIRED) : on explique ce qui est atteint et on propose une
+     sortie, au lieu d'une alerte sèche. -->
+<dialog id="planDialog" aria-labelledby="planDialogTitle">
+  <h3 id="planDialogTitle" style="margin:0 0 6px;">Limite de votre formule</h3>
+  <p class="sub" id="planDialogText" style="margin:0 0 16px;"></p>
+  <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
+    <button type="button" class="btn btn-ghost" id="planDialogClose">Fermer</button>
+    <button type="button" class="btn btn-primary" id="planDialogSee">Voir les formules</button>
+  </div>
+</dialog>
 
 <!-- Changement du PIN de connexion (POST /auth/change-pin : le PIN actuel
      est vérifié côté serveur, avec le même verrouillage après plusieurs
@@ -2202,6 +2287,7 @@ function mapEventFromApi(e){
   const time = (e.event_time || '').slice(0, 5);
   return { id: e.id, title: e.title, date: e.event_date, time, durationMinutes: e.duration_minutes, type: e.type, category: e.category, amount: Number(e.amount), status: e.status, recurrence: e.recurrence || null, accountId: e.account_id || null, transactionId: e.transaction_id || null, notifiedStart: e.notified_start, notifiedEnd: e.notified_end };
 }
+let subscription = null; // formule courante, renseignée par loadSubscription()
 const RECURRENCE_LABELS = { hebdomadaire: 'Hebdomadaire', mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle' };
 const FREQ_LABELS = { hebdomadaire: 'Hebdomadaire', mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle' };
 const FREQ_CODES = { 'Hebdomadaire': 'hebdomadaire', 'Mensuelle': 'mensuelle', 'Trimestrielle': 'trimestrielle' };
@@ -2294,6 +2380,9 @@ async function bootstrapAfterAuth(){
   } catch (err) {
     state.budgetProposal = null;
   }
+  // Formule courante : purement informative, son échec ne doit jamais
+  // empêcher l'application de fonctionner (loadSubscription avale l'erreur).
+  await loadSubscription();
   populateCategorySelect();
   populateBudgetCategorySelect();
   populateEventCategorySelect();
@@ -2708,7 +2797,15 @@ function switchToView(viewName){
   // Petit écran : la barre du haut affiche la rubrique ouverte, et le menu se referme.
   const activeBtn = document.querySelector(`.nav-btn[data-view="${viewName}"]`);
   const title = document.getElementById('topbarViewTitle');
-  if(activeBtn && title) title.textContent = (activeBtn.querySelector('.lbl')?.textContent || activeBtn.textContent).trim();
+  // Les vues atteintes hors du menu (Mon abonnement) n'ont pas de bouton :
+  // elles portent leur intitulé en attribut data-title.
+  const vue = document.getElementById('view-' + viewName);
+  if(title){
+    const libelle = activeBtn
+      ? (activeBtn.querySelector('.lbl')?.textContent || activeBtn.textContent).trim()
+      : (vue?.dataset.title || '');
+    if(libelle) title.textContent = libelle;
+  }
   document.querySelectorAll('#mobileTabbar [data-tab-view]').forEach(t=>t.classList.toggle('on', t.dataset.tabView===viewName));
   setMobileNavOpen(false);
 }
@@ -2728,6 +2825,176 @@ document.querySelectorAll('#mobileTabbar [data-tab-view]').forEach(t=> t.addEven
 document.getElementById('tabQuickAdd').addEventListener('click', openQuickAdd);
 document.getElementById('dashQuickAdd').addEventListener('click', openQuickAdd);
 document.getElementById('tabMenu').addEventListener('click', ()=> setMobileNavOpen(true));
+
+/* ===================== MON ABONNEMENT =====================
+ * L'écran lit GET /api/subscription. Tout ce qu'il affiche (limites grisées,
+ * compteurs) est du CONFORT : c'est le serveur qui refuse, jamais ce que
+ * l'app croit. Modifier ce fichier dans un navigateur ne donne accès à rien.
+ */
+const PLAN_RESOURCE_LABELS = {
+  account: 'comptes', budget: 'budgets', project: 'projets',
+  tontine: 'tontines', savings_goal: "objectifs d'épargne",
+  recurring_event: 'échéances récurrentes',
+};
+const PLAN_QUOTA_LABELS = {
+  sms_parse: 'SMS collés', assistant: "questions à l'assistant",
+};
+const PLAN_FEATURE_LABELS = {
+  advanced_stats: 'statistiques avancées', shared_access: 'accès partagé',
+  business_separation: 'séparation perso / activité',
+};
+const PLAN_PERIOD_LABELS = { monthly: 'par mois', quarterly: 'par trimestre', yearly: 'par an' };
+const PLAN_STATUS_LABELS = {
+  aucun: 'Formule de base', trialing: "Essai gratuit", courtesy: 'Offert',
+  active: 'Actif', grace: 'En attente de renouvellement', expired: 'Expiré',
+  cancelled: 'Résilié, actif jusqu\'à l\'échéance',
+};
+// Ce que chaque formule apporte, en clair. Le détail complet est côté serveur.
+const PLAN_HIGHLIGHTS = {
+  gratuit: ['2 comptes', '3 budgets', '15 SMS collés par mois', '3 mois d\'historique'],
+  standard: ['Comptes et budgets illimités', 'SMS collés illimités', 'Historique complet', '3 projets'],
+  premium: ['Tout le Standard', 'Projets et tontines illimités', 'Statistiques avancées', '150 questions par mois'],
+  famille: ['Le Premium pour 5 personnes', 'Chacun ses comptes', 'Budget de foyer commun'],
+  executive: ['Tout le Premium', 'Séparation perso / activité', 'Accès partagé à 3 personnes', 'Support prioritaire'],
+};
+let subPeriod = 'monthly';
+
+async function loadSubscription(){
+  try {
+    const { subscription: s } = await apiFetch('/api/subscription', { auth: true });
+    subscription = s;
+  } catch (err) {
+    subscription = null; // l'app doit rester utilisable même sans cette info
+  }
+  renderPlanBadge();
+}
+
+function renderPlanBadge(){
+  const badge = document.getElementById('sidebarPlanBadge');
+  if(!badge) return;
+  badge.textContent = subscription ? subscription.planName : '—';
+}
+
+function planLimitLabel(resource){
+  const l = subscription?.limits?.[resource];
+  return l === null || l === undefined ? 'illimité' : String(l);
+}
+
+function renderSubscription(){
+  if(!subscription) return;
+  const s = subscription;
+
+  // Bandeau honnête : tant que les formules ne sont pas activées, rien n'est
+  // refusé — le dire évite de faire croire à des limites qui ne s'appliquent pas.
+  const banner = document.getElementById('subNotEnforced');
+  banner.hidden = s.enforced;
+  if(!s.enforced){
+    banner.innerHTML = 'ℹ️ <div><strong>Les formules ne sont pas encore activées.</strong> '
+      + 'Aucune limite ne s\'applique pour le moment : tout reste accessible. '
+      + 'Les compteurs ci-dessous tournent déjà, pour mesurer l\'usage réel.</div>';
+  }
+
+  const echeance = s.currentPeriodEnd
+    ? new Date(s.currentPeriodEnd).toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' })
+    : null;
+  document.getElementById('subCurrentCard').innerHTML = `
+    <h3>Formule ${escapeHtml(s.planName)} <span class="plan-tag">${escapeHtml(PLAN_STATUS_LABELS[s.status] || s.status)}</span></h3>
+    <div class="sub">${echeance ? 'Valable jusqu\'au ' + echeance + '.' : 'Sans échéance.'}</div>
+    <div class="tiles" style="margin-top:14px; margin-bottom:0;">
+      ${Object.keys(PLAN_RESOURCE_LABELS).map(r => `
+        <div class="tile">
+          <div class="label">${escapeHtml(PLAN_RESOURCE_LABELS[r])}</div>
+          <div class="value">${planLimitLabel(r)}</div>
+        </div>`).join('')}
+    </div>`;
+
+  document.getElementById('subUsage').innerHTML = Object.keys(PLAN_QUOTA_LABELS).map(q => {
+    const u = s.usage[q] || { used: 0, limit: null };
+    const pct = u.limit ? Math.min(100, Math.round(u.used / u.limit * 100)) : 0;
+    const couleur = !u.limit ? 'var(--in)' : pct >= 100 ? 'var(--out)' : pct >= 80 ? 'var(--warning)' : 'var(--primary)';
+    return `<div class="quota-row">
+      <div class="quota-head">
+        <span>${escapeHtml(PLAN_QUOTA_LABELS[q])}</span>
+        <b>${u.limit === null ? 'illimité' : u.used + ' sur ' + u.limit}</b>
+      </div>
+      ${u.limit === null ? '' : `<div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${couleur};"></div></div>`}
+    </div>`;
+  }).join('');
+
+  const periodes = ['monthly', 'quarterly', 'yearly'];
+  document.getElementById('subPeriodChips').innerHTML = periodes.map(pe =>
+    `<button type="button" class="chip ${subPeriod === pe ? 'active' : ''}" data-sub-period="${pe}">${
+      { monthly: 'Mensuel', quarterly: 'Trimestriel', yearly: 'Annuel' }[pe]}</button>`).join('');
+  document.querySelectorAll('[data-sub-period]').forEach(b =>
+    b.addEventListener('click', () => { subPeriod = b.dataset.subPeriod; renderSubscription(); }));
+
+  document.getElementById('subPlanGrid').innerHTML = Object.keys(s.prices).map(code => {
+    const prix = s.prices[code][subPeriod];
+    const courant = code === s.plan;
+    const nom = { gratuit:'Gratuit', standard:'Standard', premium:'Premium', famille:'Famille', executive:'Exécutive' }[code] || code;
+    const parMois = subPeriod === 'yearly' && prix ? Math.round(prix / 12) : null;
+    return `<div class="plan-card ${courant ? 'current' : ''}">
+      <h4>${escapeHtml(nom)} ${courant ? '<span class="plan-tag">Votre formule</span>' : ''}</h4>
+      <div class="price">${prix ? fmt(prix) : fmt(0)}${prix ? ` <small>${PLAN_PERIOD_LABELS[subPeriod]}</small>` : ''}</div>
+      ${parMois ? `<div class="sub" style="margin:0;">soit ${fmt(parMois)} par mois</div>` : ''}
+      <ul>${(PLAN_HIGHLIGHTS[code] || []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+      ${courant || code === 'gratuit' ? '' :
+        '<button type="button" class="btn btn-primary" disabled title="Le paiement par Mobile Money arrive bientôt">Bientôt disponible</button>'}
+    </div>`;
+  }).join('');
+}
+
+async function showSubscription(){
+  await loadSubscription();
+  renderSubscription();
+  switchToView('abonnement');
+}
+
+document.getElementById('openSubscription').addEventListener('click', showSubscription);
+document.getElementById('backFromSubscription').addEventListener('click', () => switchToView('dashboard'));
+
+/* ---- Refus liés à la formule ----
+ * Remplace les alertes sèches : on nomme ce qui est atteint et on propose la
+ * formule qui le lèverait. Renvoie true quand l'erreur a été traitée ici.
+ */
+const PLAN_ERROR_CODES = ['PLAN_LIMIT_REACHED', 'PLAN_QUOTA_EXHAUSTED', 'PLAN_FEATURE_REQUIRED'];
+
+function planErrorText(err){
+  const d = err.details || {};
+  const nomFormule = { gratuit:'Gratuit', standard:'Standard', premium:'Premium', famille:'Famille', executive:'Exécutive' };
+  const cible = d.upgradeTo ? `Passez à la formule ${nomFormule[d.upgradeTo] || d.upgradeTo} pour continuer.` : '';
+  if(err.code === 'PLAN_LIMIT_REACHED'){
+    const quoi = PLAN_RESOURCE_LABELS[d.resource] || 'éléments';
+    return `Votre formule ${nomFormule[d.plan] || d.plan} permet ${d.limit} ${quoi}. ${cible}`;
+  }
+  if(err.code === 'PLAN_QUOTA_EXHAUSTED'){
+    const quoi = PLAN_QUOTA_LABELS[d.quota] || 'cette fonction';
+    const remise = d.resetsOn ? new Date(d.resetsOn + 'T00:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'long' }) : null;
+    return `Vous avez utilisé vos ${d.limit} ${quoi} du mois.`
+      + (remise ? ` Le compteur repart le ${remise}.` : '') + (cible ? ' ' + cible : '');
+  }
+  const quoi = PLAN_FEATURE_LABELS[d.feature] || 'Cette fonction';
+  return `${quoi.charAt(0).toUpperCase() + quoi.slice(1)} n'est pas incluse dans votre formule ${nomFormule[d.plan] || d.plan}. ${cible}`;
+}
+
+function handlePlanError(err){
+  if(!err || !PLAN_ERROR_CODES.includes(err.code)) return false;
+  document.getElementById('planDialogText').textContent = planErrorText(err);
+  document.getElementById('planDialog').showModal();
+  return true;
+}
+
+/** Signale une erreur : boîte dédiée pour un refus de formule, alerte sinon. */
+function reportError(prefix, err){
+  if(handlePlanError(err)) return;
+  alert(prefix + authErrorMessage(err));
+}
+
+document.getElementById('planDialogClose').addEventListener('click', () => document.getElementById('planDialog').close());
+document.getElementById('planDialogSee').addEventListener('click', () => {
+  document.getElementById('planDialog').close();
+  showSubscription();
+});
 
 // ---- Changer le PIN ----
 (function wirePinDialog(){
@@ -2809,7 +3076,7 @@ document.getElementById('currencySelect').addEventListener('change', async (e)=>
     renderAll();
   } catch(err){
     sel.value = previous;
-    alert('Impossible de changer la devise : ' + authErrorMessage(err));
+    reportError('Impossible de changer la devise : ', err);
   } finally {
     sel.disabled = false;
   }
@@ -3191,7 +3458,7 @@ function wireAddCategoryOption(selectEl, refresh, onCreated){
       previousValue = category.name;
       if(onCreated) onCreated();
     } catch(err){
-      alert("Impossible de créer la catégorie : " + authErrorMessage(err));
+      reportError("Impossible de créer la catégorie : ", err);
       selectEl.value = previousValue;
     }
   };
@@ -3350,7 +3617,7 @@ async function saveTransactionAsFavorite(t){
     state.favorites.push(mapFavoriteFromApi(transactionFavorite));
     renderFavorites();
   } catch(err){
-    alert("Impossible d'enregistrer ce favori : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer ce favori : ", err);
   }
 }
 
@@ -3379,7 +3646,7 @@ function renderFavorites(){
         state.favorites = state.favorites.filter(f=>f.id !== id);
         renderFavorites();
       } catch(err){
-        alert('Suppression impossible : ' + authErrorMessage(err));
+        reportError('Suppression impossible : ', err);
       }
     });
   });
@@ -3442,7 +3709,16 @@ function readFeeInput(id){
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+function renderSmsQuota(){
+  const el = document.getElementById('smsQuota');
+  if(!el) return;
+  const u = subscription && subscription.usage && subscription.usage.sms_parse;
+  if(!u || u.limit === null){ el.textContent = ''; return; }
+  el.textContent = `${u.used} SMS sur ${u.limit} ce mois-ci.`;
+}
+
 function setSmsPanelOpen(open){
+  renderSmsQuota();
   const panel = document.getElementById('smsPanel');
   panel.hidden = !open;
   document.getElementById('smsOpenBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -3567,6 +3843,11 @@ async function analyzeSms(){
   }
   out.innerHTML = lines.map(l=>`<div>${l}</div>`).join('');
   document.getElementById('smsText').value = '';
+  if(subscription && subscription.usage && subscription.usage.sms_parse
+     && subscription.usage.sms_parse.limit !== null){
+    subscription.usage.sms_parse.used += 1;
+    renderSmsQuota();
+  }
   flashField('txCategory');
   document.getElementById('txCategory').focus();
 }
@@ -3666,7 +3947,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       showTxSaved(savedTx);
     }
   } catch(err){
-    alert("Impossible d'enregistrer la transaction : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer la transaction : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -3870,7 +4151,7 @@ function renderTxTable(){
         if(editingTxId === id) exitTxEditMode();
         renderAll();
       } catch(err){
-        alert('Suppression impossible : ' + authErrorMessage(err));
+        reportError('Suppression impossible : ', err);
         btn.disabled = false;
       }
     });
@@ -4231,7 +4512,7 @@ document.getElementById('accountForm').addEventListener('submit', async (e)=>{
     populateAccountSelects();
     renderAll();
   } catch(err){
-    alert("Impossible d'enregistrer le compte : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer le compte : ", err);
   } finally {
     btn.disabled = false;
   }
@@ -4248,7 +4529,7 @@ async function toggleAccountArchived(id, btn){
     populateAccountSelects();
     renderAll();
   } catch(err){
-    alert('Action impossible : ' + authErrorMessage(err));
+    reportError('Action impossible : ', err);
     btn.disabled = false;
   }
 }
@@ -4264,7 +4545,7 @@ async function deleteAccountWithConfirm(id, btn){
     populateAccountSelects();
     renderAll();
   } catch(err){
-    alert('Suppression impossible : ' + authErrorMessage(err));
+    reportError('Suppression impossible : ', err);
     btn.disabled = false;
   }
 }
@@ -4293,7 +4574,7 @@ document.getElementById('transferForm').addEventListener('submit', async (e)=>{
     document.getElementById('transferNote').value = '';
     renderAll();
   } catch(err){
-    alert("Impossible d'enregistrer le virement : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer le virement : ", err);
   } finally {
     btn.disabled = activeAccounts().length < 2;
   }
@@ -4308,7 +4589,7 @@ async function deleteTransfer(id, btn){
     state.transactions = state.transactions.filter(t=>t.transferId !== id);
     renderAll();
   } catch(err){
-    alert('Suppression impossible : ' + authErrorMessage(err));
+    reportError('Suppression impossible : ', err);
     btn.disabled = false;
   }
 }
@@ -4498,7 +4779,7 @@ document.getElementById('accountOpForm').addEventListener('submit', async (e)=>{
     renderAll();
     if(type === 'depense') checkBudgetAlertAfterAdd(category);
   } catch(err){
-    alert("Impossible d'enregistrer l'opération : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer l'opération : ", err);
   } finally {
     btn.disabled = false;
   }
@@ -4528,7 +4809,7 @@ document.getElementById('budgetForm').addEventListener('submit', async (e)=>{
     e.target.reset();
     renderAll();
   } catch(err){
-    alert("Impossible d'enregistrer le budget : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer le budget : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -4609,7 +4890,7 @@ document.getElementById('goalForm').addEventListener('submit', async (e)=>{
     document.getElementById('goalFormCard').style.display = 'none';
     renderAll();
   } catch(err){
-    alert("Impossible de créer l'objectif : " + authErrorMessage(err));
+    reportError("Impossible de créer l'objectif : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -4665,7 +4946,7 @@ function renderGoals(){
         state.savingsContributions.unshift(mapSavingsContributionFromApi(contribution));
         renderAll();
       } catch(err){
-        alert('Versement impossible : ' + authErrorMessage(err));
+        reportError('Versement impossible : ', err);
         btn.disabled = false;
       }
     });
@@ -4855,7 +5136,7 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
     renderProjectFilters();
     renderProjects();
   } catch(err){
-    alert("Impossible de créer le projet : " + authErrorMessage(err));
+    reportError("Impossible de créer le projet : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -5250,7 +5531,7 @@ document.getElementById('projectEditForm').addEventListener('submit', async (e)=
     populateProjectSelect(); // le nom/icône apparaissent aussi dans la liste déroulante "Projet" du formulaire de transaction
     renderProjectDetail();
   } catch(err){
-    alert("Impossible d'enregistrer les modifications : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer les modifications : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -5366,7 +5647,7 @@ document.getElementById('rubriqueForm').addEventListener('submit', async (e)=>{
     if(parentRubriqueId) state.expandedRubriqueIds.add(parentRubriqueId);
     renderProjectDetail();
   } catch(err){
-    alert("Impossible d'enregistrer la rubrique : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer la rubrique : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -5394,7 +5675,7 @@ async function deleteRubriqueWithConfirm(id){
     populateRubriqueSelectForProject(document.getElementById('txProject').value, true);
     renderProjectDetail();
   } catch(err){
-    alert('Suppression impossible : ' + authErrorMessage(err));
+    reportError('Suppression impossible : ', err);
   }
 }
 
@@ -5527,7 +5808,7 @@ async function toggleProjectDone(id){
     applyProjectPatch(p, project);
     renderProjectDetail();
   } catch(err){
-    alert('Impossible de mettre à jour le statut : ' + authErrorMessage(err));
+    reportError('Impossible de mettre à jour le statut : ', err);
   }
 }
 
@@ -5543,7 +5824,7 @@ async function deleteProjectWithConfirm(id){
     backToProjectList();
     renderAll();
   } catch(err){
-    alert('Suppression impossible : ' + authErrorMessage(err));
+    reportError('Suppression impossible : ', err);
   }
 }
 
@@ -5755,7 +6036,7 @@ document.getElementById('tontineForm').addEventListener('submit', async (e)=>{
     }
     renderAll();
   } catch(err){
-    alert("Impossible d'enregistrer la tontine : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer la tontine : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -5831,7 +6112,7 @@ function renderTontines(){
         Object.assign(t, mapTontineFromApi(tontine));
         renderTontines();
       } catch(err){
-        alert('Mise à jour impossible : ' + authErrorMessage(err));
+        reportError('Mise à jour impossible : ', err);
         btn.disabled = false;
       }
     });
@@ -5845,7 +6126,7 @@ function renderTontines(){
         Object.assign(t, mapTontineFromApi(tontine));
         renderTontines();
       } catch(err){
-        alert('Clôture impossible : ' + authErrorMessage(err));
+        reportError('Clôture impossible : ', err);
         btn.disabled = false;
       }
     });
@@ -5867,7 +6148,7 @@ function renderTontines(){
         if(editingTontineId === t.id) exitTontineEditMode();
         renderTontines();
       } catch(err){
-        alert('Suppression impossible : ' + authErrorMessage(err));
+        reportError('Suppression impossible : ', err);
         btn.disabled = false;
       }
     });
@@ -5975,7 +6256,7 @@ document.getElementById('plannerForm').addEventListener('submit', async (e)=>{
     }
     renderAll();
   } catch(err){
-    alert("Impossible d'enregistrer l'événement : " + authErrorMessage(err));
+    reportError("Impossible d'enregistrer l'événement : ", err);
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -6376,7 +6657,7 @@ document.getElementById('budgetProposalDismiss').addEventListener('click', async
   if(!entry) return;
   try {
     await apiFetch(`/api/budget-proposals/${entry.proposal.id}/decide`, { method:'POST', auth:true, body:{ status:'dismissed' } });
-  } catch(err){ alert("Impossible d'ignorer ce mois pour l'instant : " + authErrorMessage(err)); return; }
+  } catch(err){ reportError("Impossible d'ignorer ce mois pour l'instant : ", err); return; }
   state.budgetProposal = null;
   renderBudgetProposalBanner();
 });
@@ -6527,7 +6808,7 @@ async function markEventRealise(ev){
     // programmé par scheduleAllReminders(), sans attendre un rechargement.
     if(nextPlannerEvent) state.plannerEvents.push(mapEventFromApi(nextPlannerEvent));
   } catch(err){
-    alert('Impossible de valider cet événement : ' + authErrorMessage(err));
+    reportError('Impossible de valider cet événement : ', err);
   }
 }
 async function markEventNonRealise(ev){
@@ -6536,7 +6817,7 @@ async function markEventNonRealise(ev){
     Object.assign(ev, mapEventFromApi(plannerEvent));
     clearEventTimers(ev.id);
   } catch(err){
-    alert('Impossible de mettre à jour cet événement : ' + authErrorMessage(err));
+    reportError('Impossible de mettre à jour cet événement : ', err);
   }
 }
 
@@ -6655,7 +6936,7 @@ function renderPlanner(){
         if(editingPlannerEventId === id) exitPlannerEditMode();
         renderAll();
       } catch(err){
-        alert('Suppression impossible : ' + authErrorMessage(err));
+        reportError('Suppression impossible : ', err);
         btn.disabled = false;
       }
     });
