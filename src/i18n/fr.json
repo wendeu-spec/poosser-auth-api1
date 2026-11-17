@@ -32,6 +32,9 @@
   "TRANSFER_NOT_FOUND": "Virement introuvable.",
   "TRANSACTION_LINKED_TO_TRANSFER": "Ces frais appartiennent à un virement : modifiez ou supprimez le virement.",
   "TRANSACTION_IS_FEE": "Ces frais appartiennent à une opération : modifiez ou supprimez l'opération.",
+  "PLAN_LIMIT_REACHED": "Vous avez atteint la limite de votre formule. Passez à une formule supérieure pour en ajouter.",
+  "PLAN_FEATURE_REQUIRED": "Cette fonction n'est pas incluse dans votre formule.",
+  "PLAN_QUOTA_EXHAUSTED": "Vous avez utilisé tout votre quota du mois. Il se remet à zéro le 1er du mois prochain.",
   "otp_sent": "Un code de vérification a été envoyé si ce numéro peut recevoir des SMS.",
   "new_device_notification": "Nouvelle connexion détectée sur votre compte POOSSER."
 }

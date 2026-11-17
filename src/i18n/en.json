@@ -32,6 +32,9 @@
   "TRANSFER_NOT_FOUND": "Transfer not found.",
   "TRANSACTION_LINKED_TO_TRANSFER": "This fee belongs to a transfer: edit or delete the transfer instead.",
   "TRANSACTION_IS_FEE": "This fee belongs to a transaction: edit or delete the transaction instead.",
+  "PLAN_LIMIT_REACHED": "You have reached your plan's limit. Upgrade to add more.",
+  "PLAN_FEATURE_REQUIRED": "This feature is not included in your plan.",
+  "PLAN_QUOTA_EXHAUSTED": "You have used your monthly quota. It resets on the 1st of next month.",
   "otp_sent": "A verification code has been sent if this number can receive SMS.",
   "new_device_notification": "New sign-in detected on your POOSSER account."
 }
