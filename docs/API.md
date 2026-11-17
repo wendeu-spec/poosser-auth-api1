@@ -248,6 +248,30 @@ quelle du prototype front-end). Montants toujours en FCFA, nombres positifs.
   `409 TRANSACTION_LINKED_TO_TRANSFER` (modifier ou supprimer des frais de virement :
   passer par le virement).
 
+## Formules d'abonnement (maj22, migration 032)
+
+- `GET /api/subscription` 🔒 → `{ subscription: { plan, planName, status, currentPeriodEnd,
+  enforced, limits, features, historyMonths, usage, prices } }`. Lu par l'app au démarrage
+  pour griser ce qui n'est pas accessible. **Confort d'affichage seulement** : c'est le
+  serveur qui refuse, jamais ce que l'app croit.
+- Les définitions des formules vivent dans `src/config/plans.ts`, pas en base : une limite
+  ne peut pas être desserrée par une écriture en base.
+- Trois refus possibles, tous en `403`, avec des `details` qui nomment la formule qui
+  lèverait la limite (`upgradeTo`) pour que l'app propose une sortie plutôt qu'un mur :
+  - `PLAN_LIMIT_REACHED` — `{ resource, limit, current, plan, upgradeTo }` sur la création
+    d'un compte, budget, projet, tontine, objectif d'épargne ou échéance récurrente.
+  - `PLAN_QUOTA_EXHAUSTED` — `{ quota, limit, used, plan, upgradeTo, resetsOn }` sur
+    `POST /api/sms/parse` et `POST /api/assistant/ask`.
+  - `PLAN_FEATURE_REQUIRED` — `{ feature, plan, upgradeTo }`, réservé aux fonctions pas
+    encore construites (accès partagé, séparation perso/activité).
+- **Interrupteur `PLANS_ENFORCED`** (défaut `false`) : limites calculées et quotas comptés,
+  mais rien n'est jamais refusé. Les compteurs tournent quand même, pour mesurer l'usage
+  réel avant d'allumer les limites.
+- **Les limites bloquent la création, jamais l'existant.** Un compte déclassé garde ses
+  données, les voit et saisit dedans. L'export PDF/Excel reste accessible à toutes les
+  formules.
+- Expiration calculée à la lecture : `current_period_end` + `PLAN_GRACE_DAYS` (défaut 7).
+
 ## Frais d'une opération (maj21, migration 031)
 
 - `POST /api/transactions` et `PATCH /api/transactions/:id` acceptent `fee?: number` (≥ 0).
