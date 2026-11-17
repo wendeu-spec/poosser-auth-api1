@@ -16,7 +16,8 @@
     "seed:test-account": "tsx scripts/seed-test-account.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "grant:courtesy": "tsx scripts/grant-courtesy-premium.ts"
   },
   "dependencies": {
     "argon2": "^0.45.1",
