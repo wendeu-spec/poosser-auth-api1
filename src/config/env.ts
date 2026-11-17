@@ -89,6 +89,17 @@ const envSchema = z.object({
   BUDGET_PROPOSAL_REMINDER_GAP_HOURS_LATE: z.coerce.number().int().positive().default(12),
   BUDGET_PROPOSAL_REMINDER_CAP: z.coerce.number().int().positive().default(10),
 
+  // ---- Formules d'abonnement -------------------------------------------
+  // Interrupteur maître : false = les limites sont calculées et les quotas
+  // comptés, mais RIEN n'est jamais refusé. Permet de déployer les contrôles
+  // sans changer le comportement, puis de les allumer quand les écrans de
+  // paiement sont prêts (voir src/services/entitlementService.ts).
+  PLANS_ENFORCED: z.coerce.boolean().default(false),
+  // Jours de tolérance après l'échéance avant de retomber au Gratuit.
+  PLAN_GRACE_DAYS: z.coerce.number().int().min(0).max(90).default(7),
+  // Durée de l'essai Premium offert à l'inscription.
+  PLAN_TRIAL_DAYS: z.coerce.number().int().min(0).max(365).default(30),
+
   DEFAULT_PHONE_COUNTRY: z.string().length(2).default("CM"),
   DEFAULT_LOCALE: z.enum(["fr", "en"]).default("fr"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
