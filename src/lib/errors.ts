@@ -63,4 +63,11 @@ export const Errors = {
   transferNotFound: () => new AppError("TRANSFER_NOT_FOUND", 404),
   transactionLinkedToTransfer: () => new AppError("TRANSACTION_LINKED_TO_TRANSFER", 409),
   transactionIsFee: () => new AppError("TRANSACTION_IS_FEE", 409),
+
+  // Formules d'abonnement (voir src/services/entitlementService.ts). Les
+  // `details` nomment la formule qui lèverait la limite, pour que l'app
+  // propose une sortie plutôt qu'un mur.
+  planLimitReached: (details: Record<string, unknown>) => new AppError("PLAN_LIMIT_REACHED", 403, details),
+  planFeatureRequired: (details: Record<string, unknown>) => new AppError("PLAN_FEATURE_REQUIRED", 403, details),
+  planQuotaExhausted: (details: Record<string, unknown>) => new AppError("PLAN_QUOTA_EXHAUSTED", 403, details),
 };
