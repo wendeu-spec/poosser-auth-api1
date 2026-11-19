@@ -9,6 +9,22 @@ async function authedUser() {
   return { access: body.accessToken as string, userId: body.user.id as string };
 }
 
+/**
+ * Crédite le compte par défaut de l'utilisateur. Nécessaire depuis la
+ * migration 033 : l'épargne est une RÉSERVATION sur un compte réel, donc on ne
+ * peut plus mettre 100 000 FCFA de côté sur un compte vide — c'était
+ * précisément le défaut corrigé (de l'épargne créée à partir de rien, comptée
+ * une seconde fois à côté du solde disponible). Voir tests/savings-accounts.test.ts
+ * pour l'invariant lui-même.
+ */
+async function fundDefaultAccount(access: string, amount: number) {
+  await request(app)
+    .post("/api/transactions")
+    .set("Authorization", `Bearer ${access}`)
+    .send({ type: "revenu", category: "Salaire", amount, occurredOn: "2026-08-01", method: "Espèces" })
+    .expect(201);
+}
+
 describe("routes métier — exigent toutes un access token", () => {
   it("refuse tout accès sans token (401)", async () => {
     await request(app).get("/api/transactions").expect(401);
@@ -547,6 +563,7 @@ describe("POST /api/budgets — sémantique upsert", () => {
 describe("Épargne", () => {
   it("crée un objectif et met à jour le montant courant", async () => {
     const { access } = await authedUser();
+    await fundDefaultAccount(access, 300000);
     const created = await request(app)
       .post("/api/savings-goals")
       .set("Authorization", `Bearer ${access}`)
@@ -565,6 +582,7 @@ describe("Épargne", () => {
 describe("Versements d'épargne (/api/savings-goals/:id/contributions)", () => {
   it("un versement augmente le solde et laisse une trace datée dans le journal", async () => {
     const { access } = await authedUser();
+    await fundDefaultAccount(access, 300000);
     const created = await request(app)
       .post("/api/savings-goals")
       .set("Authorization", `Bearer ${access}`)
@@ -591,8 +609,9 @@ describe("Versements d'épargne (/api/savings-goals/:id/contributions)", () => {
     expect(Number(list.body.savingsGoalContributions[0].amount)).toBe(50000);
   });
 
-  it("plafonne le solde affiché à l'objectif mais journalise le montant réellement versé", async () => {
+  it("laisse l'épargne dépasser l'objectif sans faire disparaître le surplus", async () => {
     const { access } = await authedUser();
+    await fundDefaultAccount(access, 300000);
     const created = await request(app)
       .post("/api/savings-goals")
       .set("Authorization", `Bearer ${access}`)
@@ -605,9 +624,12 @@ describe("Versements d'épargne (/api/savings-goals/:id/contributions)", () => {
       .set("Authorization", `Bearer ${access}`)
       .send({ amount: 50000 })
       .expect(201);
-    // Solde plafonné à l'objectif (100000), mais le versement réel (50000) est
-    // bien celui qui apparaît dans le journal, pas un delta recalculé.
-    expect(Number(contributed.body.savingsGoal.current_amount)).toBe(100000);
+    // Comportement INVERSÉ par la migration 033, volontairement : le solde
+    // était auparavant plafonné à l'objectif (Math.min) alors que le journal
+    // enregistrait le versement entier — les 40 000 FCFA au-delà de la cible
+    // disparaissaient du total affiché. On préfère un objectif à 140 %, qui ne
+    // perd rien de vue (décision validée avec Yannis).
+    expect(Number(contributed.body.savingsGoal.current_amount)).toBe(140000);
     expect(Number(contributed.body.contribution.amount)).toBe(50000);
   });
 
