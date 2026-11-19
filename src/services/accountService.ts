@@ -145,6 +145,21 @@ export async function listAccounts(userId: string): Promise<AccountWithBalanceRo
   return rows;
 }
 
+/**
+ * Solde d'un compte à cet instant — dans la transaction SQL en cours si un
+ * client est passé, ce qui est indispensable à savingsGoalService : il crée
+ * d'abord le virement puis vérifie que la réservation d'épargne tient dans le
+ * solde, et doit donc voir le virement qu'il vient d'écrire.
+ */
+export async function accountBalanceOf(userId: string, accountId: string, db: Queryable = pool): Promise<number> {
+  const { rows } = await db.query<{ balance: string }>(`${BALANCE_SELECT} WHERE a.id = $1 AND a.user_id = $2`, [
+    accountId,
+    userId,
+  ]);
+  if (!rows[0]) throw Errors.accountNotFound();
+  return Number(rows[0].balance);
+}
+
 async function getAccountWithBalance(userId: string, id: string): Promise<AccountWithBalanceRow> {
   const { rows } = await pool.query<AccountWithBalanceRow>(`${BALANCE_SELECT} WHERE a.id = $1 AND a.user_id = $2`, [id, userId]);
   if (!rows[0]) throw Errors.accountNotFound();
@@ -261,45 +276,72 @@ export async function createTransfer(
   userId: string,
   input: TransferInput,
 ): Promise<{ transfer: TransferRow; feeTransaction: TransactionRow | null }> {
+  return withTransaction((client) => createTransferIn(client, userId, input));
+}
+
+/**
+ * Même chose, mais DANS une transaction SQL déjà ouverte par l'appelant.
+ * Existe pour savingsGoalService : un versement d'épargne « par virement » doit
+ * écrire le virement, ses frais et la réservation de l'objectif en un seul
+ * bloc — jamais un virement sans sa réservation, ni l'inverse.
+ */
+export async function createTransferIn(
+  client: PoolClient,
+  userId: string,
+  input: TransferInput,
+): Promise<{ transfer: TransferRow; feeTransaction: TransactionRow | null }> {
   if (input.fromAccountId === input.toAccountId) {
     throw Errors.validation({ field: "toAccountId", reason: "must differ from fromAccountId" });
   }
-  return withTransaction(async (client) => {
-    const from = await assertAccountUsable(userId, input.fromAccountId, client);
-    const to = await assertAccountUsable(userId, input.toAccountId, client);
-    const fee = input.fee ?? 0;
+  const from = await assertAccountUsable(userId, input.fromAccountId, client);
+  const to = await assertAccountUsable(userId, input.toAccountId, client);
+  const fee = input.fee ?? 0;
 
-    const { rows } = await client.query<TransferRow>(
-      `INSERT INTO transfers (user_id, from_account_id, to_account_id, amount, fee, occurred_on, note)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [userId, from.id, to.id, input.amount, fee, input.occurredOn, input.note ?? null],
+  const { rows } = await client.query<TransferRow>(
+    `INSERT INTO transfers (user_id, from_account_id, to_account_id, amount, fee, occurred_on, note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [userId, from.id, to.id, input.amount, fee, input.occurredOn, input.note ?? null],
+  );
+  const transfer = rows[0]!;
+
+  let feeTransaction: TransactionRow | null = null;
+  if (fee > 0) {
+    const feeRes = await client.query<TransactionRow>(
+      `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id, transfer_id)
+       VALUES ($1, 'depense', $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [
+        userId,
+        feeCategoryFor(from.type),
+        fee,
+        input.occurredOn,
+        METHOD_BY_ACCOUNT_TYPE[from.type],
+        `Frais de virement : ${from.name} → ${to.name}`,
+        from.id,
+        transfer.id,
+      ],
     );
-    const transfer = rows[0]!;
-
-    let feeTransaction: TransactionRow | null = null;
-    if (fee > 0) {
-      const feeRes = await client.query<TransactionRow>(
-        `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id, transfer_id)
-         VALUES ($1, 'depense', $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [
-          userId,
-          feeCategoryFor(from.type),
-          fee,
-          input.occurredOn,
-          METHOD_BY_ACCOUNT_TYPE[from.type],
-          `Frais de virement : ${from.name} → ${to.name}`,
-          from.id,
-          transfer.id,
-        ],
-      );
-      feeTransaction = feeRes.rows[0]!;
-    }
-    return { transfer, feeTransaction };
-  });
+    feeTransaction = feeRes.rows[0]!;
+  }
+  return { transfer, feeTransaction };
 }
 
-/** Supprime un virement ; sa dépense « frais » éventuelle part avec lui (ON DELETE CASCADE). */
+/**
+ * Supprime un virement ; sa dépense « frais » éventuelle part avec lui
+ * (ON DELETE CASCADE).
+ *
+ * Exception : un virement qui adosse un mouvement d'épargne ne se supprime pas
+ * d'ici. Le supprimer effacerait la ligne de journal mais laisserait la
+ * réservation de l'objectif inchangée — l'objectif afficherait une épargne qui
+ * ne correspond plus à aucun argent, exactement le défaut que la migration 033
+ * corrige. L'utilisateur passe donc par « Retirer » dans le module Épargne, qui
+ * défait les deux ensemble.
+ */
 export async function deleteTransfer(userId: string, id: string): Promise<void> {
+  const { rows: linked } = await pool.query(
+    `SELECT 1 FROM savings_goal_contributions WHERE transfer_id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  if (linked[0]) throw Errors.transferBacksSavings();
   const { rowCount } = await pool.query(`DELETE FROM transfers WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!rowCount) throw Errors.transferNotFound();
 }
