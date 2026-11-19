@@ -370,24 +370,54 @@ montant reste modifiable avant validation.
 
 ## Épargne
 
-- `GET /api/savings-goals` → `{ savingsGoals: [...] }`.
-- `POST /api/savings-goals` → `{ name, targetAmount, currentAmount?, deadline? }` →
-  `201 { savingsGoal }`.
-- `PATCH /api/savings-goals/:id` → champs partiels (renommer, changer l'objectif ou
-  l'échéance) → `200 { savingsGoal }`. Pour enregistrer un versement, préférer
-  `POST /api/savings-goals/:id/contributions` ci-dessous plutôt qu'un PATCH direct de
-  `currentAmount` : seule cette route journalise la date du versement.
-- `DELETE /api/savings-goals/:id` → `204`.
-- `POST /api/savings-goals/:id/contributions` → `{ amount }` — enregistre un versement
-  (bouton "+ Verser"). Le solde affiché (`current_amount`) est plafonné à l'objectif,
-  mais le montant journalisé dans `savings_goal_contributions` est le montant réellement
-  versé (voir migrations/023_savings_goal_contributions.sql) → `201 { savingsGoal,
-  contribution }`. Sert de base au résumé hebdomadaire ("épargné cette semaine").
+**Modèle** (migrations/033_savings_goal_accounts.sql) : un objectif est rattaché à un
+COMPTE HÔTE (`account_id`), et `current_amount` est une RÉSERVATION sur ce compte — une
+part du solde mise de côté, pas une poche supplémentaire. L'argent épargné est encore
+dans le compte. Invariant appliqué par le serveur : pour un compte donné, la somme des
+réservations de tous les objectifs ne peut pas dépasser son solde. Un client qui affiche
+« disponible » doit donc soustraire les réservations du solde des comptes, sinon il
+compte le même argent deux fois.
+
+- `GET /api/savings-goals` → `{ savingsGoals: [...] }`, chaque objectif portant
+  `account_id`.
+- `POST /api/savings-goals` → `{ name, targetAmount, currentAmount?, deadline?, accountId? }`
+  → `201 { savingsGoal }`. `accountId` absent = compte par défaut. `currentAmount` est une
+  réservation immédiate sur ce compte, et n'est PAS journalisée (ce n'est pas un versement
+  du jour : le journaliser fausserait « épargné cette semaine »).
+- `PATCH /api/savings-goals/:id` → champs partiels (renommer, changer l'objectif,
+  l'échéance ou le compte hôte via `accountId`) → `200 { savingsGoal }`. Pour enregistrer
+  un versement, préférer les routes ci-dessous plutôt qu'un PATCH direct de
+  `currentAmount` : seules elles journalisent la date et, le cas échéant, déplacent
+  réellement l'argent.
+- `DELETE /api/savings-goals/:id` → `204`. La réservation disparaît avec l'objectif :
+  l'argent redevient disponible sur le compte hôte. Les virements réels, eux, restent
+  dans l'historique des comptes.
+- `POST /api/savings-goals/:id/contributions` → versement (« + Verser ») :
+  `{ amount, mode?, counterpartAccountId?, fee?, occurredOn?, note? }` →
+  `201 { savingsGoal, contribution, transfer, feeTransaction }`.
+  - `mode: "reservation"` (défaut) : l'argent est déjà sur le compte hôte, on met une part
+    de côté. Aucun virement, aucune opération. `transfer` et `feeTransaction` sont `null`.
+  - `mode: "virement"` : `counterpartAccountId` est le compte d'origine. Un vrai virement
+    vers le compte hôte est créé, frais compris, DANS LA MÊME transaction SQL que la
+    réservation — jamais l'un sans l'autre.
+  - L'objectif peut être dépassé (`current_amount` > `target_amount`) : le plafonnement
+    d'origine faisait disparaître le surplus du total affiché.
+- `POST /api/savings-goals/:id/withdrawals` → retrait (« − Retirer »), même corps.
+  En mode `virement`, `counterpartAccountId` est le compte de DESTINATION. Route séparée
+  plutôt qu'un montant négatif sur `/contributions` : un signe inversé côté client ne doit
+  pas pouvoir vider une épargne.
 - `GET /api/savings-goal-contributions` → `{ savingsGoalContributions: [...] }` — journal
-  complet des versements de l'utilisateur, tous objectifs confondus, le plus récent en
-  premier. Non imbriqué sous `/savings-goals/:id` (même convention que
-  `/transaction-favorites`) pour éviter une requête par objectif côté client.
-- Erreurs : `404 SAVINGS_GOAL_NOT_FOUND`.
+  complet des mouvements d'épargne, tous objectifs confondus, le plus récent en premier.
+  **Les montants sont signés** : un retrait est négatif. Chaque ligne porte `kind`
+  (`reservation` / `virement`) et `transfer_id`. Non imbriqué sous `/savings-goals/:id`
+  (même convention que `/transaction-favorites`) pour éviter une requête par objectif.
+- Erreurs : `404 SAVINGS_GOAL_NOT_FOUND`, `404 ACCOUNT_NOT_FOUND`, `409 ACCOUNT_ARCHIVED`,
+  `409 SAVINGS_EXCEEDS_ACCOUNT` (details : `accountBalance`, `reservedAfter`, `requested`,
+  `maxAllowed`), `409 SAVINGS_WITHDRAWAL_TOO_LARGE` (details : `requested`, `available`),
+  `409 SAVINGS_GOAL_ACCOUNT_MISSING`.
+- Côté comptes : `DELETE /api/transfers/:id` renvoie `409 TRANSFER_BACKS_SAVINGS` si le
+  virement adosse un mouvement d'épargne — le supprimer laisserait la réservation de
+  l'objectif figée sur un argent qui a disparu. Passer par `/withdrawals`.
 
 ## Projets
 
