@@ -7,7 +7,7 @@ import {
   createTransactionFavoriteSchema, updateTransactionFavoriteSchema,
   createCategorySchema,
   upsertBudgetSchema,
-  createSavingsGoalSchema, updateSavingsGoalSchema, addSavingsGoalContributionSchema,
+  createSavingsGoalSchema, updateSavingsGoalSchema, savingsMovementSchema,
   createProjectSchema, updateProjectSchema,
   createRubriqueSchema, updateRubriqueSchema,
   createTontineSchema, updateTontineSchema, markContributionSchema,
@@ -206,12 +206,38 @@ businessRouter.delete("/savings-goals/:id", async (req, res) => {
 // migrations/023_savings_goal_contributions.sql). Route à part plutôt qu'un
 // simple PATCH currentAmount : on veut une trace datée de chaque versement,
 // pas seulement le nouveau solde.
-businessRouter.post("/savings-goals/:id/contributions", validateBody(addSavingsGoalContributionSchema), async (req, res) => {
+//
+// Depuis la migration 033, le corps porte aussi le MODE : « reservation »
+// (l'argent est déjà sur le compte de l'objectif) ou « virement » (il vient du
+// compte `counterpartAccountId`, et un vrai virement est créé). La réponse
+// renvoie donc aussi le virement et ses frais, pour que le client rafraîchisse
+// ses comptes sans recharger toute la page.
+businessRouter.post("/savings-goals/:id/contributions", validateBody(savingsMovementSchema), async (req, res) => {
   const id = requireParamId(req.params.id);
-  const { goal, contribution } = await savingsGoals.addContribution(req.auth!.userId, id, req.body.amount);
-  res.status(201).json({ savingsGoal: goal, contribution });
+  const result = await savingsGoals.addContribution(req.auth!.userId, id, req.body);
+  res.status(201).json({
+    savingsGoal: result.goal,
+    contribution: result.contribution,
+    transfer: result.transfer,
+    feeTransaction: result.feeTransaction,
+  });
 });
-// Journal complet des versements de l'utilisateur (tous objectifs confondus) —
+// Retrait depuis un objectif ("− Retirer"). Route séparée plutôt qu'un montant
+// négatif sur /contributions : le sens de l'opération doit être explicite dans
+// l'URL, et un signe inversé par erreur côté client ne doit pas pouvoir vider
+// une épargne.
+businessRouter.post("/savings-goals/:id/withdrawals", validateBody(savingsMovementSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const result = await savingsGoals.withdrawContribution(req.auth!.userId, id, req.body);
+  res.status(201).json({
+    savingsGoal: result.goal,
+    contribution: result.contribution,
+    transfer: result.transfer,
+    feeTransaction: result.feeTransaction,
+  });
+});
+// Journal complet des mouvements d'épargne de l'utilisateur (tous objectifs
+// confondus, montants signés : un retrait est négatif) —
 // non imbriqué sous /savings-goals/:id pour éviter à chaque client de faire
 // une requête par objectif ; même convention que /transaction-favorites.
 businessRouter.get("/savings-goal-contributions", async (req, res) => {
