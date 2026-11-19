@@ -61,6 +61,16 @@ export const Errors = {
   accountArchived: () => new AppError("ACCOUNT_ARCHIVED", 409),
   accountLastActive: () => new AppError("ACCOUNT_LAST_ACTIVE", 409),
   transferNotFound: () => new AppError("TRANSFER_NOT_FOUND", 404),
+  transferBacksSavings: () => new AppError("TRANSFER_BACKS_SAVINGS", 409),
+
+  // Épargne adossée à un compte réel (voir migrations/033 et
+  // savingsGoalService). Les `details` portent le solde et la part déjà
+  // réservée, pour que l'app dise « il ne reste que X sur ce compte » plutôt
+  // qu'un refus sec.
+  savingsExceedsAccount: (details: Record<string, unknown>) => new AppError("SAVINGS_EXCEEDS_ACCOUNT", 409, details),
+  savingsGoalAccountMissing: () => new AppError("SAVINGS_GOAL_ACCOUNT_MISSING", 409),
+  savingsWithdrawalTooLarge: (details: Record<string, unknown>) =>
+    new AppError("SAVINGS_WITHDRAWAL_TOO_LARGE", 409, details),
   transactionLinkedToTransfer: () => new AppError("TRANSACTION_LINKED_TO_TRANSFER", 409),
   transactionIsFee: () => new AppError("TRANSACTION_IS_FEE", 409),
 
