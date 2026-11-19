@@ -87,14 +87,34 @@ export const createSavingsGoalSchema = z.object({
   targetAmount: amountSchema,
   currentAmount: z.number().min(0).max(1_000_000_000).optional(),
   deadline: dateSchema.optional(),
+  // Compte où se trouve réellement l'argent épargné (migrations/033). Absent =
+  // compte par défaut de l'utilisateur, comme pour une opération.
+  accountId: z.string().uuid().optional(),
 });
 export const updateSavingsGoalSchema = createSavingsGoalSchema.partial();
 
-// Versement vers un objectif existant — voir savingsGoalService.addContribution
-// et migrations/023_savings_goal_contributions.sql.
-export const addSavingsGoalContributionSchema = z.object({
-  amount: amountSchema,
-});
+// Mouvement d'épargne : versement (« + Verser ») ou retrait (« − Retirer »),
+// voir savingsGoalService et migrations/033_savings_goal_accounts.sql.
+//
+// `mode` est optionnel et vaut « reservation » par défaut, pour deux raisons :
+// c'est exactement le comportement qu'avait l'ancien bouton « + Verser » (mettre
+// de côté sans rien déplacer), et un client PWA encore en cache, qui n'envoie
+// que `amount`, continue donc de fonctionner au lieu d'échouer en validation.
+export const savingsMovementSchema = z
+  .object({
+    amount: amountSchema,
+    mode: z.enum(["reservation", "virement"]).default("reservation"),
+    // Mode « virement » : compte d'origine pour un versement, compte de
+    // destination pour un retrait.
+    counterpartAccountId: z.string().uuid().optional(),
+    fee: z.number().min(0).max(1_000_000_000).optional(),
+    occurredOn: dateSchema.optional(),
+    note: z.string().trim().max(280).optional(),
+  })
+  .refine((v) => v.mode !== "virement" || !!v.counterpartAccountId, {
+    message: "Précisez le compte concerné pour un virement",
+    path: ["counterpartAccountId"],
+  });
 
 // ---------------------------------------------------------------------------
 // Projets (onglet Projets — suivi des entrées/sorties d'un projet donné)
