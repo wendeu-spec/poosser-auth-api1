@@ -727,6 +727,20 @@
   #subNotEnforced[hidden] { display: none !important; }
   #planDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 420px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
   #planDialog::backdrop { background: rgba(8,18,34,.55); }
+
+  /* Versement / retrait d'épargne : un vrai formulaire, parce qu'il y a un
+     choix à faire (l'argent est déjà sur le compte, ou il vient d'ailleurs) —
+     un prompt() ne pouvait plus suffire. */
+  #savingsDialog { border: 0; border-radius: 18px; padding: 22px; width: min(94vw, 470px); max-height: 90vh; overflow-y: auto; background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
+  #savingsDialog::backdrop { background: rgba(8,18,34,.55); }
+  #savingsDialog .field { margin-top: 12px; }
+  #savingsDialog .field input, #savingsDialog .field select { width: 100%; }
+  .mode-choice { display: grid; gap: 8px; margin-top: 12px; }
+  .mode-choice > label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: inherit; color: inherit; }
+  .mode-choice > label.on { border-color: var(--s1); background: var(--surface-2); }
+  .mode-choice input[type="radio"] { width: auto; margin: 3px 0 0; flex: none; }
+  .mode-choice .t { font-weight: 650; font-size: 13.5px; }
+  .mode-choice .d { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -1562,12 +1576,19 @@
           <input type="number" id="goalTarget" min="1" required>
         </div>
         <div class="field">
+          <label for="goalAccount">Où se trouve cet argent ?</label>
+          <select id="goalAccount" required></select>
+        </div>
+        <div class="field">
           <label>Montant déjà épargné</label>
           <input type="number" id="goalCurrent" min="0" value="0">
         </div>
         <div class="field">
           <label>Date cible</label>
           <input type="date" id="goalDeadline" required>
+        </div>
+        <div class="field" style="grid-column:1/-1;">
+          <div class="sub" style="margin:0;">L'épargne n'est pas une poche à part : elle est <strong>mise de côté</strong> sur un de vos comptes. Le montant réservé est donc retiré de votre « disponible », mais il reste bien sur le compte choisi.</div>
         </div>
         <div class="field">
           <button type="submit" class="btn btn-primary">Créer l'objectif</button>
@@ -1910,6 +1931,61 @@
   </div>
 </dialog>
 
+<!-- Versement vers un objectif d'épargne, ou retrait. Le choix du mode est le
+     cœur du formulaire : réserver une part d'un compte sans rien déplacer
+     (l'épargne informelle : espèces à la maison, argent laissé sur MoMo), ou
+     faire un vrai virement depuis / vers un autre compte. Voir
+     migrations/033_savings_goal_accounts.sql. -->
+<dialog id="savingsDialog" aria-labelledby="savingsDialogTitle">
+  <form id="savingsForm" method="dialog">
+    <h3 id="savingsDialogTitle" style="margin:0 0 4px;">Verser vers un objectif</h3>
+    <p class="sub" id="savingsDialogSub" style="margin:0;"></p>
+
+    <div class="field">
+      <label for="savingsAmount">Montant (<span id="savingsUnit">FCFA</span>)</label>
+      <input type="number" id="savingsAmount" min="1" step="1" required>
+    </div>
+
+    <div class="mode-choice" id="savingsModeChoice">
+      <label data-mode-label="reservation">
+        <input type="radio" name="savingsMode" value="reservation" checked>
+        <span>
+          <span class="t" id="savingsModeResTitle">Cet argent est déjà sur le compte</span>
+          <span class="d" id="savingsModeResDesc"></span>
+        </span>
+      </label>
+      <label data-mode-label="virement">
+        <input type="radio" name="savingsMode" value="virement">
+        <span>
+          <span class="t" id="savingsModeVirTitle">Je le déplace depuis un autre compte</span>
+          <span class="d" id="savingsModeVirDesc"></span>
+        </span>
+      </label>
+    </div>
+
+    <div id="savingsTransferFields" hidden>
+      <div class="field">
+        <label for="savingsCounterpart" id="savingsCounterpartLabel">Compte d'origine</label>
+        <select id="savingsCounterpart"></select>
+      </div>
+      <div class="field">
+        <label for="savingsFee">Frais du virement (optionnel)</label>
+        <input type="number" id="savingsFee" min="0" step="1" value="0">
+      </div>
+      <div class="field">
+        <label for="savingsDate">Date</label>
+        <input type="date" id="savingsDate">
+      </div>
+    </div>
+
+    <div id="savingsMsg" class="sub" role="status" style="margin:12px 0 0; min-height:1em;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
+      <button type="button" class="btn btn-ghost" id="savingsCancel">Annuler</button>
+      <button type="submit" class="btn btn-primary" id="savingsSubmit">Valider</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- Changement du PIN de connexion (POST /auth/change-pin : le PIN actuel
      est vérifié côté serveur, avec le même verrouillage après plusieurs
      échecs que la connexion). -->
@@ -2147,6 +2223,14 @@ const AUTH_ERROR_MESSAGES = {
   RATE_LIMITED: "Trop de tentatives, merci de patienter avant de réessayer.",
   CATEGORY_ALREADY_EXISTS: "Cette catégorie existe déjà.",
   CATEGORY_NOT_FOUND: "Catégorie introuvable.",
+  // Épargne adossée à un compte réel (migrations/033). Les deux premiers
+  // messages sont des repli : savingsErrorText() dit en plus combien il reste.
+  SAVINGS_EXCEEDS_ACCOUNT: "Ce compte ne contient pas assez d'argent pour réserver ce montant.",
+  SAVINGS_WITHDRAWAL_TOO_LARGE: "Vous ne pouvez pas retirer plus que l'épargne de cet objectif.",
+  SAVINGS_GOAL_ACCOUNT_MISSING: "Cet objectif n'est rattaché à aucun compte. Modifiez-le pour choisir où se trouve l'argent.",
+  TRANSFER_BACKS_SAVINGS: "Ce virement correspond à un mouvement d'épargne : passez par « − Retirer » dans le module Épargne.",
+  ACCOUNT_ARCHIVED: "Ce compte est archivé : il ne peut plus recevoir de mouvement.",
+  ACCOUNT_NOT_FOUND: "Compte introuvable.",
 };
 function authErrorMessage(err){
   return AUTH_ERROR_MESSAGES[err.code] || `Une erreur est survenue (${err.code || err.message}).`;
@@ -2272,10 +2356,14 @@ const RUBRIQUE_SUGGESTIONS = {
 };
 function suggestRubriquesFor(icon){ return RUBRIQUE_SUGGESTIONS[icon] || []; }
 function mapGoalFromApi(g){
-  return { id: g.id, name: g.name, target: Number(g.target_amount), current: Number(g.current_amount), deadline: g.deadline };
+  // accountId : le compte où l'argent réservé se trouve réellement
+  // (migrations/033). `current` n'est donc pas une poche séparée mais une part
+  // mise de côté sur ce compte.
+  return { id: g.id, name: g.name, target: Number(g.target_amount), current: Number(g.current_amount), deadline: g.deadline, accountId: g.account_id || null };
 }
 function mapSavingsContributionFromApi(c){
-  return { id: c.id, goalId: c.goal_id, goalName: c.goal_name, amount: Number(c.amount), date: c.created_at.slice(0, 10) };
+  // amount est SIGNÉ depuis la migration 033 : négatif = retrait.
+  return { id: c.id, goalId: c.goal_id, goalName: c.goal_name, amount: Number(c.amount), kind: c.kind || 'reservation', transferId: c.transfer_id || null, date: c.created_at.slice(0, 10) };
 }
 function mapEventFromApi(e){
   // PostgreSQL renvoie une colonne TIME au format complet "HH:MM:SS" (contrairement
@@ -2656,7 +2744,23 @@ function currentMonthTx(){
 }
 function totalRevenu(){ return currentMonthTx().filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0); }
 function totalDepense(){ return currentMonthTx().filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0); }
+/**
+ * Total mis de côté pour les objectifs. ATTENTION : ce n'est PAS un deuxième
+ * tas d'argent à côté des comptes — c'est une part du solde des comptes qui est
+ * réservée (voir migrations/033). Avant cette correction, le tableau de bord
+ * affichait ce total à côté du solde des comptes comme deux poches distinctes,
+ * alors que l'argent épargné était déjà compté dans les comptes : le même
+ * argent apparaissait deux fois.
+ */
 function totalEpargne(){ return state.goals.reduce((a,g)=>a+g.current,0); }
+
+/** Part réservée sur un compte donné, tous objectifs confondus. */
+function reservedOnAccount(accountId){
+  return state.goals.reduce((a,g)=> g.accountId === accountId ? a + g.current : a, 0);
+}
+
+/** Argent réellement libre : solde des comptes actifs moins les réservations. */
+function totalFree(){ return totalAvailable() - totalEpargne(); }
 // Même correction pour les budgets : une "limite mensuelle" doit se comparer
 // à la dépense DU MOIS EN COURS sur cette catégorie, pas à son cumul depuis
 // toujours.
@@ -3109,8 +3213,13 @@ function weeklySummary(){
   curTx.filter(t=>t.type==='depense').forEach(t => { depByCat[t.category] = (depByCat[t.category]||0) + t.amount; });
   const topCatEntry = Object.entries(depByCat).sort((a,b)=>b[1]-a[1])[0] || null;
 
+  // Les montants du journal sont SIGNÉS depuis la migration 033 : un retrait
+  // est négatif. On garde donc le NET de la semaine (mis de côté − retiré),
+  // qui est la vraie progression de l'épargne, et on compte les retraits à
+  // part pour pouvoir le dire au lieu d'afficher un total trompeur.
   const contribCur = state.savingsContributions.filter(c => dateInRange(c.date, curStart, curEnd));
   const epargneTotal = contribCur.reduce((a,c)=>a+c.amount,0);
+  const epargneRetraits = contribCur.filter(c=>c.amount < 0).reduce((a,c)=>a-c.amount,0);
   const epargneByGoal = {};
   contribCur.forEach(c => { epargneByGoal[c.goalName] = (epargneByGoal[c.goalName]||0) + c.amount; });
 
@@ -3127,7 +3236,7 @@ function weeklySummary(){
     revChangePct: pctChange(curRev, prevRev),
     depChangePct: pctChange(curDep, prevDep),
     topCategory: topCatEntry ? { category: topCatEntry[0], amount: topCatEntry[1] } : null,
-    epargneTotal, epargneByGoal,
+    epargneTotal, epargneByGoal, epargneRetraits,
     tontinePaidCount,
     hasAnyActivity: curTx.length > 0 || contribCur.length > 0 || tontinePaidCount > 0,
   };
@@ -3178,7 +3287,7 @@ function renderWeeklySummary(){
     <div style="margin-top:14px; display:flex; flex-wrap:wrap; gap:10px;">
       ${s.topCategory ? `<span class="pill" style="padding:6px 12px; font-size:12.5px;">🏷️ Top dépense : <b>${s.topCategory.category}</b> (${fmt(s.topCategory.amount)})</span>` : ''}
       <span class="pill" style="padding:6px 12px; font-size:12.5px;">🤝 Tontine : <b>${s.tontinePaidCount}</b> cotisation(s) payée(s) cette semaine</span>
-      <span class="pill" style="padding:6px 12px; font-size:12.5px;">💰 Épargne : <b>${fmt(s.epargneTotal)}</b> déposé(s) cette semaine${epargneLines ? ' (' + epargneLines + ')' : ''}</span>
+      <span class="pill" style="padding:6px 12px; font-size:12.5px;">💰 Épargne : <b>${fmt(s.epargneTotal)}</b> ${s.epargneTotal >= 0 ? 'mis de côté' : 'de variation'} cette semaine${s.epargneRetraits > 0 ? ` (dont ${fmt(s.epargneRetraits)} retiré(s))` : ''}${epargneLines ? ' · ' + epargneLines : ''}</span>
     </div>`;
 }
 
@@ -3260,11 +3369,18 @@ function renderRemindersCard(){
 /* ===================== DASHBOARD RENDER ===================== */
 function renderDashboard(){
   const rev = totalRevenu(), dep = totalDepense(), solde = rev - dep, ep = totalEpargne();
-  // Carte « Solde disponible » : l'argent réellement disponible sur tous les
-  // comptes actifs (même calcul que la page Comptes), puis le mois en cours.
-  // Les virements entre comptes sont neutres, donc l'écart depuis le 1er du
-  // mois est exactement le solde du mois (revenus − dépenses, frais compris).
-  const dispo = totalAvailable();
+  // Carte principale : l'argent réellement LIBRE, c'est-à-dire le solde de tous
+  // les comptes actifs MOINS ce qui est réservé pour les objectifs d'épargne.
+  //
+  // Auparavant cette carte affichait le solde brut des comptes et la tuile
+  // « Épargne totale » juste en dessous, comme si c'était deux poches : le même
+  // argent était compté deux fois (voir migrations/033). On affiche donc le
+  // libre en grand, et la décomposition « comptes − réservé » juste en dessous
+  // pour que le lien soit explicite.
+  // Les virements entre comptes étant neutres, l'écart depuis le 1er du mois
+  // reste exactement le solde du mois (revenus − dépenses, frais compris).
+  const comptes = totalAvailable();
+  const dispo = comptes - ep;
   const nbIn = currentMonthTx().filter(t=>t.type==='revenu').length;
   const nbOut = currentMonthTx().filter(t=>t.type==='depense').length;
   const fees = monthTransferFees();
@@ -3274,13 +3390,14 @@ function renderDashboard(){
     ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l6-6 4 4 6-6"/></svg>'
     : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8l6 6 4-4 6 6"/></svg>';
   document.getElementById('dashTiles').innerHTML = `
-    <div class="lbl">Solde disponible · ${activeAccounts().length} compte(s)</div>
+    <div class="lbl">Disponible · ${activeAccounts().length} compte(s)</div>
     <div class="big${dispo < 0 ? ' neg' : ''}">${fmt(dispo)}</div>
     <div class="trend">${trendIcon}${solde >= 0 ? '+' : '−'} ${fmt(Math.abs(solde))} depuis le ${since}</div>
+    ${ep > 0 ? `<div class="trend" style="opacity:.8;">${fmt(comptes)} sur vos comptes − ${fmt(ep)} réservé(s) pour vos objectifs</div>` : ''}
     <div class="stats">
       <div><small>Entrées du mois</small><b>+ ${fmt(rev)}</b><small>${nbIn} mouvement(s)</small></div>
       <div><small>Sorties du mois</small><b>− ${fmt(dep)}</b><small>${nbOut} mouvement(s)</small></div>
-      <div><small>Épargne totale</small><b>${fmt(ep)}</b><small>${state.goals.length} objectif(s)</small></div>
+      <div><small>Épargne réservée</small><b>${fmt(ep)}</b><small>${state.goals.length} objectif(s)</small></div>
       <div><small>Frais payés</small><b>${fmt(fees)}</b><small>ce mois-ci</small></div>
     </div>`;
 
@@ -4304,6 +4421,23 @@ async function refreshAccountsFromServer(){
   state.accounts = accounts.map(mapAccountFromApi);
 }
 
+/**
+ * Recharge comptes, virements et mouvements après une opération qui touche aux
+ * trois d'un coup — un versement d'épargne « par virement », par exemple,
+ * écrit un virement ET sa dépense de frais. Plus sûr que de recalculer les
+ * soldes côté client : le serveur reste la seule source de vérité.
+ */
+async function refreshAccountsAndTransfers(){
+  const [accRes, trfRes, txRes] = await Promise.all([
+    apiFetch('/api/accounts', { auth: true }),
+    apiFetch('/api/transfers', { auth: true }),
+    apiFetch('/api/transactions', { auth: true }),
+  ]);
+  state.accounts = accRes.accounts.map(mapAccountFromApi);
+  state.transfers = trfRes.transfers.map(mapTransferFromApi);
+  state.transactions = txRes.transactions.map(mapTxFromApi);
+}
+
 function accountOptionsHtml(list){
   return list.map(a=>`<option value="${a.id}">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)}${a.archived ? ' (archivé)' : ''}</option>`).join('');
 }
@@ -4328,6 +4462,17 @@ function populateEventAccountSelect(selectedId){
 
 function populateAccountSelects(preferredId){
   populateEventAccountSelect(document.getElementById('evAccount')?.value || '');
+  // Compte hôte d'un objectif d'épargne : là où l'argent réservé se trouve
+  // réellement (migrations/033). Le solde est affiché dans l'étiquette pour
+  // qu'on voie tout de suite si le compte peut porter la réservation.
+  const goalSel = document.getElementById('goalAccount');
+  if(goalSel){
+    const list = activeAccounts();
+    const prev = goalSel.value;
+    goalSel.innerHTML = list.map(a=>`<option value="${a.id}">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} — ${fmt(accountBalance(a.id) - reservedOnAccount(a.id))} libre(s)</option>`).join('');
+    const pick = [prev, defaultAccountId()].find(id => id && list.some(a=>a.id===id));
+    if(pick) goalSel.value = pick;
+  }
   const txSel = document.getElementById('txAccount');
   if(txSel){
     const list = activeAccounts();
@@ -4382,7 +4527,7 @@ function renderDashAccountsCard(){
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
       <div>
         <h3 style="margin:0;">Mes comptes</h3>
-        <div class="sub" style="margin-top:4px;">Disponible au total : <strong>${fmt(totalAvailable())}</strong></div>
+        <div class="sub" style="margin-top:4px;">Disponible au total : <strong>${fmt(totalFree())}</strong>${totalEpargne() > 0 ? ` <span style="opacity:.75;">(${fmt(totalAvailable())} − ${fmt(totalEpargne())} réservé(s))</span>` : ''}</div>
       </div>
       <button type="button" class="btn btn-ghost" id="dashGotoAccounts" style="padding:6px 12px; font-size:12.5px;">Gérer les comptes</button>
     </div>
@@ -4403,7 +4548,10 @@ function renderAccounts(){
   const monthTransfers = state.transfers.filter(tr => tr.date.slice(0,7) === todayISO(0).slice(0,7));
   const mobile = list.filter(a=>a.type==='mobile_money').reduce((sum, a) => sum + accountBalance(a.id), 0);
   const tiles = [
-    { label: 'Disponible au total', value: fmt(totalAvailable()), delta: `${list.length} compte(s) actif(s)`, cls: totalAvailable() >= 0 ? 'good' : 'bad' },
+    // « Disponible » est net des réservations d'épargne, comme sur le tableau
+    // de bord : l'argent mis de côté est encore sur les comptes, mais il n'est
+    // plus disponible pour autre chose.
+    { label: 'Disponible au total', value: fmt(totalFree()), delta: totalEpargne() > 0 ? `${fmt(totalAvailable())} sur ${list.length} compte(s) − ${fmt(totalEpargne())} réservé(s)` : `${list.length} compte(s) actif(s)`, cls: totalFree() >= 0 ? 'good' : 'bad' },
     { label: 'Sur Mobile Money', value: fmt(mobile), delta: `${list.filter(a=>a.type==='mobile_money').length} compte(s)`, cls: '' },
     { label: 'Frais payés ce mois', value: fmt(monthTransferFees()), delta: 'Mobile Money, banque et virements', cls: monthTransferFees() > 0 ? 'bad' : '' },
     { label: 'Virements ce mois', value: String(monthTransfers.length), delta: `${fmt(monthTransfers.reduce((s, tr) => s + tr.amount, 0))} déplacés`, cls: '' },
@@ -4419,6 +4567,9 @@ function renderAccounts(){
   grid.innerHTML = state.accounts.map(a=>{
     const bal = accountBalance(a.id);
     const used = accountMovementCount(a.id);
+    // Part du solde mise de côté pour des objectifs d'épargne : elle est
+    // toujours sur ce compte, mais elle n'est plus libre (migrations/033).
+    const reserved = reservedOnAccount(a.id);
     return `
     <div class="goal-card project-card" style="${a.archived ? 'opacity:.6;' : ''}" data-account-card="${a.id}" title="Voir le détail et les mouvements de ce compte">
       <div class="project-card-top">
@@ -4437,6 +4588,7 @@ function renderAccounts(){
         <span>${used} mouvement(s)</span>
         <span>Solde de départ ${fmt(a.openingBalance)}</span>
       </div>
+      ${reserved > 0 ? `<div class="project-stats-row"><span>🐷 ${fmt(reserved)} réservé(s) pour vos objectifs</span><span>${fmt(bal - reserved)} libre(s)</span></div>` : ''}
       <div class="project-card-actions">
         <button type="button" class="btn btn-ghost" data-acc-edit="${a.id}">✏️ Modifier</button>
         <button type="button" class="btn btn-ghost" data-acc-archive="${a.id}">${a.archived ? '↺ Réactiver' : 'Archiver'}</button>
@@ -4871,7 +5023,11 @@ function renderBudget(){
 /* ===================== EPARGNE VIEW ===================== */
 document.getElementById('openGoalForm').addEventListener('click', ()=>{
   const card = document.getElementById('goalFormCard');
-  card.style.display = card.style.display==='none' ? 'block' : 'none';
+  const opening = card.style.display === 'none';
+  // Les soldes « libres » affichés dans la liste des comptes doivent être à
+  // jour au moment où l'on choisit où se trouve l'argent.
+  if(opening) populateAccountSelects();
+  card.style.display = opening ? 'block' : 'none';
 });
 
 document.getElementById('goalForm').addEventListener('submit', async (e)=>{
@@ -4880,11 +5036,15 @@ document.getElementById('goalForm').addEventListener('submit', async (e)=>{
   const target = parseFloat(document.getElementById('goalTarget').value);
   const current = parseFloat(document.getElementById('goalCurrent').value)||0;
   const deadline = document.getElementById('goalDeadline').value;
+  const accountId = document.getElementById('goalAccount').value;
   if(!name || !target || !deadline) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { savingsGoal } = await apiFetch('/api/savings-goals', { method:'POST', auth:true, body:{ name, targetAmount: target, currentAmount: current, deadline } });
+    // accountId : le compte où cet argent se trouve déjà. « Montant déjà
+    // épargné » devient une réservation immédiate sur ce compte, et le serveur
+    // refuse de réserver plus que le compte ne contient.
+    const { savingsGoal } = await apiFetch('/api/savings-goals', { method:'POST', auth:true, body:{ name, targetAmount: target, currentAmount: current, deadline, accountId: accountId || undefined } });
     state.goals.push(mapGoalFromApi(savingsGoal));
     e.target.reset();
     document.getElementById('goalFormCard').style.display = 'none';
@@ -4907,51 +5067,191 @@ function renderGoals(){
   const grid = document.getElementById('goalsGrid');
   if(!state.goals.length){ grid.innerHTML = "<div class=\"empty-state\">Aucun objectif d'épargne pour le moment.</div>"; return; }
   grid.innerHTML = state.goals.map(g=>{
-    const pct = Math.min(g.current/g.target*100, 100);
+    // Le pourcentage réel peut dépasser 100 % : on l'affiche tel quel (la barre
+    // reste plafonnée visuellement). Auparavant le serveur plafonnait aussi le
+    // montant, ce qui faisait purement disparaître le surplus (migrations/033).
+    const pctReel = g.target > 0 ? g.current/g.target*100 : 0;
+    const pct = Math.min(pctReel, 100);
     const remaining = Math.max(g.target-g.current,0);
     const months = monthsUntil(g.deadline);
     const monthly = remaining/months;
+    const host = g.accountId ? accountById(g.accountId) : null;
     return `
     <div class="goal-card">
       <div class="goal-head">
         <div>
-          <h4>${g.name}</h4>
+          <h4>${escapeHtml(g.name)}</h4>
           <div class="tag">Échéance : ${g.deadline}</div>
         </div>
-        <div style="font-weight:700; font-size:15px;">${Math.round(pct)}%</div>
+        <div style="font-weight:700; font-size:15px;">${Math.round(pctReel)}%</div>
       </div>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:var(--s1);"></div></div>
       <div class="goal-amounts"><span>${fmt(g.current)} épargné</span><span>Objectif : ${fmt(g.target)}</span></div>
+      <div class="goal-amounts" style="opacity:.8;">
+        ${host
+          ? `<span>Réservé sur ${ACCOUNT_TYPE_ICONS[host.type] || ''} ${escapeHtml(host.name)}</span>`
+          : `<span style="color:var(--accent);">⚠️ Aucun compte rattaché</span>`}
+        ${pctReel > 100 ? `<span>Objectif dépassé de ${fmt(g.current - g.target)}</span>` : ''}
+      </div>
       <div class="goal-foot">
-        <div class="suggestion">Versement suggéré : <b>${fmt(monthly)}</b> / mois</div>
-        <button class="btn btn-ghost" data-contribute="${g.id}" style="padding:6px 12px; font-size:12.5px;">+ Verser</button>
+        <div class="suggestion">${remaining > 0 ? `Versement suggéré : <b>${fmt(monthly)}</b> / mois` : 'Objectif atteint 🎉'}</div>
+        <div style="display:flex; gap:6px;">
+          ${g.current > 0 ? `<button class="btn btn-ghost" data-withdraw="${g.id}" style="padding:6px 12px; font-size:12.5px;">− Retirer</button>` : ''}
+          <button class="btn btn-ghost" data-contribute="${g.id}" style="padding:6px 12px; font-size:12.5px;">+ Verser</button>
+        </div>
       </div>
     </div>`;
   }).join('');
 
   document.querySelectorAll('[data-contribute]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const id = btn.dataset.contribute;
-      const goal = state.goals.find(g=>g.id===id);
-      const amt = prompt(`Montant à verser vers "${goal.name}" (${currencyUnitLabel()}) :`, '10000');
-      const val = parseFloat(amt);
-      if(!(val>0)) return;
-      btn.disabled = true;
-      try {
-        // Route dédiée (plutôt qu'un PATCH currentAmount calculé côté client) :
-        // elle journalise le versement avec sa date, ce qui permet au résumé
-        // hebdomadaire de calculer "épargné cette semaine" précisément.
-        const { savingsGoal, contribution } = await apiFetch('/api/savings-goals/' + id + '/contributions', { method:'POST', auth:true, body:{ amount: val } });
-        Object.assign(goal, mapGoalFromApi(savingsGoal));
-        state.savingsContributions.unshift(mapSavingsContributionFromApi(contribution));
-        renderAll();
-      } catch(err){
-        reportError('Versement impossible : ', err);
-        btn.disabled = false;
-      }
-    });
+    btn.addEventListener('click', ()=> openSavingsDialog(btn.dataset.contribute, 'verser'));
+  });
+  document.querySelectorAll('[data-withdraw]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openSavingsDialog(btn.dataset.withdraw, 'retirer'));
   });
 }
+
+/* ---------- Versement / retrait d'épargne ----------
+ * Un prompt() ne suffisait plus : depuis la migration 033 il y a un vrai choix
+ * à faire. L'argent est-il DÉJÀ sur le compte de l'objectif (on réserve, rien
+ * ne bouge) ou vient-il d'ailleurs (vrai virement, frais compris) ? Les deux
+ * situations existent : l'épargne informelle (espèces à la maison, argent
+ * laissé sur MoMo) et l'épargne déplacée vers un livret.
+ */
+let savingsDialogCtx = null;
+
+/**
+ * Traduit un refus du serveur en phrase utile. SAVINGS_EXCEEDS_ACCOUNT porte
+ * `maxAllowed` : on dit combien il reste plutôt que « c'est refusé ».
+ */
+function savingsErrorText(err){
+  const d = err && err.details;
+  if(err && err.code === 'SAVINGS_EXCEEDS_ACCOUNT' && d && d.maxAllowed !== undefined){
+    return `Ce compte ne contient pas assez d'argent : ${fmt(Number(d.maxAllowed))} au maximum peuvent encore être réservés.`;
+  }
+  if(err && err.code === 'SAVINGS_WITHDRAWAL_TOO_LARGE' && d && d.available !== undefined){
+    return `Vous ne pouvez pas retirer plus que les ${fmt(Number(d.available))} réservés sur cet objectif.`;
+  }
+  return authErrorMessage(err);
+}
+
+function openSavingsDialog(goalId, action){
+  const goal = state.goals.find(g=>g.id===goalId);
+  if(!goal) return;
+  if(!goal.accountId){
+    reportError("Cet objectif n'est rattaché à aucun compte. ", new Error("Modifiez-le pour choisir où se trouve l'argent."));
+    return;
+  }
+  const host = accountById(goal.accountId);
+  const hostName = host ? host.name : 'son compte';
+  savingsDialogCtx = { goalId, action, hostId: goal.accountId };
+
+  const verser = action === 'verser';
+  const libre = host ? accountBalance(host.id) - reservedOnAccount(host.id) : 0;
+
+  document.getElementById('savingsDialogTitle').textContent = verser ? `Verser vers « ${goal.name} »` : `Retirer de « ${goal.name} »`;
+  document.getElementById('savingsDialogSub').textContent = verser
+    ? `Objectif rattaché à ${hostName}. ${fmt(libre)} y sont encore libres.`
+    : `${fmt(goal.current)} actuellement réservés sur ${hostName}.`;
+  document.getElementById('savingsUnit').textContent = currencyUnitLabel();
+
+  const amount = document.getElementById('savingsAmount');
+  amount.value = '';
+  // Volontairement PAS d'attribut `max` : il déclencherait la validation
+  // natale du navigateur, qui bloque l'envoi derrière une bulle générique et
+  // empêche notre propre message de dire combien il reste exactement.
+  amount.removeAttribute('max');
+
+  document.getElementById('savingsModeResTitle').textContent = verser
+    ? 'Cet argent est déjà sur le compte'
+    : 'Laisser l\'argent sur le compte';
+  document.getElementById('savingsModeResDesc').textContent = verser
+    ? `On met simplement cette part de ${hostName} de côté. Aucun mouvement n'est créé.`
+    : `On libère simplement cette part : elle redevient disponible sur ${hostName}.`;
+  document.getElementById('savingsModeVirTitle').textContent = verser
+    ? 'Je le déplace depuis un autre compte'
+    : 'Je le déplace vers un autre compte';
+  document.getElementById('savingsModeVirDesc').textContent = verser
+    ? `Un vrai virement est enregistré vers ${hostName}, frais compris.`
+    : `Un vrai virement est enregistré depuis ${hostName}, frais compris.`;
+  document.getElementById('savingsCounterpartLabel').textContent = verser ? "Compte d'origine" : 'Compte de destination';
+
+  // Le compte hôte ne peut pas être sa propre contrepartie.
+  const cp = document.getElementById('savingsCounterpart');
+  const others = activeAccounts().filter(a=>a.id !== goal.accountId);
+  cp.innerHTML = others.map(a=>`<option value="${a.id}">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} — ${fmt(accountBalance(a.id))}</option>`).join('');
+
+  const radios = [...document.querySelectorAll('input[name="savingsMode"]')];
+  radios.forEach(r=>{ r.checked = r.value === 'reservation'; r.disabled = r.value === 'virement' && !others.length; });
+  document.getElementById('savingsFee').value = '0';
+  document.getElementById('savingsDate').value = todayISO(0);
+  document.getElementById('savingsMsg').textContent = others.length ? '' : "Vous n'avez qu'un seul compte actif : le virement n'est pas proposé.";
+  syncSavingsMode();
+
+  document.getElementById('savingsDialog').showModal();
+  amount.focus();
+}
+
+function syncSavingsMode(){
+  const mode = document.querySelector('input[name="savingsMode"]:checked')?.value || 'reservation';
+  document.getElementById('savingsTransferFields').hidden = mode !== 'virement';
+  document.querySelectorAll('#savingsModeChoice > label').forEach(l=>{
+    l.classList.toggle('on', l.dataset.modeLabel === mode);
+  });
+}
+document.querySelectorAll('input[name="savingsMode"]').forEach(r=> r.addEventListener('change', syncSavingsMode));
+document.getElementById('savingsCancel').addEventListener('click', ()=> document.getElementById('savingsDialog').close());
+
+document.getElementById('savingsForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  if(!savingsDialogCtx) return;
+  const { goalId, action } = savingsDialogCtx;
+  const goal = state.goals.find(g=>g.id===goalId);
+  if(!goal) return;
+  const amount = parseFloat(document.getElementById('savingsAmount').value);
+  const msg = document.getElementById('savingsMsg');
+  if(!(amount > 0)){ msg.textContent = 'Indiquez un montant.'; return; }
+  if(action === 'retirer' && amount > goal.current){
+    msg.textContent = `Vous ne pouvez pas retirer plus que les ${fmt(goal.current)} réservés.`;
+    return;
+  }
+  const mode = document.querySelector('input[name="savingsMode"]:checked').value;
+  const body = { amount, mode };
+  if(mode === 'virement'){
+    body.counterpartAccountId = document.getElementById('savingsCounterpart').value;
+    const fee = parseFloat(document.getElementById('savingsFee').value) || 0;
+    if(fee > 0) body.fee = fee;
+    body.occurredOn = document.getElementById('savingsDate').value || todayISO(0);
+    if(!body.counterpartAccountId){ msg.textContent = 'Choisissez le compte concerné.'; return; }
+  }
+
+  const submit = document.getElementById('savingsSubmit');
+  submit.disabled = true;
+  msg.textContent = '';
+  try {
+    // Routes dédiées (plutôt qu'un PATCH currentAmount calculé côté client) :
+    // elles journalisent le mouvement avec sa date et, en mode virement,
+    // écrivent le virement et sa réservation dans une seule transaction SQL.
+    const path = `/api/savings-goals/${goalId}/${action === 'verser' ? 'contributions' : 'withdrawals'}`;
+    const res = await apiFetch(path, { method:'POST', auth:true, body });
+    Object.assign(goal, mapGoalFromApi(res.savingsGoal));
+    state.savingsContributions.unshift(mapSavingsContributionFromApi(res.contribution));
+    // Un virement change les soldes : on recharge comptes et mouvements plutôt
+    // que de recalculer à la main côté client (le virement porte aussi ses
+    // frais, qui sont une vraie dépense).
+    if(res.transfer) await refreshAccountsAndTransfers();
+    document.getElementById('savingsDialog').close();
+    savingsDialogCtx = null;
+    renderAll();
+  } catch(err){
+    // Message dans la fenêtre plutôt qu'une alerte : l'utilisateur doit pouvoir
+    // corriger son montant sans tout ressaisir. Le cas le plus courant est
+    // SAVINGS_EXCEEDS_ACCOUNT, dont les détails disent combien reste libre.
+    msg.textContent = savingsErrorText(err);
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 /* ===================== PROJETS VIEW ===================== */
 const PROJECT_STATUS_LABELS = { actif: 'Actif', termine: 'Terminé', archive: 'Archivé' };
@@ -7072,7 +7372,9 @@ function answerQuestion(q){
     return state.goals.map(g=>{
       const remaining = Math.max(g.target-g.current,0);
       const monthly = remaining/monthsUntil(g.deadline);
-      return `"${g.name}" : ${fmt(g.current)} sur ${fmt(g.target)} (${Math.round(g.current/g.target*100)}%). Versement suggéré : ${fmt(monthly)}/mois jusqu'au ${g.deadline}.`;
+      const host = g.accountId ? accountById(g.accountId) : null;
+      const ou = host ? ` Cet argent est réservé sur ${host.name}.` : '';
+      return `"${g.name}" : ${fmt(g.current)} sur ${fmt(g.target)} (${Math.round(g.current/g.target*100)}%).${ou}${remaining > 0 ? ` Versement suggéré : ${fmt(monthly)}/mois jusqu'au ${g.deadline}.` : ' Objectif atteint.'}`;
     }).join(' ');
   }
   if(/(planner|événement|rendez-vous|échéance|agenda)/.test(lower)){
@@ -7108,13 +7410,27 @@ function buildAssistantContext(){
     depensesMois: dep,
     scoreSante: health.overall,
     budgets: state.budgets.map(b => ({ categorie: b.category, limite: b.limit, depense: spentByCategory(b.category) })),
-    epargne: state.goals.map(g => ({ nom: g.name, actuel: g.current, cible: g.target, echeance: g.deadline })),
+    // L'épargne est une part RÉSERVÉE d'un compte, pas une poche en plus
+    // (migrations/033) : on nomme le compte hôte et on donne le disponible net
+    // à côté du solde brut, sans quoi l'assistant additionnerait les deux et
+    // compterait le même argent deux fois.
+    epargne: state.goals.map(g => ({
+      nom: g.name, actuel: g.current, cible: g.target, echeance: g.deadline,
+      reserveSurCompte: g.accountId ? (accountById(g.accountId)?.name || null) : null,
+    })),
     tontines: state.tontines.map(t => ({
       nom: t.name, montantCotisation: t.amount, tourActuel: t.currentRound,
       membresNonCotises: t.members.filter(m=>!t.paidThisRound[m]),
     })),
-    comptes: activeAccounts().map(a => ({ nom: a.name, type: ACCOUNT_TYPE_LABELS[a.type] || a.type, solde: accountBalance(a.id) })),
-    disponibleTotal: totalAvailable(),
+    comptes: activeAccounts().map(a => ({
+      nom: a.name, type: ACCOUNT_TYPE_LABELS[a.type] || a.type,
+      solde: accountBalance(a.id),
+      reservePourEpargne: reservedOnAccount(a.id),
+    })),
+    soldeTousComptes: totalAvailable(),
+    epargneReserveeTotal: totalEpargne(),
+    // Ce qui est réellement libre : soldeTousComptes − epargneReserveeTotal.
+    disponibleTotal: totalFree(),
     plannerAVenir: state.plannerEvents.filter(e=>e.status!=='realise').length,
     plannerEnRetard: state.plannerEvents.filter(e=>e.status!=='realise' && e.date<todayISO(0)).length,
   };
@@ -7831,7 +8147,7 @@ function renderStatsProjectionTiles(){
   tiles.push({
     label: 'Autonomie financière',
     value: autonomy.months !== null ? `${autonomy.months.toFixed(1)} mois` : (autonomy.unlimited ? '∞' : '—'),
-    delta: `Épargne totale ÷ dépense mensuelle moyenne des 3 derniers mois${autonomy.avgDep ? ' ('+fmt(autonomy.avgDep)+')' : ''}`,
+    delta: `Épargne réservée ÷ dépense mensuelle moyenne des 3 derniers mois${autonomy.avgDep ? ' ('+fmt(autonomy.avgDep)+')' : ''}`,
     cls: '',
   });
 
