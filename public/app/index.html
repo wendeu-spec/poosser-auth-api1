@@ -1019,7 +1019,7 @@
             <option value="revenu">Revenu</option>
           </select>
         </div>
-        <div class="field">
+        <div class="field" id="txCategoryField">
           <label>Catégorie</label>
           <select id="txCategory"></select>
         </div>
@@ -1053,8 +1053,9 @@
           <select id="txProject"><option value="">Aucun projet</option></select>
         </div>
         <div class="field" id="txRubriqueField" style="display:none;">
-          <label>Rubrique (optionnel)</label>
+          <label id="txRubriqueLabel">Rubrique</label>
           <select id="txRubrique"><option value="">Aucune rubrique</option></select>
+          <div class="sub" style="margin:4px 0 0;">Dans un projet, c'est la rubrique qui classe la dépense — pas la catégorie.</div>
         </div>
         <div class="field" style="grid-column: span 2;">
           <label>Note (optionnel)</label>
@@ -1382,6 +1383,21 @@
       </div>
 
       <div class="goals-grid" id="projectsGrid"></div>
+
+      <!-- Comparaison transversale : regroupe les rubriques de même nom à
+           travers tous les projets. C'est ce qui remplace la comparaison que
+           la catégorie permettait avant la migration 037, où « Main d'œuvre »
+           de trois chantiers s'additionnait dans une seule catégorie. -->
+      <div class="card" id="rubriqueRollupCard" style="margin-top:18px; display:none;">
+        <h3 style="margin:0;">Rubriques, tous projets confondus</h3>
+        <div class="sub" style="margin-top:4px;">Les rubriques qui portent le même nom sont regroupées — « Main d'œuvre » de trois chantiers compte pour une seule ligne.</div>
+        <div style="overflow-x:auto; margin-top:12px;">
+          <table id="rubriqueRollupTable">
+            <thead><tr><th>Rubrique</th><th>Projets</th><th style="text-align:right">Dépensé</th><th style="text-align:right">Encaissé</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ----- état détail ----- -->
@@ -1477,7 +1493,6 @@
               <option value="note">Note</option>
               <option value="date">Date</option>
               <option value="type">Type</option>
-              <option value="category">Catégorie</option>
               <option value="rubrique">Rubrique</option>
               <option value="method">Méthode</option>
               <option value="amount">Montant</option>
@@ -1494,7 +1509,7 @@
               <option value="date_asc">Date (plus ancien)</option>
               <option value="amount_desc">Montant (décroissant)</option>
               <option value="amount_asc">Montant (croissant)</option>
-              <option value="category_asc">Catégorie (A → Z)</option>
+              <option value="rubrique_asc">Rubrique (A → Z)</option>
             </select>
           </div>
           <div class="field" style="flex-direction:row; gap:8px;">
@@ -1537,7 +1552,7 @@
           </div>
         </div>
 
-        <table id="projectTxTable"><thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Rubrique</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th></tr></thead><tbody></tbody></table>
+        <table id="projectTxTable"><thead><tr><th>Date</th><th>Type</th><th>Rubrique</th><th>Méthode</th><th>Note</th><th style="text-align:right">Montant</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
   </section>
@@ -2918,6 +2933,21 @@ function ownTx(){
   });
 }
 
+/**
+ * Transactions classées PAR CATÉGORIE, c'est-à-dire hors projet.
+ *
+ * Un mouvement rattaché à un projet est classé par sa rubrique et n'a plus de
+ * catégorie du tout (migration 037). Le Budget et le donut l'excluaient déjà
+ * via spentByCategory, mais cinq autres analyses le comptaient encore : la
+ * catégorie dominante du résumé hebdomadaire, « telle catégorie concentre vos
+ * dépenses », la volatilité par catégorie, la détection d'anomalies et le
+ * contexte de l'assistant. La même dépense était donc hors-catégorie sur un
+ * écran et dans-catégorie sur un autre.
+ *
+ * Même leçon que ownTx() : une exclusion ne tient que s'il existe UNE source.
+ */
+function categoryTx(){ return ownTx().filter(t => !t.projectId); }
+
 function currentMonthTx(){
   const ym = todayISO(0).slice(0, 7);
   return ownTx().filter(t => t.date.slice(0, 7) === ym);
@@ -3390,7 +3420,7 @@ function weeklySummary(){
   const pctChange = (cur, prev) => prev > 0 ? Math.round((cur - prev) / prev * 100) : null;
 
   const depByCat = {};
-  curTx.filter(t=>t.type==='depense').forEach(t => { depByCat[t.category] = (depByCat[t.category]||0) + t.amount; });
+  curTx.filter(t=>t.type==='depense' && !t.projectId).forEach(t => { depByCat[t.category] = (depByCat[t.category]||0) + t.amount; });
   const topCatEntry = Object.entries(depByCat).sort((a,b)=>b[1]-a[1])[0] || null;
 
   // Les montants du journal sont SIGNÉS depuis la migration 033 : un retrait
@@ -3809,13 +3839,29 @@ function populateProjectSelect(){
 function populateRubriqueSelectForProject(projectId, keepCurrent){
   const field = document.getElementById('txRubriqueField');
   const sel = document.getElementById('txRubrique');
+  const catField = document.getElementById('txCategoryField');
   const current = keepCurrent ? sel.value : '';
   if(!projectId){
     field.style.display = 'none';
     sel.innerHTML = '<option value="">Aucune rubrique</option>';
+    sel.required = false;
+    // Hors projet, la catégorie redevient le classement de l'opération.
+    if(catField) catField.hidden = false;
     return;
   }
   field.style.display = '';
+  // Dans un projet, la rubrique REMPLACE la catégorie (migration 037) : le
+  // champ Catégorie disparaît, puisqu'on ne range pas un poste de chantier
+  // dans la liste des catégories personnelles.
+  //
+  // La rubrique n'est pour autant JAMAIS obligatoire (choix de Yannis) : on
+  // propose « Non classé » plutôt que de bloquer. Un projet tout neuf n'a pas
+  // encore de rubrique, et être arrêté en pleine saisie, téléphone en main sur
+  // le chantier, ferait perdre la dépense bien plus sûrement qu'un classement
+  // approximatif. La vue Projets sait déjà afficher « Non classé », et on
+  // range plus tard.
+  if(catField) catField.hidden = true;
+  sel.required = false;
   const options = [];
   (function walk(parentId, depth){
     state.rubriques.filter(r=>r.projectId===projectId && r.parentId===parentId).forEach(r=>{
@@ -3823,7 +3869,13 @@ function populateRubriqueSelectForProject(projectId, keepCurrent){
       walk(r.id, depth+1);
     });
   })(null, 0);
-  sel.innerHTML = '<option value="">Aucune rubrique</option>' + options.join('');
+  // « Non classé » est un choix explicite, pas un oubli : c'est l'état que la
+  // vue Projets affiche déjà pour une dépense sans rubrique.
+  sel.innerHTML = '<option value="">— Non classé —</option>' + options.join('');
+  // Par défaut on propose la première rubrique du projet plutôt que « Non
+  // classé » : classer doit être le geste naturel, ne pas classer le choix
+  // délibéré.
+  if(options.length) sel.selectedIndex = 1;
   if([...sel.options].some(o=>o.value===current)) sel.value = current;
 }
 document.getElementById('txProject').addEventListener('change', (e)=>{
@@ -3842,6 +3894,24 @@ function rubriqueTag(rubriqueId){
   const r = rubriqueById(rubriqueId);
   if(!r) return '';
   return ` <span class="pill" title="Rubrique du projet">🏷️ ${r.name}</span>`;
+}
+
+/**
+ * Comment une opération est classée : sa catégorie, ou — dans un projet — sa
+ * rubrique, qui la remplace depuis la migration 037. Partout où l'on affichait
+ * `t.category`, il faut passer par ici : une opération de projet n'a plus de
+ * catégorie du tout, et afficherait une case vide.
+ */
+/** Nom de la rubrique d'une opération, ou chaîne vide — pour trier. */
+function rubriqueNameOf(t){
+  const r = t.rubriqueId ? rubriqueById(t.rubriqueId) : null;
+  return r ? r.name : '';
+}
+
+function txClassement(t){
+  if(t.category) return t.category;
+  const r = t.rubriqueId ? rubriqueById(t.rubriqueId) : null;
+  return r ? r.name : '—';
 }
 
 /**
@@ -3915,7 +3985,7 @@ function applyFavoriteToForm(fav){
  * un point de friction répété comme la saisie elle-même).
  */
 async function saveTransactionAsFavorite(t){
-  const label = prompt('Nom du favori (ex: "Taxi", "Recharge crédit") :', t.category);
+  const label = prompt('Nom du favori (ex: "Taxi", "Recharge crédit") :', txClassement(t));
   if(!label || !label.trim()) return;
   try {
     const { transactionFavorite } = await apiFetch('/api/transaction-favorites', { method:'POST', auth:true, body:{
@@ -4209,6 +4279,9 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const accountId = document.getElementById('txAccount').value || undefined;
   const fee = readFeeInput('txFee');
   if(!amount || amount<=0) return;
+  // Volontairement AUCUN blocage quand un projet n'a pas de rubrique choisie :
+  // l'opération part en « Non classé » et se range plus tard. Arrêter la
+  // saisie ferait perdre la dépense plus sûrement qu'un classement différé.
   // Même référence opérateur déjà enregistrée (SMS collé deux fois) : on
   // demande confirmation avant de créer un doublon.
   const ref = (note.match(/Réf\. ([A-Za-z0-9.\-]{6,})/) || [])[1];
@@ -4223,7 +4296,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       // une rubrique ou effacer la note en modification — voir le traitement
       // tri-état de PATCH /api/transactions/:id côté serveur.
       const { transaction, feeTransaction } = await apiFetch('/api/transactions/' + editingTxId, { method:'PATCH', auth:true, body:{
-        type, category, amount, occurredOn: date, method,
+        type, category: projectId ? undefined : category, amount, occurredOn: date, method,
         note: note ? note : null,
         projectId: projectId ?? null,
         rubriqueId: rubriqueId ?? null,
@@ -4237,7 +4310,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
     } else {
       // Frais éventuels : le serveur crée la dépense de frais liée dans la
       // même transaction SQL que l'opération (catégorie selon le compte).
-      const { transaction, feeTransaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId, accountId, fee } });
+      const { transaction, feeTransaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body:{ type, category: projectId ? undefined : category, amount, occurredOn: date, method, note: note || undefined, projectId, rubriqueId, accountId, fee } });
       const savedTx = mapTxFromApi(transaction);
       state.transactions.push(savedTx);
       applyFeeFromServer(savedTx.id, feeTransaction);
@@ -4406,7 +4479,7 @@ function renderTxTable(){
     <tr data-row="${t.id}">
       <td>${t.date}</td>
       <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
-      <td>${t.category}${projectTag(t.projectId)}${rubriqueTag(t.rubriqueId)}</td>
+      <td>${txClassement(t)}${projectTag(t.projectId)}${t.category ? rubriqueTag(t.rubriqueId) : ''}</td>
       <td>${escapeHtml(accountName(t.accountId))}</td>
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
@@ -4503,7 +4576,7 @@ function exportTransactionsPDF(){
   const body = rows.map(t=>[
     t.date,
     t.type==='revenu' ? 'Revenu' : 'Dépense',
-    t.category, accountName(t.accountId), t.method, t.note||'',
+    txClassement(t), accountName(t.accountId), t.method, t.note||'',
     (t.type==='revenu'?'+':'-') + ' ' + fmtPdf(t.amount),
   ]);
 
@@ -5033,7 +5106,7 @@ function accountMovements(id){
     const parentIdx = t.feeParentId ? state.transactions.findIndex(x => x.id === t.feeParentId) : -1;
     rows.push({ key: 'tx-' + t.id, date: t.date,
       seq: t.transferId ? transferSeq(t.transferId) + 0.5 : parentIdx !== -1 ? parentIdx + 0.5 : i,
-      kind: (t.transferId || t.feeParentId) ? 'fee' : t.type, label: t.category,
+      kind: (t.transferId || t.feeParentId) ? 'fee' : t.type, label: txClassement(t),
       detail: t.transferId ? 'Frais de virement' : t.feeParentId ? "Frais de l'opération" : (t.note || ''), projectId: t.projectId, inflow, outflow });
   });
   state.transfers.forEach((tr, i)=>{
@@ -5676,10 +5749,50 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
   }
 });
 
+/**
+ * Totaux par NOM de rubrique, à travers tous les projets.
+ *
+ * Depuis la migration 037, une dépense de projet est classée par sa rubrique
+ * et n'a plus de catégorie. Or une rubrique appartient à un seul projet :
+ * « Main d'œuvre » existe trois fois, une par chantier. Ce regroupement par
+ * nom rend la comparaison que la catégorie permettait auparavant.
+ */
+function renderRubriqueRollup(){
+  const card = document.getElementById('rubriqueRollupCard');
+  if(!card) return;
+  const parNom = new Map();
+  for(const t of state.transactions){
+    if(!t.rubriqueId) continue;
+    const r = rubriqueById(t.rubriqueId);
+    if(!r) continue;
+    // Insensible à la casse et aux accents : « Main d'œuvre » et « Main
+    // d'oeuvre » sont la même chose pour l'utilisateur (il a les deux
+    // orthographes dans ses projets).
+    const cle = normalizeText(r.name);
+    const e = parNom.get(cle) || { nom: r.name, projets: new Set(), depense: 0, revenu: 0 };
+    e.projets.add(t.projectId);
+    if(t.type === 'depense') e.depense += t.amount; else e.revenu += t.amount;
+    parNom.set(cle, e);
+  }
+  const lignes = [...parNom.values()].sort((a,b)=> b.depense - a.depense);
+  // Sans rien à comparer, la carte n'apporte rien : on la cache plutôt que
+  // d'afficher un tableau vide.
+  if(!lignes.length){ card.style.display = 'none'; return; }
+  card.style.display = '';
+  card.querySelector('tbody').innerHTML = lignes.map(l=>`
+    <tr>
+      <td>🏷️ ${escapeHtml(l.nom)}</td>
+      <td>${l.projets.size} projet${l.projets.size > 1 ? 's' : ''}</td>
+      <td style="text-align:right" class="${l.depense ? 'amt-neg' : ''}">${l.depense ? '− ' + fmt(l.depense) : '—'}</td>
+      <td style="text-align:right" class="${l.revenu ? 'amt-pos' : ''}">${l.revenu ? '+ ' + fmt(l.revenu) : '—'}</td>
+    </tr>`).join('');
+}
+
 function renderProjects(){
   const grid = document.getElementById('projectsGrid');
   const filtersCard = document.getElementById('projectFiltersCard');
   updateProjectResetVisibility();
+  renderRubriqueRollup();
   if(!state.projects.length){
     if(filtersCard) filtersCard.style.display = 'none';
     grid.innerHTML = '<div class="empty-state">Aucun projet pour le moment. Créez-en un pour suivre à part le budget d\'une construction, d\'un voyage, d\'un événement, d\'une activité...</div>';
@@ -5787,7 +5900,6 @@ function filteredSortedProjectTxRows(projectId){
       let field;
       if(projTxSearchField === 'date') field = t.date;
       else if(projTxSearchField === 'type') field = t.type === 'revenu' ? 'revenu' : 'depense';
-      else if(projTxSearchField === 'category') field = t.category;
       else if(projTxSearchField === 'rubrique') field = rub ? rub.name : 'non classé';
       else if(projTxSearchField === 'method') field = t.method;
       else if(projTxSearchField === 'amount') field = String(t.amount);
@@ -5800,7 +5912,7 @@ function filteredSortedProjectTxRows(projectId){
   if(projTxSortBy === 'date_asc') rows.sort((a,b)=> a.date.localeCompare(b.date));
   else if(projTxSortBy === 'amount_desc') rows.sort((a,b)=> b.amount - a.amount);
   else if(projTxSortBy === 'amount_asc') rows.sort((a,b)=> a.amount - b.amount);
-  else if(projTxSortBy === 'category_asc') rows.sort((a,b)=> a.category.localeCompare(b.category, 'fr'));
+  else if(projTxSortBy === 'rubrique_asc') rows.sort((a,b)=> rubriqueNameOf(a).localeCompare(rubriqueNameOf(b), 'fr'));
   else rows.sort((a,b)=> b.date.localeCompare(a.date)); // 'date_desc' (défaut, inchangé par rapport à avant)
   return rows;
 }
@@ -5813,9 +5925,6 @@ function renderProjTxSearchValueInput(){
       <option value="revenu">Revenu</option>
       <option value="depense">Dépense</option>
     </select>`;
-  } else if(projTxSearchField === 'category'){
-    const cats = [...new Set([...revenuCategories(), ...depenseCategories()])];
-    html = `<select id="projTxSearchValueCtrl"><option value="">— Choisir —</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`;
   } else if(projTxSearchField === 'rubrique'){
     const rubs = rubriquesForProject(selectedProjectId);
     html = `<select id="projTxSearchValueCtrl"><option value="">— Choisir —</option><option value="non classé">Non classé</option>${rubs.map(r=>`<option value="${r.name}">${r.parentId?'— ':''}${r.name}</option>`).join('')}</select>`;
@@ -5907,7 +6016,6 @@ function renderProjectDetailTxTable(){
     <tr>
       <td>${t.date}</td>
       <td><span class="pill">${t.type==='revenu'?'Revenu':'Dépense'}</span></td>
-      <td>${t.category}</td>
       <td>${r ? r.name : '<span class="empty-state" style="padding:0; display:inline;">Non classé</span>'}</td>
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
@@ -6415,7 +6523,7 @@ function exportProjectPDF(p, rows){
   const body = rows.map(t=>[
     t.date,
     t.type==='revenu' ? 'Encaissement' : 'Dépense',
-    t.category, t.method, t.note||'',
+    txClassement(t), t.method, t.note||'',
     (t.type==='revenu'?'+':'-') + ' ' + fmtPdf(t.amount),
   ]);
 
@@ -7926,7 +8034,7 @@ function generateInsights(){
   }
 
   const catTotals = {};
-  ownTx().filter(t=>t.type==='depense').forEach(t=> catTotals[t.category] = (catTotals[t.category]||0)+t.amount);
+  categoryTx().filter(t=>t.type==='depense').forEach(t=> catTotals[t.category] = (catTotals[t.category]||0)+t.amount);
   const sortedCats = Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
   if(sortedCats.length && dep>0){
     const [topCat, topVal] = sortedCats[0];
@@ -8041,7 +8149,7 @@ function answerQuestion(q){
     return `Vos revenus du mois s'élèvent à ${fmt(rev)}, répartis sur ${currentMonthTx().filter(t=>t.type==='revenu').length} mouvement(s).`;
   }
   if(/(dépense|dépens)/.test(lower)){
-    const topCat = Object.entries(ownTx().filter(t=>t.type==='depense').reduce((acc,t)=>{acc[t.category]=(acc[t.category]||0)+t.amount; return acc;},{})).sort((a,b)=>b[1]-a[1])[0];
+    const topCat = Object.entries(categoryTx().filter(t=>t.type==='depense').reduce((acc,t)=>{acc[t.category]=(acc[t.category]||0)+t.amount; return acc;},{})).sort((a,b)=>b[1]-a[1])[0];
     return `Vos dépenses du mois totalisent ${fmt(dep)}. ${topCat ? "Le principal poste est \""+topCat[0]+"\" avec "+fmt(topCat[1])+"." : ""}`;
   }
 
@@ -8189,7 +8297,7 @@ function computeCategoryVolatility(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   return depenseCategories().map(cat=>{
     const monthlyTotals = keys.map(key =>
-      ownTx()
+      categoryTx()
         .filter(t=>t.type==='depense' && t.category===cat && t.date.slice(0,7)===key)
         .reduce((a,t)=>a+t.amount, 0)
     );
@@ -8213,7 +8321,7 @@ function computeCategoryVolatility(){
 function computeAnomalies(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   const keySet = new Set(keys);
-  const windowTx = ownTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const windowTx = categoryTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
   const byCat = {};
   windowTx.forEach(t=>{ (byCat[t.category] ||= []).push(t); });
 
@@ -8238,7 +8346,7 @@ function computeAnomalies(){
 function computeParetoCategories(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   const keySet = new Set(keys);
-  const windowDep = ownTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const windowDep = categoryTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
   const totals = {};
   windowDep.forEach(t=> totals[t.category] = (totals[t.category]||0) + t.amount);
   const total = Object.values(totals).reduce((a,b)=>a+b, 0);
@@ -8258,7 +8366,7 @@ function computeParetoCategories(){
 function computeWeekdayAverages(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   const keySet = new Set(keys);
-  const windowDep = ownTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const windowDep = categoryTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
   if(!windowDep.length) return null;
 
   const [fy,fm] = keys[0].split('-').map(Number);
