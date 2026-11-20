@@ -490,29 +490,64 @@ est toujours recalculé côté client, jamais stocké.
   cotisation en ajoutant la fréquence du groupe à cette date, pour afficher un rappel
   ("cotisation due dans N jours" / "en retard") sans aucun champ supplémentaire à saisir.
 - `GET /api/tontines/:id` → `{ tontine }`.
-- `POST /api/tontines` → `{ name, contributionAmount, frequency, members: string[] }`
-  (2 à 50 membres, dans l'ordre de passage) → `201 { tontine }`.
+**Argent réel** (migrations/034_tontine_accounts.sql) : une tontine configurée possède un
+COMPTE de type `tontine` — la cagnotte (`accountId`). Cotiser et encaisser sont des
+**virements neutres** entre un compte réel choisi par l'utilisateur et cette cagnotte,
+jamais un revenu ni une dépense : l'argent encaissé à son tour est son propre argent qui
+revient. Sur un cycle complet la cagnotte retombe exactement à zéro ; entre-temps son
+solde négatif dit ce qui reste dû au groupe. La caisse de solidarité et les pénalités de
+retard, elles, sont de vraies dépenses (catégorie « Tontine ») : cet argent ne revient
+jamais. Un compte de type `tontine` est **exclu du disponible**. Une tontine dont
+`accountId` ou `myMemberId` est `null` n'est pas configurée : elle reste un simple
+pointage, sans aucun mouvement.
+
+- `POST /api/tontines` → `{ name, contributionAmount, frequency, members: string[],
+  myMemberPosition?, role?, lateFee?, solidarityAmount? }` (2 à 50 membres, dans l'ordre de
+  passage) → `201 { tontine }`. `myMemberPosition` désigne lequel des membres est
+  l'utilisateur : le fournir crée la cagnotte et active les mouvements d'argent. `role`
+  vaut `participant` (défaut — seules MES deux opérations touchent mes comptes) ou
+  `collecteur` (j'encaisse l'argent de tous ; celui des autres entre dans la cagnotte
+  depuis l'extérieur de mes finances, en revenu SUR la cagnotte, jamais en virement depuis
+  un de mes comptes).
 - `PATCH /api/tontines/:id` → champs partiels `{ name?, contributionAmount?, frequency?,
-  memberNames? }` → `200 { tontine }`. `memberNames` renomme les membres existants dans
+  memberNames?, myMemberPosition?, role?, lateFee?, solidarityAmount? }` → `200 { tontine }`.
+  `memberNames` renomme les membres existants dans
   l'ordre de passage ; le nombre de noms doit être identique au nombre de membres actuels
   (ajouter/retirer un membre changerait l'ordre des bénéficiaires et le sens des
   cotisations déjà enregistrées pour le tour en cours, ce qui sort du cadre de cette
   modification) — sinon `400 VALIDATION_ERROR`. Ne modifie jamais `round_started_at` :
   éditer une tontine ne réinitialise pas l'échéance de cotisation affichée.
-- `POST /api/tontines/:id/contributions` → `{ memberId, paid }` — marque un membre
-  payé/non payé pour le tour en cours (horodate automatiquement `paid_at` si `paid: true`)
-  → `200 { tontine }`.
-- `POST /api/tontines/:id/close-round` — clôture le tour en cours et verse au
-  bénéficiaire suivant (ordre de passage) ; **refuse tant que tous les membres n'ont pas
-  cotisé** (même règle que le bouton correspondant, désactivé dans le prototype tant que
-  100 % des membres n'ont pas payé) → `200 { tontine }` ou `409 TONTINE_ROUND_NOT_READY`.
+- `POST /api/tontines/:id/contributions` → `{ memberId, paid, accountId?, fee?, late?,
+  occurredOn? }` — marque un membre payé/non payé pour le tour en cours (horodate
+  automatiquement `paid_at` si `paid: true`) → `200 { tontine }`.
+  - Ma propre cotisation, groupe configuré : `accountId` est le **compte à débiter**, et
+    un virement vers la cagnotte est créé, frais compris.
+  - Collecteur, cotisation d'un autre membre : son argent entre dans la cagnotte en
+    revenu, aucun de mes comptes n'est touché. En mode participant, c'est un simple
+    pointage.
+  - `late: true` déclenche la pénalité du groupe (`lateFee`) ; elle est enregistrée avec
+    la caisse de solidarité en une dépense réelle.
+  - `paid: false` **défait** les mouvements que la cotisation avait créés : un clic
+    malheureux ne laisse pas de virement fantôme.
+- `POST /api/tontines/:id/close-round` → `{ accountId?, occurredOn? }` — clôture le tour
+  en cours et verse au bénéficiaire suivant (ordre de passage) ; **refuse tant que tous les
+  membres n'ont pas cotisé** → `200 { tontine }` ou `409 TONTINE_ROUND_NOT_READY`.
+  Quand le bénéficiaire est l'utilisateur, `accountId` est le **compte à créditer** et la
+  cagnotte s'y déverse par virement. Quand c'est un autre membre et que l'utilisateur est
+  collecteur, la cagnotte sort de ses finances pour de bon (dépense sur la cagnotte).
 - `DELETE /api/tontines/:id` → `204` — supprime définitivement le groupe. Contrairement à
   la suppression d'un projet ou d'une rubrique (qui détache les transactions sans les
   effacer), celle-ci efface vraiment tout : membres, cotisations et historique des tours
   partent avec (`ON DELETE CASCADE`, voir migrations/017_tontines.sql). Le client demande
   confirmation avant d'appeler cette route.
 - Erreurs : `404 TONTINE_NOT_FOUND`, `404 TONTINE_MEMBER_NOT_FOUND`, `409
-  TONTINE_ROUND_NOT_READY`.
+  TONTINE_ROUND_NOT_READY`, `404 ACCOUNT_NOT_FOUND`, `409 ACCOUNT_ARCHIVED`,
+  `409 TONTINE_ACCOUNT_NOT_USABLE` (la cagnotte du groupe est archivée ou inutilisable).
+- Côté comptes et opérations : `DELETE /api/transfers/:id` et les modifications ou
+  suppressions d'une opération rattachée à une cotisation renvoient
+  `409 TRANSACTION_IS_TONTINE_MOVEMENT` — les défaire par cette porte laisserait la
+  cotisation cochée en face de rien. Passer par le module Tontine (décocher la
+  cotisation), qui défait les deux ensemble.
 
 ## Planner financier
 
