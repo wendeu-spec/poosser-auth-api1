@@ -234,8 +234,13 @@ describe("décocher défait les mouvements", () => {
   });
 });
 
-describe("caisse de solidarité et pénalités : de vraies dépenses", () => {
-  it("crée une dépense séparée, hors de la cagnotte", async () => {
+// Comportement INVERSÉ par la migration 035, volontairement : la caisse de
+// solidarité et les pénalités ne sont plus une dépense sèche, elles sont
+// virées vers la CAISSE du groupe, où l'argent reste traçable. Voir
+// tests/tontine-caisse.test.ts pour la caisse elle-même ; ici on vérifie
+// seulement que la cagnotte n'en reçoit rien.
+describe("caisse de solidarité et pénalités : jamais dans la cagnotte", () => {
+  it("laisse la cagnotte ne recevoir que la cotisation", async () => {
     const { access } = await authedUser();
     const especes = await especesOf(access);
     await fund(access, especes.id, 500_000);
@@ -246,44 +251,47 @@ describe("caisse de solidarité et pénalités : de vraies dépenses", () => {
     // jamais à zéro en fin de cycle.
     expect((res.body.tontine as Tontine).position).toBe(50_000);
 
-    const depenses = (await transactionsOf(access)).filter((x) => x.type === "depense");
-    expect(depenses).toHaveLength(1);
-    expect(depenses[0]!.category).toBe("Tontine");
-    expect(Number(depenses[0]!.amount)).toBe(3_000); // 2 000 de caisse + 1 000 de pénalité
-    expect(depenses[0]!.account_id).toBe(especes.id);
+    // Plus de dépense : l'argent est parti vers la caisse, pas dans le vide.
+    expect((await transactionsOf(access)).filter((x) => x.type === "depense")).toHaveLength(0);
 
     const accounts = await listAccounts(access);
     expect(Number(accounts.find((a) => a.id === especes.id)!.balance)).toBe(447_000);
+    const caisse = accounts.find((a) => a.type === "caisse")!;
+    expect(Number(caisse.balance)).toBe(3_000); // 2 000 de caisse + 1 000 de pénalité
   });
 
-  it("sans retard, seule la caisse est prélevée", async () => {
+  it("sans retard, seule la caisse de solidarité est prélevée", async () => {
     const { access } = await authedUser();
     const especes = await especesOf(access);
     await fund(access, especes.id, 500_000);
     const t = await createTontine(access, { myMemberPosition: 3, solidarityAmount: 2_000, lateFee: 1_000 });
     await mark(access, t.id, { memberId: t.members[2]!.id, paid: true }).expect(200);
-    const depenses = (await transactionsOf(access)).filter((x) => x.type === "depense");
-    expect(Number(depenses[0]!.amount)).toBe(2_000);
+    const caisse = (await listAccounts(access)).find((a) => a.type === "caisse")!;
+    expect(Number(caisse.balance)).toBe(2_000);
   });
 
-  it("sans extras, aucune dépense n'est créée", async () => {
+  it("sans extras, aucune caisse n'est créée", async () => {
     const { access } = await authedUser();
     const especes = await especesOf(access);
     await fund(access, especes.id, 500_000);
     const t = await createTontine(access, { myMemberPosition: 3 });
     await mark(access, t.id, { memberId: t.members[2]!.id, paid: true, late: true }).expect(200);
     expect((await transactionsOf(access)).filter((x) => x.type === "depense")).toHaveLength(0);
+    expect((await listAccounts(access)).filter((a) => a.type === "caisse")).toHaveLength(0);
   });
 
-  it("la dépense ne se supprime pas depuis l'historique", async () => {
+  it("le virement vers la caisse ne se supprime pas depuis les comptes", async () => {
     const { access } = await authedUser();
     const especes = await especesOf(access);
     await fund(access, especes.id, 500_000);
     const t = await createTontine(access, { myMemberPosition: 3, solidarityAmount: 2_000 });
     await mark(access, t.id, { memberId: t.members[2]!.id, paid: true }).expect(200);
-    const depense = (await transactionsOf(access)).find((x) => x.type === "depense")!;
-    const del = await request(app).delete(`/api/transactions/${depense.id}`).set(auth(access)).expect(409);
-    expect(del.body.error.code).toBe("TRANSACTION_IS_TONTINE_MOVEMENT");
+
+    const transfers = (await request(app).get("/api/transfers").set(auth(access)).expect(200))
+      .body.transfers as Array<{ id: string; amount: string }>;
+    const versCaisse = transfers.find((tr) => Number(tr.amount) === 2_000)!;
+    const del = await request(app).delete(`/api/transfers/${versCaisse.id}`).set(auth(access)).expect(409);
+    expect(del.body.error.code).toBe("TRANSFER_BACKS_TONTINE");
   });
 });
 
@@ -321,14 +329,22 @@ describe("collecteur : je détiens l'argent du groupe", () => {
     expect(Number(accounts.find((a) => a.id === especes.id)!.balance)).toBe(450_000);
   });
 
-  it("inclut la caisse et la pénalité des autres dans la cagnotte encaissée", async () => {
+  it("sépare la cotisation d'un autre membre de sa caisse et de sa pénalité", async () => {
     const { access } = await authedUser();
     const especes = await especesOf(access);
     await fund(access, especes.id, 500_000);
     const t = await createTontine(access, { myMemberPosition: 3, role: "collecteur", solidarityAmount: 2_000, lateFee: 1_000 });
     const res = await mark(access, t.id, { memberId: t.members[0]!.id, paid: true, late: true }).expect(200);
-    // Je reçois bien la somme complète de ce membre : 50 000 + 2 000 + 1 000.
-    expect((res.body.tontine as Tontine).position).toBe(53_000);
+
+    // Je reçois bien la somme complète de ce membre, mais elle se range en deux
+    // endroits : la cotisation dans la cagnotte, le reste dans la caisse.
+    //
+    // Avant la migration 035, les 53 000 entraient entièrement dans la
+    // cagnotte — qui ne les reversait jamais, et ne retombait donc plus à zéro
+    // en fin de cycle dès que le groupe avait une caisse.
+    expect((res.body.tontine as Tontine).position).toBe(50_000);
+    const caisse = (await listAccounts(access)).find((a) => a.type === "caisse")!;
+    expect(Number(caisse.balance)).toBe(3_000);
   });
 });
 
