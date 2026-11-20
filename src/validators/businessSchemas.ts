@@ -164,6 +164,26 @@ export const createTontineSchema = z.object({
   role: z.enum(TONTINE_ROLES).optional(),
   lateFee: z.number().min(0).max(1_000_000_000).optional(),
   solidarityAmount: z.number().min(0).max(1_000_000_000).optional(),
+  // Caisse de secours (migrations/035). Liste vide ou absente = la liste par
+  // défaut du code s'applique (décès, maladie, naissance, mariage, scolarité,
+  // incendie, autre) : un groupe n'a pas à la ressaisir pour l'utiliser.
+  secoursMotifs: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+});
+
+// Versement libre à la caisse, ou secours versé à un membre. Un seul schéma
+// pour les deux : mêmes champs, et c'est le service qui impose ce qui est
+// obligatoire de part et d'autre (un secours exige un bénéficiaire et un
+// motif, un versement n'en a pas besoin).
+export const caisseMovementSchema = z.object({
+  amount: amountSchema,
+  // Secours : le membre qui reçoit. Versement : renseigné seulement par un
+  // collecteur qui saisit le versement d'un autre membre.
+  memberId: z.string().uuid().optional(),
+  motif: z.string().trim().min(1).max(40).optional(),
+  // Compte réel débité (versement) ou crédité (secours que je reçois).
+  accountId: z.string().uuid().optional(),
+  occurredOn: dateSchema.optional(),
+  note: z.string().trim().max(280).optional(),
 });
 
 export const markContributionSchema = z.object({
@@ -203,6 +223,7 @@ export const updateTontineSchema = z.object({
   role: z.enum(TONTINE_ROLES).optional(),
   lateFee: z.number().min(0).max(1_000_000_000).optional(),
   solidarityAmount: z.number().min(0).max(1_000_000_000).optional(),
+  secoursMotifs: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
 });
 
 // ---------------------------------------------------------------------------
