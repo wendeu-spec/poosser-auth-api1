@@ -227,8 +227,11 @@ describe("la caisse ne se mélange jamais à la cagnotte", () => {
     expect(await balanceOf(access, t.accountId!)).toBe(0);
 
     const after = await getTontine(access, t.id);
-    expect(after.caisseBalance).toBe(18_000); // 3 membres × 3 tours × 2 000
-    expect(after.caisseContributed).toBe(6_000); // seulement mes 3 cotisations sociales
+    // Depuis la migration 036, la caisse ne se verse qu'au PREMIER tour de
+    // chaque cycle : 3 membres = un cycle de 3 tours, donc une seule série de
+    // cotisations sociales sur les trois tours joués.
+    expect(after.caisseBalance).toBe(6_000); // 3 membres × 2 000, au tour 1
+    expect(after.caisseContributed).toBe(2_000); // ma seule cotisation sociale
   });
 });
 
