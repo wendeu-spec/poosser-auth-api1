@@ -17,7 +17,10 @@ const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date attendue au for
 // ---------------------------------------------------------------------------
 export const createTransactionSchema = z.object({
   type: z.enum(["revenu", "depense"]),
-  category: categorySchema,
+  // Facultative ici, exigée par le service hors projet (migration 037) : la
+  // règle dépend de la présence d'un projet ET de l'appartenance de la
+  // rubrique à ce projet, ce qu'un schéma Zod synchrone ne peut pas vérifier.
+  category: categorySchema.optional(),
   amount: amountSchema,
   occurredOn: dateSchema,
   method: z.enum(TRANSACTION_METHODS),
@@ -50,7 +53,10 @@ export const updateTransactionSchema = createTransactionSchema.partial().extend(
 export const createTransactionFavoriteSchema = z.object({
   label: z.string().trim().min(1).max(60),
   type: z.enum(["revenu", "depense"]),
-  category: categorySchema,
+  // Même règle que pour une opération (migration 037) : facultative ici,
+  // exigée par le service hors projet. Un favori créé depuis une opération de
+  // projet n'a pas de catégorie — c'est sa rubrique qui le classe.
+  category: categorySchema.optional(),
   amount: amountSchema,
   method: z.enum(TRANSACTION_METHODS),
   note: z.string().trim().max(280).optional(),
