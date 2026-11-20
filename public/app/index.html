@@ -2428,6 +2428,39 @@ function projectStats(projectId){
   return { totalIn, totalOut, balance: totalIn - totalOut, count: rows.length };
 }
 
+/**
+ * Avancement d'un projet vers son objectif.
+ *
+ * Deux natures de projet se cachent derrière le même écran, et une seule
+ * formule les servait. Un CHANTIER ne fait que dépenser : son « objectif »
+ * est un budget à ne pas dépasser. L'ancien calcul comparait le SOLDE
+ * (encaissé − dépensé) à l'objectif, donc un nombre négatif ramené à zéro :
+ * la barre de « Construction de la dépendance » restait figée à 0 % quoi
+ * qu'on dépense, et y serait restée à 1 200 000 de dépassement.
+ *
+ * On distingue donc, sans rien demander à l'utilisateur : un projet qui n'a
+ * jamais rien encaissé est un projet de dépense, on compare le DÉPENSÉ au
+ * budget ; les autres gardent la comparaison par le solde.
+ *
+ * Et le pourcentage n'est PLUS plafonné à 100 % : un chantier qui déborde
+ * doit le dire. Seule la barre reste bornée, pour ne pas sortir de l'écran.
+ */
+function projectProgress(p){
+  if(!p.target) return null;
+  const stats = projectStats(p.id);
+  const depenseSeule = stats.totalIn === 0 && stats.totalOut > 0;
+  const valeur = depenseSeule ? stats.totalOut : stats.balance;
+  const pct = valeur / p.target * 100;
+  return {
+    mode: depenseSeule ? 'budget' : 'solde',
+    valeur,
+    pct: Math.max(pct, 0),
+    largeurBarre: Math.min(Math.max(pct, 0), 100),
+    depasse: depenseSeule && valeur > p.target,
+    reste: depenseSeule ? p.target - valeur : null,
+  };
+}
+
 // Ne garde QUE les champs stables d'une rubrique (nom, enveloppe, parent) —
 // même raison que mapProjectFromApi : le montant réel dépensé n'est jamais
 // mis en cache ici, toujours recalculé en direct via rubriqueOwnStats()/
@@ -2558,6 +2591,14 @@ function mapTontineFromApi(t){
     lateFee: Number(t.lateFee || 0),
     solidarityAmount: Number(t.solidarityAmount || 0),
     position: Number(t.position || 0),
+    // Position personnelle (migration 038) — indépendante du rôle, contrairement
+    // au solde de la cagnotte ci-dessus.
+    myContributed: Number(t.myContributed || 0),
+    myReceived: Number(t.myReceived || 0),
+    myRemainingToPay: Number(t.myRemainingToPay || 0),
+    myTurnRound: t.myTurnRound ?? null,
+    myTurnPassed: !!t.myTurnPassed,
+    expectedHeld: t.expectedHeld == null ? null : Number(t.expectedHeld),
     // Caisse de secours (migrations/035). `caisseBalance` est ce que le groupe
     // détient ; `caisseContributed` ce que J'Y ai versé depuis le début —
     // le chiffre qui manquait quand la caisse n'était qu'une dépense.
@@ -5808,7 +5849,7 @@ function renderProjects(){
   }
   grid.innerHTML = rows.map(p=>{
     const stats = projectStats(p.id);
-    const pct = p.target ? Math.min(Math.max(stats.balance/p.target*100,0),100) : null;
+    const prog = projectProgress(p);
     return `
     <div class="goal-card project-card" data-open="${p.id}">
       <div class="project-card-top">
@@ -5821,9 +5862,12 @@ function renderProjects(){
         </div>
       </div>
       <div class="project-balance ${stats.balance>=0?'amt-pos':'amt-neg'}">${fmt(stats.balance)}</div>
-      ${pct!==null ? `
-        <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:var(--s1);"></div></div>
-        <div class="goal-amounts"><span>Progression : ${Math.round(pct)}%</span><span>Objectif : ${fmt(p.target)}</span></div>
+      ${prog ? `
+        <div class="bar-track"><div class="bar-fill" style="width:${prog.largeurBarre}%; background:${prog.depasse ? 'var(--critical)' : 'var(--s1)'};"></div></div>
+        <div class="goal-amounts">
+          <span>${prog.mode === 'budget' ? 'Budget consommé' : 'Progression'} : <b${prog.depasse ? ' class="amt-neg"' : ''}>${Math.round(prog.pct)}%</b></span>
+          <span>${prog.mode === 'budget' ? 'Budget' : 'Objectif'} : ${fmt(p.target)}</span>
+        </div>
       ` : ''}
       <div class="project-stats-row">
         <span>${stats.count} mouvement(s)</span>
@@ -6090,12 +6134,22 @@ function renderProjectDetail(){
   `;
 
   const progressEl = document.getElementById('projectDetailProgress');
-  if(p.target){
-    const pct = Math.min(Math.max(stats.balance/p.target*100,0),100);
+  const prog = projectProgress(p);
+  if(prog){
+    // Un chantier qui déborde doit le dire : le pourcentage n'est pas plafonné,
+    // et « Reste à engager » devient négatif pour nommer le dépassement.
     progressEl.innerHTML = `
       <div class="card">
-        <div class="goal-amounts"><span>Progression : ${Math.round(pct)}%</span><span>Objectif : ${fmt(p.target)}</span></div>
-        <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:var(--s1);"></div></div>
+        <div class="goal-amounts">
+          <span>${prog.mode === 'budget' ? 'Budget consommé' : 'Progression'} : <b${prog.depasse ? ' class="amt-neg"' : ''}>${Math.round(prog.pct)}%</b></span>
+          <span>${prog.mode === 'budget' ? 'Budget' : 'Objectif'} : ${fmt(p.target)}</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width:${prog.largeurBarre}%; background:${prog.depasse ? 'var(--critical)' : 'var(--s1)'};"></div></div>
+        ${prog.mode === 'budget' ? `<div class="goal-amounts" style="margin-top:6px;">
+          <span>${prog.depasse ? 'Dépassement' : 'Reste à engager'} : <b class="${prog.depasse ? 'amt-neg' : 'amt-pos'}">${fmt(Math.abs(prog.reste))}</b></span>
+          <span>Dépensé : ${fmt(stats.totalOut)}</span>
+        </div>` : ''}
+        ${prog.depasse ? '<div class="alert-banner" style="margin-top:10px;">⚠️ <div>Le budget de ce projet est dépassé.</div></div>' : ''}
       </div>`;
   } else {
     progressEl.innerHTML = '';
@@ -7066,19 +7120,61 @@ function renderTontines(){
 
     // Position vis-à-vis du groupe (migrations/034). Un groupe non configuré
     // ne déplace rien : on le dit, plutôt que d'afficher un zéro trompeur.
+    // Position vis-à-vis du groupe (migration 038).
+    //
+    // Cette ligne disait « Le groupe vous doit : X » en lisant le solde de la
+    // cagnotte. Pour un COLLECTEUR c'était l'exact contraire de la vérité :
+    // cet argent est celui du groupe, qu'il détient en attendant de le
+    // remettre au bénéficiaire du tour. On affiche donc ce qui ne dépend pas
+    // du rôle — ce que J'AI versé, reçu, et ce qu'il me reste à verser.
     const positionLabel = !tontineTracksMoney(t)
       ? `<span style="color:var(--accent);">⚠️ Pointage seul — <button type="button" class="btn btn-ghost" data-config-tontine="${t.id}" style="padding:2px 8px; font-size:11.5px;">désignez-vous</button></span>`
-      : t.position > 0
-        ? `<span>Le groupe vous doit : <b class="amt-pos">${fmt(t.position)}</b></span>`
-        : t.position < 0
-          ? `<span>Reste à cotiser : <b class="amt-neg">${fmt(-t.position)}</b></span>`
-          : `<span>Position : <b>à jour</b></span>`;
+      : t.myRemainingToPay > 0
+        ? `<span>Reste à cotiser : <b class="amt-neg">${fmt(t.myRemainingToPay)}</b></span>`
+        : `<span>Cycle soldé : <b>plus rien à cotiser</b></span>`;
+
+    const tourLabel = !tontineTracksMoney(t) || !t.myTurnRound ? '' :
+      t.myTurnPassed
+        ? `<span>Votre tour est passé · prochain au tour <b>${t.myTurnRound}</b></span>`
+        : t.myTurnRound === t.currentRound
+          ? `<span><b>C'est votre tour</b></span>`
+          : `<span>Votre tour : tour <b>${t.myTurnRound}</b> (dans ${t.myTurnRound - t.currentRound} tour(s))</span>`;
 
     // Caisse de secours (migrations/035). Affichée dès que le groupe est
     // configuré, même à zéro : c'est là qu'on verse, et ne rien montrer
     // laisserait croire que la fonction n'existe pas. Deux chiffres, parce
     // qu'ils répondent à deux questions différentes — ce que le groupe
     // détient, et ce que J'Y ai versé depuis le début.
+    // Bilan personnel : les trois chiffres qui disent où j'en suis dans le
+    // cycle, quel que soit mon rôle.
+    const bilanBlock = !tontineTracksMoney(t) ? '' : `
+      <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--grid);">
+        <div class="sub" style="margin:0 0 6px;">📊 Votre position dans le cycle</div>
+        <div class="project-stats-row" style="gap:16px;">
+          <span>Versé : <b>${fmt(t.myContributed)}</b></span>
+          <span>Reçu : <b>${fmt(t.myReceived)}</b></span>
+          <span>Reste à verser : <b class="${t.myRemainingToPay > 0 ? 'amt-neg' : ''}">${fmt(t.myRemainingToPay)}</b></span>
+        </div>
+      </div>`;
+
+    // Contrôle de caisse du collecteur : il manipule l'argent de tout le
+    // groupe, et personne ne lui dirait que les comptes ne tombent plus
+    // juste. Comparer ce que la cagnotte contient à ce que les cotisations
+    // pointées impliquent est la statistique la plus utile du module pour lui.
+    const ecart = t.expectedHeld === null ? null : Math.round(t.position - t.expectedHeld);
+    const controleBlock = (!tontineTracksMoney(t) || ecart === null) ? '' : `
+      <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--grid);">
+        <div class="sub" style="margin:0 0 6px;">🔐 Contrôle de caisse (vous êtes collecteur)</div>
+        <div class="project-stats-row" style="gap:16px;">
+          <span>Vous détenez : <b>${fmt(t.position)}</b></span>
+          <span>Attendu : <b>${fmt(t.expectedHeld)}</b></span>
+          <span>${ecart === 0
+            ? '<b style="color:var(--good);">✓ les comptes tombent juste</b>'
+            : `<b class="amt-neg">Écart de ${fmt(Math.abs(ecart))}</b>`}</span>
+        </div>
+        <div class="sub" style="margin:4px 0 0;">Cet argent appartient au groupe : il revient au bénéficiaire du tour.</div>
+      </div>`;
+
     const caisseBlock = !tontineTracksMoney(t) ? '' : `
       <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--grid);">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
@@ -7108,6 +7204,7 @@ function renderTontines(){
             <span>Tour actuel : <b>${t.currentRound}</b></span>
             <span>Collecté : <b>${fmt(collected)}</b> / ${fmt(total)}</span>
             ${positionLabel}
+            ${tourLabel}
           </div>
         </div>
         <div style="display:flex; align-items:flex-start; gap:10px;">
@@ -7125,6 +7222,8 @@ function renderTontines(){
         <div style="font-size:12.5px; color:var(--text-muted);">${paidCount}/${t.members.length} membres ont cotisé ce tour</div>
         <button class="btn btn-primary" data-close-round="${t.id}" ${paidCount<t.members.length?'disabled style="opacity:.45; cursor:not-allowed;"':''}>Clôturer le tour &amp; verser à ${beneficiary}</button>
       </div>
+      ${bilanBlock}
+      ${controleBlock}
       ${caisseBlock}
       ${t.history.length ? `<div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--grid);"><div class="sub" style="margin-bottom:8px;">Historique des tours</div><div class="legend">${historyHtml}</div></div>` : ''}
     </div>`;
