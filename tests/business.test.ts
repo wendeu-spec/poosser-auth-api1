@@ -194,12 +194,21 @@ describe("PATCH /api/transactions/:id — modification en place (tri-état)", ()
     expect(rubDetached.body.transaction.project_id).toBe(projectId);
 
     // projectId: null détache aussi le projet (vision "mouvement libre").
-    const projDetached = await request(app)
+    // Depuis la migration 037, l'opération doit alors retrouver une catégorie :
+    // hors projet, c'est elle qui la classe, et la rubrique vient d'être
+    // détachée. Sans catégorie, elle n'apparaîtrait nulle part.
+    await request(app)
       .patch(`/api/transactions/${id}`)
       .set("Authorization", `Bearer ${access}`)
       .send({ projectId: null })
+      .expect(400);
+    const projDetached = await request(app)
+      .patch(`/api/transactions/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ projectId: null, category: "Transport" })
       .expect(200);
     expect(projDetached.body.transaction.project_id).toBeNull();
+    expect(projDetached.body.transaction.category).toBe("Transport");
   });
 
   it("refuse rubriqueId sans projectId effectif, et une rubrique d'un autre projet", async () => {
@@ -220,10 +229,18 @@ describe("PATCH /api/transactions/:id — modification en place (tri-état)", ()
       .send({ name: "Hébergement" })
       .expect(201);
 
+    // Depuis la migration 037, une opération de projet doit porter une
+    // rubrique DE CE projet : c'est elle qui la classe, à la place de la
+    // catégorie.
+    const rubriqueA = await request(app)
+      .post(`/api/projects/${projectA.body.project.id}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Divers" })
+      .expect(201);
     const create = await request(app)
       .post("/api/transactions")
       .set("Authorization", `Bearer ${access}`)
-      .send({ type: "depense", category: "Autres", amount: 1000, occurredOn: "2026-08-18", method: "Espèces", projectId: projectA.body.project.id })
+      .send({ type: "depense", amount: 1000, occurredOn: "2026-08-18", method: "Espèces", projectId: projectA.body.project.id, rubriqueId: rubriqueA.body.rubrique.id })
       .expect(201);
     const id = create.body.transaction.id;
 
@@ -316,12 +333,23 @@ describe("Favoris de saisie rapide (/api/transaction-favorites)", () => {
     expect(rubDetached.body.transactionFavorite.rubrique_id).toBeNull();
     expect(rubDetached.body.transactionFavorite.project_id).toBe(projectId);
 
-    const projDetached = await request(app)
+    // Détacher du projet réclame une catégorie depuis la migration 037 : hors
+    // projet, c'est elle qui classe, et le favori n'en a plus — sa création
+    // dans un projet l'avait effacée. Sans elle, le favori n'aurait aucun
+    // classement du tout.
+    await request(app)
       .patch(`/api/transaction-favorites/${id}`)
       .set("Authorization", `Bearer ${access}`)
       .send({ projectId: null })
+      .expect(400);
+
+    const projDetached = await request(app)
+      .patch(`/api/transaction-favorites/${id}`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ projectId: null, category: "Transport" })
       .expect(200);
     expect(projDetached.body.transactionFavorite.project_id).toBeNull();
+    expect(projDetached.body.transactionFavorite.category).toBe("Transport");
   });
 
   it("refuse une rubrique sans projectId effectif, ou empruntée à un autre projet", async () => {
@@ -670,15 +698,21 @@ describe("Projets", () => {
     expect(created.body.project.status).toBe("actif");
     expect(created.body.project.icon).toBe("📁");
 
+    const rub = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Gros œuvre" })
+      .expect(201);
+    const rubriqueId = rub.body.rubrique.id;
     await request(app)
       .post("/api/transactions")
       .set("Authorization", `Bearer ${access}`)
-      .send({ type: "revenu", category: "Autres", amount: 200000, occurredOn: "2026-08-18", method: "Mobile Money", projectId })
+      .send({ type: "revenu", amount: 200000, occurredOn: "2026-08-18", method: "Mobile Money", projectId, rubriqueId })
       .expect(201);
     await request(app)
       .post("/api/transactions")
       .set("Authorization", `Bearer ${access}`)
-      .send({ type: "depense", category: "Autres", amount: 50000, occurredOn: "2026-08-19", method: "Espèces", projectId })
+      .send({ type: "depense", amount: 50000, occurredOn: "2026-08-19", method: "Espèces", projectId, rubriqueId })
       .expect(201);
     // Une transaction hors projet ne doit pas polluer ses totaux.
     await request(app)
@@ -729,11 +763,16 @@ describe("Projets", () => {
       .send({ name: "Voyage" })
       .expect(201);
     const projectId = created.body.project.id;
+    const rubSupp = await request(app)
+      .post(`/api/projects/${projectId}/rubriques`)
+      .set("Authorization", `Bearer ${access}`)
+      .send({ name: "Billets" })
+      .expect(201);
 
     await request(app)
       .post("/api/transactions")
       .set("Authorization", `Bearer ${access}`)
-      .send({ type: "depense", category: "Autres", amount: 10000, occurredOn: "2026-08-18", method: "Espèces", projectId })
+      .send({ type: "depense", amount: 10000, occurredOn: "2026-08-18", method: "Espèces", projectId, rubriqueId: rubSupp.body.rubrique.id })
       .expect(201);
 
     await request(app).delete(`/api/projects/${projectId}`).set("Authorization", `Bearer ${access}`).expect(204);
