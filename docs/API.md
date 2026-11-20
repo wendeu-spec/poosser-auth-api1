@@ -525,8 +525,9 @@ pointage, sans aucun mouvement.
   - Collecteur, cotisation d'un autre membre : son argent entre dans la cagnotte en
     revenu, aucun de mes comptes n'est touché. En mode participant, c'est un simple
     pointage.
-  - `late: true` déclenche la pénalité du groupe (`lateFee`) ; elle est enregistrée avec
-    la caisse de solidarité en une dépense réelle.
+  - `late: true` déclenche la pénalité du groupe (`lateFee`) ; elle est **virée vers la
+    caisse de secours** avec la caisse de solidarité (migration 035), et non plus
+    enregistrée en dépense sèche.
   - `paid: false` **défait** les mouvements que la cotisation avait créés : un clic
     malheureux ne laisse pas de virement fantôme.
 - `POST /api/tontines/:id/close-round` → `{ accountId?, occurredOn? }` — clôture le tour
@@ -540,9 +541,45 @@ pointage, sans aucun mouvement.
   effacer), celle-ci efface vraiment tout : membres, cotisations et historique des tours
   partent avec (`ON DELETE CASCADE`, voir migrations/017_tontines.sql). Le client demande
   confirmation avant d'appeler cette route.
+### Caisse de secours
+
+**Modèle** (migrations/035_tontine_caisse.sql) : une tontine camerounaise distingue deux
+caisses de nature opposée — la **caisse de secours** (*Ma'gwa'*), à **fonds perdus**, qui
+verse des **dons** à un membre lors d'un événement, et la **bank** (caisse de prêt), qui
+prête avec intérêt et qu'on « casse » en fin de cycle. POOSSER implémente la **caisse de
+secours seule** ; la bank est une autre mécanique (échéanciers, intérêts, répartition au
+prorata) et n'est pas traitée.
+
+La caisse est un COMPTE de type `caisse`, créé **paresseusement** au premier mouvement qui
+l'exige : un groupe sans solidarité ni pénalité n'en a pas. Comme la cagnotte, elle est
+**exclue du disponible**. Deux règles sont tenues côté serveur, pas seulement dans l'écran :
+l'argent ne sort **que vers un membre du groupe**, et la caisse **ne peut pas passer sous
+zéro**.
+
+- `GET /api/tontines/:id/caisse` → `{ caisseMovements: [...] }` — journal du groupe, le
+  plus récent en premier. Les cotisations sociales et pénalités n'y figurent pas : elles
+  restent rattachées à leur cotisation, et les dupliquer ferait compter deux fois.
+- `POST /api/tontines/:id/caisse/versements` → `{ amount, motif?, accountId?, memberId?,
+  occurredOn?, note? }` → `201 { tontine }`. Virement de `accountId` vers la caisse. Un
+  collecteur peut passer `memberId` pour enregistrer le versement d'un **autre** membre :
+  l'argent entre alors dans la caisse en revenu, sans toucher ses comptes.
+- `POST /api/tontines/:id/caisse/secours` → `{ amount, memberId, motif, accountId?,
+  occurredOn?, note? }` → `201 { tontine }`. `memberId` et `motif` sont **obligatoires**.
+  Si le bénéficiaire est l'utilisateur, la caisse lui verse sur `accountId` ; si c'est un
+  autre membre (collecteur seulement), l'argent quitte la caisse définitivement.
+- `DELETE /api/tontines/:id/caisse/:movementId` → `200 { tontine }` — annule le mouvement
+  et défait l'argent qu'il avait créé, comme décocher une cotisation.
+- La vue d'une tontine porte `caisseAccountId`, `caisseBalance` (ce que le groupe détient),
+  `caisseContributed` (ce que l'utilisateur y a versé, hors argent des autres) et
+  `secoursMotifs`.
+
 - Erreurs : `404 TONTINE_NOT_FOUND`, `404 TONTINE_MEMBER_NOT_FOUND`, `409
   TONTINE_ROUND_NOT_READY`, `404 ACCOUNT_NOT_FOUND`, `409 ACCOUNT_ARCHIVED`,
-  `409 TONTINE_ACCOUNT_NOT_USABLE` (la cagnotte du groupe est archivée ou inutilisable).
+  `409 TONTINE_ACCOUNT_NOT_USABLE` (la cagnotte ou la caisse ne peut pas servir de compte
+  payeur), `409 TONTINE_NOT_CONFIGURED` (aucun membre désigné), `409 TONTINE_NOT_COLLECTOR`
+  (seul un collecteur saisit ce que font les autres membres),
+  `409 CAISSE_INSUFFICIENT` (details : `available`, `requested`),
+  `404 CAISSE_MOVEMENT_NOT_FOUND`.
 - Côté comptes et opérations : `DELETE /api/transfers/:id` et les modifications ou
   suppressions d'une opération rattachée à une cotisation renvoient
   `409 TRANSACTION_IS_TONTINE_MOVEMENT` — les défaire par cette porte laisserait la
