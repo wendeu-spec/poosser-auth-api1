@@ -14,7 +14,7 @@ import type { TransactionRow } from "./transactionService.js";
  * inexistant (404), jamais comme interdit (403), pour ne rien révéler.
  */
 
-export const ACCOUNT_TYPES = ["especes", "mobile_money", "banque", "epargne", "tontine", "autre"] as const;
+export const ACCOUNT_TYPES = ["especes", "mobile_money", "banque", "epargne", "tontine", "caisse", "autre"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 /**
@@ -27,7 +27,7 @@ export type AccountType = (typeof ACCOUNT_TYPES)[number];
  * piège que le double comptage de l'épargne corrigé en migration 033. Le solde
  * est affiché sur sa propre ligne.
  */
-export const OFF_BUDGET_ACCOUNT_TYPES: readonly AccountType[] = ["tontine"];
+export const OFF_BUDGET_ACCOUNT_TYPES: readonly AccountType[] = ["tontine", "caisse"];
 
 export function isOffBudgetAccount(type: AccountType): boolean {
   return OFF_BUDGET_ACCOUNT_TYPES.includes(type);
@@ -42,6 +42,8 @@ export const METHOD_BY_ACCOUNT_TYPE: Record<AccountType, string> = {
   epargne: "Autre",
   // Une tontine se cotise presque toujours en espèces, à la réunion.
   tontine: "Espèces",
+  // La caisse de secours se remplit et se vide de la même façon.
+  caisse: "Espèces",
   autre: "Autre",
 };
 
@@ -398,10 +400,16 @@ export async function deleteTransfer(userId: string, id: string): Promise<void> 
   if (linked[0]) throw Errors.transferBacksSavings();
   // Même raison pour la tontine (migrations/034) : supprimer le virement
   // laisserait la cotisation cochée ou le tour clôturé en face de rien.
+  // Depuis la migration 035, un virement peut aussi adosser la caisse de
+  // solidarité d'une cotisation (`extra_transfer_id`) ou un mouvement de la
+  // caisse de secours. Sans ces deux lignes, la contrainte RESTRICT remontait
+  // en erreur 500 au lieu d'un refus explicite.
   const { rows: tontineLinked } = await pool.query(
-    `SELECT 1 FROM tontine_contributions WHERE transfer_id = $1
+    `SELECT 1 FROM tontine_contributions WHERE transfer_id = $1 OR extra_transfer_id = $1
      UNION ALL
-     SELECT 1 FROM tontine_round_history WHERE transfer_id = $1`,
+     SELECT 1 FROM tontine_round_history WHERE transfer_id = $1
+     UNION ALL
+     SELECT 1 FROM tontine_caisse_movements WHERE transfer_id = $1`,
     [id],
   );
   if (tontineLinked[0]) throw Errors.transferBacksTontine();

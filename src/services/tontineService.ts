@@ -9,6 +9,7 @@ import {
   createLinkedAccount,
   createTransferIn,
   ensureDefaultAccount,
+  isOffBudgetAccount,
   type AccountType,
 } from "./accountService.js";
 
@@ -84,6 +85,16 @@ export interface TontineView {
   position: number;
   /** Cotisations du tour en cours payées en retard (pénalité appliquée). */
   lateThisRound: Record<string, boolean>;
+
+  // ---- Caisse de secours (migrations/035) ----
+  /** Compte de la caisse. NULL = le groupe n'a encore rien mis de côté. */
+  caisseAccountId: string | null;
+  /** Ce que la caisse détient aujourd'hui. Jamais compté dans le « disponible ». */
+  caisseBalance: number;
+  /** Ce que l'utilisateur y a versé depuis le début (hors argent des autres). */
+  caisseContributed: number;
+  /** Motifs de secours du groupe, ou la liste par défaut. */
+  secoursMotifs: string[];
 }
 
 export interface TontineMoneySettings {
@@ -91,6 +102,8 @@ export interface TontineMoneySettings {
   role?: TontineRole;
   lateFee?: number;
   solidarityAmount?: number;
+  /** Motifs de secours propres au groupe ; absent ou vide = liste par défaut. */
+  secoursMotifs?: string[];
 }
 
 export interface CreateTontineInput extends TontineMoneySettings {
@@ -177,7 +190,49 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
     // par diverger des mouvements.
     position: tontine.account_id ? await accountBalanceOf(userId, tontine.account_id, client) : 0,
     lateThisRound,
+    // ---- Caisse de secours (migration 035) ----
+    caisseAccountId: tontine.caisse_account_id ?? null,
+    // Ce que le groupe détient. Jamais compté dans le « disponible » : cet
+    // argent appartient au groupe et ne peut sortir que vers un membre.
+    caisseBalance: tontine.caisse_account_id
+      ? await accountBalanceOf(userId, tontine.caisse_account_id, client)
+      : 0,
+    // Ce que l'utilisateur y a versé depuis le début, toutes sources
+    // confondues — le chiffre qui manquait, et la raison d'être de la caisse
+    // comme compte plutôt que comme catégorie de dépense.
+    caisseContributed: tontine.caisse_account_id
+      ? await caisseContributedByUser(client, userId, tontine)
+      : 0,
+    secoursMotifs: secoursMotifsOf(tontine),
   };
+}
+
+/**
+ * Somme de ce que l'utilisateur a personnellement versé dans la caisse : ses
+ * cotisations sociales et pénalités (virements adossés à ses cotisations) et
+ * ses versements libres. Les entrées venues des AUTRES membres, qu'un
+ * collecteur encaisse pour le groupe, en sont exclues — ce n'est pas son
+ * argent.
+ */
+async function caisseContributedByUser(
+  client: PoolClient | typeof pool,
+  userId: string,
+  tontine: { id: string; caisse_account_id: string | null },
+): Promise<number> {
+  const { rows } = await client.query<{ total: string }>(
+    `SELECT COALESCE(SUM(tr.amount), 0) AS total
+       FROM transfers tr
+      WHERE tr.user_id = $1 AND tr.to_account_id = $2
+        AND (
+          tr.id IN (SELECT extra_transfer_id FROM tontine_contributions
+                     WHERE tontine_id = $3 AND extra_transfer_id IS NOT NULL)
+          OR
+          tr.id IN (SELECT transfer_id FROM tontine_caisse_movements
+                     WHERE tontine_id = $3 AND kind = 'versement' AND transfer_id IS NOT NULL)
+        )`,
+    [userId, tontine.caisse_account_id, tontine.id],
+  );
+  return Number(rows[0]!.total);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +249,9 @@ interface TontineRow {
   role: TontineRole;
   late_fee: string;
   solidarity_amount: string;
+  /** Caisse de secours du groupe, créée au premier besoin (migration 035). */
+  caisse_account_id: string | null;
+  secours_motifs: string[] | null;
 }
 
 function todayUtc(): string {
@@ -222,7 +280,9 @@ async function resolveUserAccount(
     // incompréhensible. On le dit clairement ici.
     if (accountId === potAccountId) throw Errors.tontineAccountNotUsable();
     const account = await assertAccountUsable(userId, accountId, client);
-    if (account.type === "tontine") throw Errors.tontineAccountNotUsable();
+    // Ni une cagnotte ni une caisse ne sont de l'argent dans lequel on puise :
+    // elles appartiennent au groupe (voir OFF_BUDGET_ACCOUNT_TYPES).
+    if (isOffBudgetAccount(account.type)) throw Errors.tontineAccountNotUsable();
     return { id: account.id, type: account.type };
   }
   const id = await ensureDefaultAccount(userId, client);
@@ -231,34 +291,108 @@ async function resolveUserAccount(
 }
 
 /**
- * Caisse de solidarité + pénalité de retard, en UNE dépense réelle sur le
- * compte qui paie. Volontairement pas un virement vers la cagnotte : cet
- * argent ne revient jamais, et le faire transiter par la cagnotte empêcherait
- * celle-ci de retomber à zéro en fin de cycle.
+ * Motifs de secours proposés par défaut. Dans le code plutôt qu'en base (même
+ * principe que PLANS) : la liste évolue par déploiement, et un groupe qui en
+ * veut une autre la pose dans `secours_motifs`.
+ */
+export const DEFAULT_SECOURS_MOTIFS = [
+  "Décès",
+  "Maladie",
+  "Naissance",
+  "Mariage",
+  "Scolarité",
+  "Incendie",
+  "Autre",
+] as const;
+
+export function secoursMotifsOf(t: { secours_motifs: string[] | null }): string[] {
+  return t.secours_motifs && t.secours_motifs.length ? t.secours_motifs : [...DEFAULT_SECOURS_MOTIFS];
+}
+
+/**
+ * Crée la caisse du groupe au premier besoin, et renvoie son id.
+ *
+ * Création PARESSEUSE, et non à la création du groupe comme la cagnotte : un
+ * groupe sans caisse de solidarité ni pénalité n'a aucune raison de traîner un
+ * compte vide dans la page Comptes. Le compte naît exactement quand il y a
+ * quelque chose à y mettre.
+ */
+async function ensureCaisseAccount(client: PoolClient, userId: string, t: TontineRow): Promise<string> {
+  if (t.caisse_account_id) return t.caisse_account_id;
+  const accountId = await createLinkedAccount(client, userId, {
+    name: `Caisse ${t.name}`,
+    type: "caisse",
+  });
+  await client.query(`UPDATE tontines SET caisse_account_id = $2 WHERE id = $1`, [t.id, accountId]);
+  t.caisse_account_id = accountId;
+  return accountId;
+}
+
+/**
+ * Caisse de solidarité + pénalité de retard, en UN virement vers la caisse du
+ * groupe (migration 035).
+ *
+ * C'était une dépense sèche jusqu'ici : l'argent quittait le compte et
+ * disparaissait, si bien que personne ne savait ce que la caisse détenait.
+ * C'est maintenant un virement — mais surtout vers la CAISSE, jamais vers la
+ * cagnotte : celle-ci doit retomber à zéro en fin de cycle, et y faire
+ * transiter de l'argent qui ne tourne pas détruirait cette vérification.
  */
 async function recordExtras(
   client: PoolClient,
   userId: string,
   t: TontineRow,
   accountId: string,
-  accountType: AccountType,
   late: boolean,
   occurredOn: string,
 ): Promise<string | null> {
-  const solidarity = Number(t.solidarity_amount);
-  const penalty = late ? Number(t.late_fee) : 0;
-  const total = round2(solidarity + penalty);
+  const total = extrasTotal(t, late);
   if (total <= 0) return null;
 
-  const parts = [
-    solidarity > 0 ? "caisse de solidarité" : null,
+  const caisseId = await ensureCaisseAccount(client, userId, t);
+  const { transfer } = await createTransferIn(client, userId, {
+    fromAccountId: accountId,
+    toAccountId: caisseId,
+    amount: total,
+    occurredOn,
+    note: `${t.name} — ${extrasLabel(t, late)}`,
+  });
+  return transfer.id;
+}
+
+function extrasTotal(t: TontineRow, late: boolean): number {
+  return round2(Number(t.solidarity_amount) + (late ? Number(t.late_fee) : 0));
+}
+
+function extrasLabel(t: TontineRow, late: boolean): string {
+  const penalty = late ? Number(t.late_fee) : 0;
+  return [
+    Number(t.solidarity_amount) > 0 ? "caisse de solidarité" : null,
     penalty > 0 ? "pénalité de retard" : null,
   ].filter(Boolean).join(" + ");
+}
 
+/**
+ * Collecteur : la caisse de solidarité et la pénalité d'un AUTRE membre
+ * entrent dans la caisse que je détiens. Argent du groupe, venu de l'extérieur
+ * de mes finances — un revenu sur la caisse, jamais un virement depuis un de
+ * mes comptes.
+ */
+async function recordCaisseInflowForOther(
+  client: PoolClient,
+  userId: string,
+  t: TontineRow,
+  memberName: string,
+  late: boolean,
+  occurredOn: string,
+): Promise<string | null> {
+  const total = extrasTotal(t, late);
+  if (total <= 0) return null;
+  const caisseId = await ensureCaisseAccount(client, userId, t);
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
-     VALUES ($1, 'depense', $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [userId, TONTINE_CATEGORY, total, occurredOn, METHOD_BY_ACCOUNT_TYPE[accountType], `${t.name} — ${parts}`, accountId],
+     VALUES ($1, 'revenu', $2, $3, $4, 'Espèces', $5, $6) RETURNING id`,
+    [userId, TONTINE_CATEGORY, total, occurredOn, `${t.name} — ${extrasLabel(t, late)} de ${memberName}`, caisseId],
   );
   return rows[0]!.id;
 }
@@ -280,10 +414,17 @@ async function recordPotInflow(
   return rows[0]!.id;
 }
 
+interface ContributionMoney {
+  transfer_id: string | null;
+  pot_transaction_id: string | null;
+  extra_transaction_id: string | null;
+  extra_transfer_id: string | null;
+}
+
 /** Défait tous les mouvements d'une cotisation qu'on décoche. */
 async function undoContributionMoney(
   client: PoolClient,
-  contribution: { transfer_id: string | null; pot_transaction_id: string | null; extra_transaction_id: string | null },
+  contribution: ContributionMoney,
   contributionId: string,
 ): Promise<void> {
   // Les colonnes sont en ON DELETE RESTRICT : on détache AVANT de supprimer,
@@ -291,14 +432,15 @@ async function undoContributionMoney(
   await client.query(
     `UPDATE tontine_contributions
         SET paid = false, paid_at = NULL, late = false,
-            transfer_id = NULL, pot_transaction_id = NULL, extra_transaction_id = NULL
+            transfer_id = NULL, pot_transaction_id = NULL,
+            extra_transaction_id = NULL, extra_transfer_id = NULL
       WHERE id = $1`,
     [contributionId],
   );
   // Supprimer le virement emporte sa dépense de frais (ON DELETE CASCADE,
   // migrations/029).
-  if (contribution.transfer_id) {
-    await client.query(`DELETE FROM transfers WHERE id = $1`, [contribution.transfer_id]);
+  for (const trId of [contribution.transfer_id, contribution.extra_transfer_id]) {
+    if (trId) await client.query(`DELETE FROM transfers WHERE id = $1`, [trId]);
   }
   for (const txId of [contribution.pot_transaction_id, contribution.extra_transaction_id]) {
     if (txId) await client.query(`DELETE FROM transactions WHERE id = $1`, [txId]);
@@ -334,8 +476,8 @@ export async function createTontine(userId: string, input: CreateTontineInput): 
     });
 
     const { rows } = await client.query<{ id: string }>(
-      `INSERT INTO tontines (user_id, name, contribution_amount, frequency, account_id, role, late_fee, solidarity_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      `INSERT INTO tontines (user_id, name, contribution_amount, frequency, account_id, role, late_fee, solidarity_amount, secours_motifs)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [
         userId,
         input.name,
@@ -345,6 +487,7 @@ export async function createTontine(userId: string, input: CreateTontineInput): 
         input.role ?? "participant",
         input.lateFee ?? 0,
         input.solidarityAmount ?? 0,
+        input.secoursMotifs ?? [],
       ],
     );
     const tontineId = rows[0]!.id;
@@ -419,7 +562,8 @@ export async function updateTontine(
          frequency = COALESCE($4, frequency),
          role = COALESCE($5, role),
          late_fee = COALESCE($6, late_fee),
-         solidarity_amount = COALESCE($7, solidarity_amount)
+         solidarity_amount = COALESCE($7, solidarity_amount),
+         secours_motifs = COALESCE($8, secours_motifs)
        WHERE id = $1`,
       [
         tontineId,
@@ -429,6 +573,7 @@ export async function updateTontine(
         input.role ?? null,
         input.lateFee ?? null,
         input.solidarityAmount ?? null,
+        input.secoursMotifs ?? null,
       ],
     );
 
@@ -501,8 +646,11 @@ export async function markContribution(
 ): Promise<TontineView> {
   return withTransaction(async (client) => {
     const { rows: tontineRows } = await client.query<TontineRow>(
-      `SELECT id, name, contribution_amount, current_round, account_id, my_member_id, role, late_fee, solidarity_amount
-         FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      // `SELECT *` et non une liste de colonnes : une liste figée a déjà causé
+      // un vrai défaut — `caisse_account_id` en était absent, si bien que
+      // ensureCaisseAccount ne voyait jamais la caisse existante et en créait
+      // une nouvelle à chaque cotisation.
+      `SELECT * FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [tontineId, userId],
     );
     const tontine = tontineRows[0];
@@ -517,14 +665,11 @@ export async function markContribution(
 
     // Ligne de cotisation du tour en cours, verrouillée : deux clics
     // simultanés ne doivent pas produire deux virements.
-    const { rows: existingRows } = await client.query<{
-      id: string; paid: boolean;
-      transfer_id: string | null; pot_transaction_id: string | null; extra_transaction_id: string | null;
-    }>(
+    const { rows: existingRows } = await client.query<ContributionMoney & { id: string; paid: boolean }>(
       `INSERT INTO tontine_contributions (tontine_id, member_id, round_number, paid)
        VALUES ($1, $2, $3, false)
        ON CONFLICT (member_id, round_number) DO UPDATE SET tontine_id = EXCLUDED.tontine_id
-       RETURNING id, paid, transfer_id, pot_transaction_id, extra_transaction_id`,
+       RETURNING id, paid, transfer_id, pot_transaction_id, extra_transaction_id, extra_transfer_id`,
       [tontineId, memberId, tontine.current_round],
     );
     const contribution = existingRows[0]!;
@@ -551,6 +696,7 @@ export async function markContribution(
     let transferId: string | null = null;
     let potTxId: string | null = null;
     let extraTxId: string | null = null;
+    let extraTrId: string | null = null;
 
     if (tracksMoney(tontine)) {
       const potId = tontine.account_id!;
@@ -565,22 +711,27 @@ export async function markContribution(
           note: `${tontine.name} — cotisation tour ${tontine.current_round}`,
         });
         transferId = transfer.id;
-        extraTxId = await recordExtras(client, userId, tontine, from.id, from.type, late, occurredOn);
+        extraTrId = await recordExtras(client, userId, tontine, from.id, late, occurredOn);
       } else if (tontine.role === "collecteur") {
-        // L'argent des autres, y compris leur caisse et leur pénalité, entre
-        // dans la cagnotte que je détiens : une seule entrée, car je reçois
-        // bien la somme complète.
-        const total = round2(amount + Number(tontine.solidarity_amount) + (late ? Number(tontine.late_fee) : 0));
-        potTxId = await recordPotInflow(client, userId, tontine, member.name, total, occurredOn);
+        // L'argent d'un autre membre entre dans la cagnotte que je détiens,
+        // mais SEULE sa cotisation : sa caisse de solidarité et sa pénalité
+        // vont dans la CAISSE (migration 035).
+        //
+        // Jusqu'ici tout entrait dans la cagnotte, ce qui l'empêchait de
+        // retomber à zéro en fin de cycle dès que le groupe avait une caisse —
+        // la cagnotte encaissait une solidarité qu'elle ne reversait jamais.
+        potTxId = await recordPotInflow(client, userId, tontine, member.name, amount, occurredOn);
+        extraTxId = await recordCaisseInflowForOther(client, userId, tontine, member.name, late, occurredOn);
       }
     }
 
     await client.query(
       `UPDATE tontine_contributions
           SET paid = true, paid_at = now(), late = $2,
-              transfer_id = $3, pot_transaction_id = $4, extra_transaction_id = $5
+              transfer_id = $3, pot_transaction_id = $4,
+              extra_transaction_id = $5, extra_transfer_id = $6
         WHERE id = $1`,
-      [contribution.id, late, transferId, potTxId, extraTxId],
+      [contribution.id, late, transferId, potTxId, extraTxId, extraTrId],
     );
 
     const view = await loadTontineView(client, userId, tontineId);
@@ -702,4 +853,228 @@ export async function closeRound(
 export async function deleteTontine(userId: string, tontineId: string): Promise<void> {
   const { rowCount } = await pool.query(`DELETE FROM tontines WHERE id = $1 AND user_id = $2`, [tontineId, userId]);
   if (!rowCount) throw Errors.tontineNotFound();
+}
+
+// ---------------------------------------------------------------------------
+// Caisse de secours (migration 035)
+// ---------------------------------------------------------------------------
+//
+// Une caisse de secours est à FONDS PERDUS : on y verse sans récupérer sa
+// mise, et elle verse des DONS à un membre lors d'un événement — décès,
+// maladie, naissance, mariage, scolarité, incendie. Ce n'est ni un compte
+// d'épargne, ni une banque : d'où les deux règles tenues côté serveur et non
+// seulement dans l'écran.
+//
+//   1. L'argent ne sort QUE vers un membre du groupe. Sans cette contrainte,
+//      la caisse deviendrait une tirelire personnelle et cesserait d'être
+//      l'argent du groupe.
+//   2. La caisse ne peut pas passer sous zéro. On ne distribue pas un argent
+//      que le groupe n'a pas encaissé.
+
+export interface CaisseMovementRow {
+  id: string;
+  tontine_id: string;
+  kind: "versement" | "secours";
+  amount: string;
+  motif: string | null;
+  member_id: string | null;
+  member_name: string | null;
+  occurred_on: string;
+  note: string | null;
+  created_at: Date;
+}
+
+export interface CaisseMovementInput {
+  amount: number;
+  /** Obligatoire pour un secours : le membre qui reçoit. */
+  memberId?: string;
+  motif?: string;
+  /** Compte réel débité (versement) ou crédité (secours reçu). */
+  accountId?: string;
+  occurredOn?: string;
+  note?: string;
+}
+
+async function lockTontine(client: PoolClient, userId: string, tontineId: string): Promise<TontineRow> {
+  const { rows } = await client.query<TontineRow>(
+    `SELECT * FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+    [tontineId, userId],
+  );
+  const t = rows[0];
+  if (!t) throw Errors.tontineNotFound();
+  return t;
+}
+
+async function memberOfTontine(client: PoolClient, tontineId: string, memberId: string) {
+  const { rows } = await client.query<{ id: string; name: string }>(
+    `SELECT id, name FROM tontine_members WHERE id = $1 AND tontine_id = $2`,
+    [memberId, tontineId],
+  );
+  const m = rows[0];
+  if (!m) throw Errors.tontineMemberNotFound();
+  return m;
+}
+
+/** Verse librement à la caisse du groupe (aide, maladie, deuil...). */
+export async function addCaisseVersement(
+  userId: string,
+  tontineId: string,
+  input: CaisseMovementInput,
+): Promise<TontineView> {
+  return withTransaction(async (client) => {
+    const tontine = await lockTontine(client, userId, tontineId);
+    if (!tracksMoney(tontine)) throw Errors.tontineNotConfigured();
+    const occurredOn = input.occurredOn ?? todayUtc();
+    const caisseId = await ensureCaisseAccount(client, userId, tontine);
+
+    let transferId: string | null = null;
+    let transactionId: string | null = null;
+
+    if (input.memberId && input.memberId !== tontine.my_member_id) {
+      // Collecteur : le versement d'un autre membre entre dans la caisse que je
+      // détiens, sans toucher mes comptes.
+      if (tontine.role !== "collecteur") throw Errors.tontineNotCollector();
+      const member = await memberOfTontine(client, tontineId, input.memberId);
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
+         VALUES ($1, 'revenu', $2, $3, $4, 'Espèces', $5, $6) RETURNING id`,
+        [userId, TONTINE_CATEGORY, input.amount, occurredOn,
+         `${tontine.name} — versement caisse de ${member.name}${input.motif ? ` (${input.motif})` : ""}`, caisseId],
+      );
+      transactionId = rows[0]!.id;
+    } else {
+      // Mon propre versement : virement de mon compte vers la caisse.
+      const from = await resolveUserAccount(client, userId, input.accountId, tontine.account_id!);
+      const { transfer } = await createTransferIn(client, userId, {
+        fromAccountId: from.id,
+        toAccountId: caisseId,
+        amount: input.amount,
+        occurredOn,
+        note: `${tontine.name} — caisse${input.motif ? ` (${input.motif})` : ""}`,
+      });
+      transferId = transfer.id;
+    }
+
+    await client.query(
+      `INSERT INTO tontine_caisse_movements
+         (tontine_id, user_id, kind, amount, motif, transfer_id, transaction_id, occurred_on, note)
+       VALUES ($1, $2, 'versement', $3, $4, $5, $6, $7, $8)`,
+      [tontineId, userId, input.amount, input.motif ?? null, transferId, transactionId, occurredOn, input.note ?? null],
+    );
+
+    const view = await loadTontineView(client, userId, tontineId);
+    if (!view) throw new Error("[addCaisseVersement] tontine introuvable après versement");
+    return view;
+  });
+}
+
+/** Verse un secours de la caisse à un membre du groupe. */
+export async function addSecours(
+  userId: string,
+  tontineId: string,
+  input: CaisseMovementInput,
+): Promise<TontineView> {
+  return withTransaction(async (client) => {
+    const tontine = await lockTontine(client, userId, tontineId);
+    if (!tracksMoney(tontine)) throw Errors.tontineNotConfigured();
+    if (!tontine.caisse_account_id) throw Errors.caisseEmpty({ available: 0, requested: input.amount });
+    if (!input.memberId) throw Errors.validation({ field: "memberId", reason: "required for a secours" });
+    if (!input.motif) throw Errors.validation({ field: "motif", reason: "required for a secours" });
+
+    // Règle 1 : le bénéficiaire est forcément un membre de CE groupe.
+    const member = await memberOfTontine(client, tontineId, input.memberId);
+    const caisseId = tontine.caisse_account_id;
+    const occurredOn = input.occurredOn ?? todayUtc();
+
+    // Règle 2 : la caisse ne passe pas sous zéro. Vérifié avant d'écrire quoi
+    // que ce soit, parce que le solde ne dépend pas de ce qu'on s'apprête à
+    // faire — contrairement à l'épargne, où la réservation elle-même entre
+    // dans le calcul.
+    const solde = await accountBalanceOf(userId, caisseId, client);
+    if (input.amount > solde + 0.005) {
+      throw Errors.caisseEmpty({ available: round2(solde), requested: round2(input.amount) });
+    }
+
+    let transferId: string | null = null;
+    let transactionId: string | null = null;
+
+    if (input.memberId === tontine.my_member_id) {
+      // C'est moi qui reçois : la caisse me verse sur un compte réel.
+      const to = await resolveUserAccount(client, userId, input.accountId, tontine.account_id!);
+      const { transfer } = await createTransferIn(client, userId, {
+        fromAccountId: caisseId,
+        toAccountId: to.id,
+        amount: input.amount,
+        occurredOn,
+        note: `${tontine.name} — secours (${input.motif})`,
+      });
+      transferId = transfer.id;
+    } else {
+      // Un autre membre reçoit : l'argent quitte la caisse pour de bon. Ne
+      // concerne que le collecteur — un participant ne détient pas la caisse
+      // et n'a donc rien à saisir.
+      if (tontine.role !== "collecteur") throw Errors.tontineNotCollector();
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
+         VALUES ($1, 'depense', $2, $3, $4, 'Espèces', $5, $6) RETURNING id`,
+        [userId, TONTINE_CATEGORY, input.amount, occurredOn,
+         `${tontine.name} — secours à ${member.name} (${input.motif})`, caisseId],
+      );
+      transactionId = rows[0]!.id;
+    }
+
+    await client.query(
+      `INSERT INTO tontine_caisse_movements
+         (tontine_id, user_id, kind, amount, motif, member_id, transfer_id, transaction_id, occurred_on, note)
+       VALUES ($1, $2, 'secours', $3, $4, $5, $6, $7, $8, $9)`,
+      [tontineId, userId, input.amount, input.motif, member.id, transferId, transactionId, occurredOn, input.note ?? null],
+    );
+
+    const view = await loadTontineView(client, userId, tontineId);
+    if (!view) throw new Error("[addSecours] tontine introuvable après secours");
+    return view;
+  });
+}
+
+/**
+ * Annule un mouvement de caisse et défait l'argent qu'il avait créé — même
+ * principe que décocher une cotisation : une saisie erronée ne doit pas
+ * laisser un virement orphelin.
+ */
+export async function deleteCaisseMovement(userId: string, tontineId: string, movementId: string): Promise<TontineView> {
+  return withTransaction(async (client) => {
+    await lockTontine(client, userId, tontineId);
+    const { rows } = await client.query<{ id: string; transfer_id: string | null; transaction_id: string | null }>(
+      `SELECT id, transfer_id, transaction_id FROM tontine_caisse_movements
+        WHERE id = $1 AND tontine_id = $2 AND user_id = $3`,
+      [movementId, tontineId, userId],
+    );
+    const mv = rows[0];
+    if (!mv) throw Errors.caisseMovementNotFound();
+
+    // ON DELETE RESTRICT : on supprime la ligne AVANT ses supports.
+    await client.query(`DELETE FROM tontine_caisse_movements WHERE id = $1`, [mv.id]);
+    if (mv.transfer_id) await client.query(`DELETE FROM transfers WHERE id = $1`, [mv.transfer_id]);
+    if (mv.transaction_id) await client.query(`DELETE FROM transactions WHERE id = $1`, [mv.transaction_id]);
+
+    const view = await loadTontineView(client, userId, tontineId);
+    if (!view) throw new Error("[deleteCaisseMovement] tontine introuvable après annulation");
+    return view;
+  });
+}
+
+/** Journal de la caisse d'un groupe, le plus récent en premier. */
+export async function listCaisseMovements(userId: string, tontineId: string): Promise<CaisseMovementRow[]> {
+  const { rows: owned } = await pool.query(`SELECT 1 FROM tontines WHERE id = $1 AND user_id = $2`, [tontineId, userId]);
+  if (!owned[0]) throw Errors.tontineNotFound();
+  const { rows } = await pool.query<CaisseMovementRow>(
+    `SELECT c.id, c.tontine_id, c.kind, c.amount, c.motif, c.member_id,
+            m.name AS member_name, c.occurred_on, c.note, c.created_at
+       FROM tontine_caisse_movements c
+       LEFT JOIN tontine_members m ON m.id = c.member_id
+      WHERE c.tontine_id = $1 AND c.user_id = $2
+      ORDER BY c.occurred_on DESC, c.created_at DESC`,
+    [tontineId, userId],
+  );
+  return rows;
 }
