@@ -725,6 +725,14 @@
      navigateur : sans cette règle, le bandeau « formules non activées »
      resterait affiché une fois les limites allumées, et mentirait. */
   #subNotEnforced[hidden] { display: none !important; }
+
+  /* Même piège, en plus général : `.field` pose display:flex, qui l'emporte
+     sur le [hidden] du navigateur. Sans cette règle, un champ masqué par
+     JavaScript (le compte à débiter pour la cotisation d'un AUTRE membre, les
+     frais à l'encaissement...) resterait affiché, et l'utilisateur croirait
+     devoir le remplir. Toute la famille des champs est traitée d'un coup
+     plutôt qu'au cas par cas. */
+  .field[hidden] { display: none !important; }
   #planDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 420px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
   #planDialog::backdrop { background: rgba(8,18,34,.55); }
 
@@ -733,6 +741,10 @@
      un prompt() ne pouvait plus suffire. */
   #savingsDialog { border: 0; border-radius: 18px; padding: 22px; width: min(94vw, 470px); max-height: 90vh; overflow-y: auto; background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
   #savingsDialog::backdrop { background: rgba(8,18,34,.55); }
+  #tontineDialog { border: 0; border-radius: 18px; padding: 22px; width: min(94vw, 470px); max-height: 90vh; overflow-y: auto; background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
+  #tontineDialog::backdrop { background: rgba(8,18,34,.55); }
+  #tontineDialog .field { margin-top: 12px; }
+  #tontineDialog .field input, #tontineDialog .field select { width: 100%; }
   #savingsDialog .field { margin-top: 12px; }
   #savingsDialog .field input, #savingsDialog .field select { width: 100%; }
   .mode-choice { display: grid; gap: 8px; margin-top: 12px; }
@@ -1174,6 +1186,15 @@
     </div>
 
     <div class="goals-grid" id="accountsGrid" style="margin-bottom:18px;"></div>
+
+    <!-- Positions de tontine : ni des comptes où l'on puise, ni de l'argent
+         disponible. Affichées à part pour que l'engagement reste visible sans
+         être confondu avec de l'argent dépensable (voir migrations/034). -->
+    <div class="card" id="tontinePositionsCard" style="margin-bottom:18px; display:none;">
+      <h3>Mes tontines</h3>
+      <div class="sub">Ce que vous avez déjà cotisé et ce qu'il vous reste à verser. Cet argent n'est pas compté dans votre disponible : vous ne pouvez pas le dépenser.</div>
+      <div id="tontinePositionsList" style="margin-top:12px;"></div>
+    </div>
 
     <div class="card" style="margin-bottom:18px;">
       <h3>Virement entre comptes</h3>
@@ -1636,6 +1657,32 @@
           <label id="tonMembersLabel">Membres (séparés par une virgule)</label>
           <input type="text" id="tonMembers" placeholder="Ex: Awa, Bella, Cyrille, Djamila" required>
         </div>
+
+        <!-- Argent réel : tant qu'aucun membre n'est désigné, le groupe reste
+             un simple pointage et ne déplace rien (voir migrations/034). -->
+        <div class="field">
+          <label for="tonMyMember">Lequel de ces membres êtes-vous ?</label>
+          <select id="tonMyMember"></select>
+        </div>
+        <div class="field">
+          <label for="tonRole">Votre rôle</label>
+          <select id="tonRole">
+            <option value="participant">Participant — je cotise et j'attends mon tour</option>
+            <option value="collecteur">Collecteur — je récolte l'argent de tous</option>
+          </select>
+        </div>
+        <div class="field">
+          <label id="tonSolidarityLabel">Caisse de solidarité par tour (0 si aucune)</label>
+          <input type="number" id="tonSolidarity" min="0" value="0">
+        </div>
+        <div class="field">
+          <label id="tonLateFeeLabel">Pénalité de retard (0 si aucune)</label>
+          <input type="number" id="tonLateFee" min="0" value="0">
+        </div>
+        <div class="field" style="grid-column:1/-1;">
+          <div class="sub" style="margin:0;">Cotiser et encaisser sont des <strong>virements</strong> entre vos comptes et la cagnotte du groupe : ni revenu, ni dépense, puisque cet argent vous revient. La caisse de solidarité et les pénalités, elles, sont de vraies dépenses — vous ne les récupérez jamais.</div>
+        </div>
+
         <div class="field">
           <button type="submit" class="btn btn-primary" id="tontineSubmitBtn">Créer le groupe</button>
         </div>
@@ -1929,6 +1976,47 @@
     <button type="button" class="btn btn-ghost" id="planDialogClose">Fermer</button>
     <button type="button" class="btn btn-primary" id="planDialogSee">Voir les formules</button>
   </div>
+</dialog>
+
+<!-- Cotisation de tontine : n'apparaît que lorsque c'est MON argent qui bouge
+     (ma propre cotisation, ou toute cotisation si je suis collecteur). Pour les
+     autres membres en mode participant, cocher reste un simple pointage et
+     cette fenêtre ne s'ouvre pas. -->
+<dialog id="tontineDialog" aria-labelledby="tontineDialogTitle">
+  <form id="tontineMoneyForm" method="dialog">
+    <h3 id="tontineDialogTitle" style="margin:0 0 4px;">Cotisation</h3>
+    <p class="sub" id="tontineDialogSub" style="margin:0;"></p>
+
+    <div class="field" id="tontineAccountField">
+      <label for="tontineAccount" id="tontineAccountLabel">Compte à débiter</label>
+      <select id="tontineAccount"></select>
+    </div>
+    <div class="field" id="tontineFeeField">
+      <label for="tontineFee">Frais du transfert (optionnel)</label>
+      <input type="number" id="tontineFee" min="0" step="1" value="0">
+    </div>
+    <div class="field" id="tontineLateField">
+      <label class="mode-choice" style="margin:0;">
+        <span style="display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--border); border-radius:12px;">
+          <input type="checkbox" id="tontineLate" style="width:auto; margin-top:3px; flex:none;">
+          <span>
+            <span class="t">Cotisation payée en retard</span>
+            <span class="d" id="tontineLateDesc"></span>
+          </span>
+        </span>
+      </label>
+    </div>
+    <div class="field">
+      <label for="tontineDate">Date</label>
+      <input type="date" id="tontineDate">
+    </div>
+
+    <div id="tontineMsg" class="sub" role="status" style="margin:12px 0 0; min-height:1em;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
+      <button type="button" class="btn btn-ghost" id="tontineCancel">Annuler</button>
+      <button type="submit" class="btn btn-primary" id="tontineSubmit">Valider</button>
+    </div>
+  </form>
 </dialog>
 
 <!-- Versement vers un objectif d'épargne, ou retrait. Le choix du mode est le
@@ -2398,9 +2486,23 @@ function mapTontineFromApi(t){
     paidAtThisRound,
     history: t.history.slice().reverse().map(h => ({ round: h.round, beneficiary: h.beneficiaryName, total: h.totalAmount })),
     currentRoundStartedAt: t.currentRoundStartedAt,
+    // Argent réel (migrations/034). `position` est le solde de la cagnotte :
+    // ce que le groupe me doit (positif) ou ce que je lui dois encore
+    // (négatif, après avoir encaissé mon tour). Jamais compté dans le
+    // disponible — ce n'est pas de l'argent que je peux dépenser.
+    accountId: t.accountId || null,
+    myMemberId: t.myMemberId || null,
+    myMemberName: (t.members.find(m => m.id === t.myMemberId) || {}).name || null,
+    role: t.role || 'participant',
+    lateFee: Number(t.lateFee || 0),
+    solidarityAmount: Number(t.solidarityAmount || 0),
+    position: Number(t.position || 0),
     _memberIdByName: memberIdByName,
   };
 }
+
+/** Une tontine ne déplace d'argent que si elle a une cagnotte ET un membre désigné. */
+function tontineTracksMoney(t){ return Boolean(t.accountId && t.myMemberId); }
 
 // Jours approximatifs par fréquence pour l'échéance de cotisation — une
 // approximation (mensuelle ≈ 30j, trimestrielle ≈ 90j) suffit pour un badge de
@@ -3381,6 +3483,16 @@ function renderDashboard(){
   // reste exactement le solde du mois (revenus − dépenses, frais compris).
   const comptes = totalAvailable();
   const dispo = comptes - ep;
+  // Position de tontine : volontairement hors du grand chiffre (ce n'est pas
+  // de l'argent disponible, voir activeAccounts), mais jamais cachée — ce que
+  // je dois encore au groupe est un engagement bien réel.
+  const tonDu = totalTontineDue(), tonCreance = totalTontineOwed();
+  const tontineLine = (tonDu > 0 || tonCreance > 0)
+    ? `<div class="trend" style="opacity:.8;">🤝 ${[
+        tonCreance > 0 ? `${fmt(tonCreance)} que vos tontines vous doivent` : null,
+        tonDu > 0 ? `${fmt(tonDu)} qu'il vous reste à cotiser` : null,
+      ].filter(Boolean).join(' · ')}</div>`
+    : '';
   const nbIn = currentMonthTx().filter(t=>t.type==='revenu').length;
   const nbOut = currentMonthTx().filter(t=>t.type==='depense').length;
   const fees = monthTransferFees();
@@ -3394,6 +3506,7 @@ function renderDashboard(){
     <div class="big${dispo < 0 ? ' neg' : ''}">${fmt(dispo)}</div>
     <div class="trend">${trendIcon}${solde >= 0 ? '+' : '−'} ${fmt(Math.abs(solde))} depuis le ${since}</div>
     ${ep > 0 ? `<div class="trend" style="opacity:.8;">${fmt(comptes)} sur vos comptes − ${fmt(ep)} réservé(s) pour vos objectifs</div>` : ''}
+    ${tontineLine}
     <div class="stats">
       <div><small>Entrées du mois</small><b>+ ${fmt(rev)}</b><small>${nbIn} mouvement(s)</small></div>
       <div><small>Sorties du mois</small><b>− ${fmt(dep)}</b><small>${nbOut} mouvement(s)</small></div>
@@ -4379,11 +4492,11 @@ function escapeHtml(value){
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
-const ACCOUNT_TYPE_LABELS = { especes: 'Espèces', mobile_money: 'Mobile Money', banque: 'Banque', epargne: 'Épargne', autre: 'Autre' };
-const ACCOUNT_TYPE_ICONS = { especes: '💵', mobile_money: '📱', banque: '🏦', epargne: '🐷', autre: '📁' };
+const ACCOUNT_TYPE_LABELS = { especes: 'Espèces', mobile_money: 'Mobile Money', banque: 'Banque', epargne: 'Épargne', tontine: 'Tontine', autre: 'Autre' };
+const ACCOUNT_TYPE_ICONS = { especes: '💵', mobile_money: '📱', banque: '🏦', epargne: '🐷', tontine: '🤝', autre: '📁' };
 // Moyen de paiement proposé par défaut selon le type du compte choisi
 // (reste modifiable dans le formulaire) — même table que le serveur.
-const METHOD_BY_ACCOUNT_TYPE = { especes: 'Espèces', mobile_money: 'Mobile Money', banque: 'Virement bancaire', epargne: 'Autre', autre: 'Autre' };
+const METHOD_BY_ACCOUNT_TYPE = { especes: 'Espèces', mobile_money: 'Mobile Money', banque: 'Virement bancaire', epargne: 'Autre', tontine: 'Espèces', autre: 'Autre' };
 const TRANSFER_FEE_CATEGORY = 'Frais Mobile Money';
 
 let lastUsedAccountId = null;
@@ -4391,7 +4504,28 @@ let editingAccountId = null;
 
 function accountById(id){ return state.accounts.find(a=>a.id===id); }
 function accountName(id){ const a = accountById(id); return a ? a.name : '—'; }
-function activeAccounts(){ return state.accounts.filter(a=>!a.archived); }
+/**
+ * Comptes « ordinaires » : ceux dans lesquels on puise réellement.
+ *
+ * La cagnotte d'une tontine (type `tontine`, migrations/034) en est exclue :
+ * pour un simple participant c'est une créance sur le groupe qu'il ne peut pas
+ * dépenser, pour un collecteur c'est l'argent du groupe qu'il détient sans
+ * qu'il lui appartienne. L'ajouter au disponible serait le même mensonge que
+ * le double comptage de l'épargne corrigé en migration 033.
+ */
+function activeAccounts(){ return state.accounts.filter(a=>!a.archived && a.type!=='tontine'); }
+
+/** Cagnottes de tontine actives, affichées à part. */
+function tontineAccounts(){ return state.accounts.filter(a=>!a.archived && a.type==='tontine'); }
+
+/** Ce que je dois encore à mes groupes (positions négatives), en positif. */
+function totalTontineDue(){
+  return tontineAccounts().reduce((s,a)=> s + Math.max(-accountBalance(a.id), 0), 0);
+}
+/** Ce que mes groupes me doivent (positions positives). */
+function totalTontineOwed(){
+  return tontineAccounts().reduce((s,a)=> s + Math.max(accountBalance(a.id), 0), 0);
+}
 // Compte par défaut = le plus ancien compte actif (ordre renvoyé par le
 // serveur : actifs d'abord, puis par date de création).
 function defaultAccountId(){ const a = activeAccounts()[0]; return a ? a.id : null; }
@@ -4564,7 +4698,11 @@ function renderAccounts(){
     </div>`).join('');
 
   const defId = defaultAccountId();
-  grid.innerHTML = state.accounts.map(a=>{
+  // Les cagnottes de tontine ne sont pas des comptes comme les autres : elles
+  // ne se modifient pas, ne s'archivent pas et ne se suppriment pas à la main
+  // (elles appartiennent à leur groupe). Elles sont donc rendues à part, sous
+  // la liste des vrais comptes.
+  grid.innerHTML = state.accounts.filter(a=>a.type!=='tontine').map(a=>{
     const bal = accountBalance(a.id);
     const used = accountMovementCount(a.id);
     // Part du solde mise de côté pour des objectifs d'épargne : elle est
@@ -4605,6 +4743,8 @@ function renderAccounts(){
   grid.querySelectorAll('[data-acc-edit]').forEach(btn=>btn.addEventListener('click', ()=> openAccountForm(accountById(btn.dataset.accEdit))));
   grid.querySelectorAll('[data-acc-archive]').forEach(btn=>btn.addEventListener('click', ()=> toggleAccountArchived(btn.dataset.accArchive, btn)));
   grid.querySelectorAll('[data-acc-del]').forEach(btn=>btn.addEventListener('click', ()=> deleteAccountWithConfirm(btn.dataset.accDel, btn)));
+
+  renderTontinePositions();
 
   const rows = [...state.transfers].sort((a,b)=> b.date.localeCompare(a.date));
   document.querySelector('#transfersTable tbody').innerHTML = rows.map(tr=>`
@@ -6271,7 +6411,9 @@ function exportProjectExcel(p, rows){
 document.getElementById('openTontineForm').addEventListener('click', ()=>{
   const card = document.getElementById('tontineFormCard');
   if(editingTontineId){ exitTontineEditMode(); return; }
-  card.style.display = card.style.display==='none' ? 'block' : 'none';
+  const opening = card.style.display === 'none';
+  if(opening) syncTontineMemberSelect();
+  card.style.display = opening ? 'block' : 'none';
 });
 
 let editingTontineId = null;
@@ -6290,6 +6432,10 @@ function enterTontineEditMode(t){
   document.getElementById('tonAmount').value = t.amount;
   document.getElementById('tonFreq').value = t.freq;
   document.getElementById('tonMembers').value = t.members.join(', ');
+  document.getElementById('tonRole').value = t.role || 'participant';
+  document.getElementById('tonSolidarity').value = t.solidarityAmount || 0;
+  document.getElementById('tonLateFee').value = t.lateFee || 0;
+  syncTontineMemberSelect(t.myMemberName ? t.members.indexOf(t.myMemberName) + 1 : '');
 
   document.getElementById('tontineFormTitle').textContent = 'Modifier le groupe de tontine';
   document.getElementById('tontineEditBanner').style.display = '';
@@ -6312,6 +6458,22 @@ function exitTontineEditMode(){
 
 document.getElementById('tontineCancelEdit').addEventListener('click', exitTontineEditMode);
 
+/**
+ * Remplit « lequel de ces membres êtes-vous ? » à partir des noms saisis.
+ * Les membres sont adressés par leur POSITION dans l'ordre de passage : à la
+ * création, leurs identifiants n'existent pas encore.
+ */
+function syncTontineMemberSelect(selectedPosition){
+  const sel = document.getElementById('tonMyMember');
+  if(!sel) return;
+  const names = document.getElementById('tonMembers').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const prev = selectedPosition !== undefined ? selectedPosition : parseInt(sel.value, 10);
+  sel.innerHTML = '<option value="">Je ne suis pas membre de ce groupe</option>'
+    + names.map((n,i)=>`<option value="${i+1}">${i+1}. ${escapeHtml(n)}</option>`).join('');
+  if(prev && prev <= names.length) sel.value = String(prev);
+}
+document.getElementById('tonMembers').addEventListener('input', ()=> syncTontineMemberSelect());
+
 document.getElementById('tontineForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const name = document.getElementById('tonName').value.trim();
@@ -6319,26 +6481,208 @@ document.getElementById('tontineForm').addEventListener('submit', async (e)=>{
   const freqLabel = document.getElementById('tonFreq').value;
   const members = document.getElementById('tonMembers').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!name || !amount || members.length<2) { alert('Ajoutez au moins 2 membres.'); return; }
+  // Réglages « argent réel » (migrations/034). Position vide = je ne me
+  // désigne pas : le groupe reste un simple pointage.
+  const myPos = parseInt(document.getElementById('tonMyMember').value, 10);
+  const myMemberPosition = Number.isInteger(myPos) && myPos >= 1 && myPos <= members.length ? myPos : null;
+  const role = document.getElementById('tonRole').value;
+  const solidarityAmount = parseFloat(document.getElementById('tonSolidarity').value) || 0;
+  const lateFee = parseFloat(document.getElementById('tonLateFee').value) || 0;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
     const frequency = FREQ_CODES[freqLabel] || freqLabel.toLowerCase();
     if(editingTontineId){
-      const { tontine } = await apiFetch('/api/tontines/' + editingTontineId, { method:'PATCH', auth:true, body:{ name, contributionAmount: amount, frequency, memberNames: members } });
+      const { tontine } = await apiFetch('/api/tontines/' + editingTontineId, { method:'PATCH', auth:true, body:{ name, contributionAmount: amount, frequency, memberNames: members, myMemberPosition, role, solidarityAmount, lateFee } });
       const idx = state.tontines.findIndex(x=>x.id===editingTontineId);
       if(idx !== -1) state.tontines[idx] = mapTontineFromApi(tontine);
       exitTontineEditMode();
     } else {
-      const { tontine } = await apiFetch('/api/tontines', { method:'POST', auth:true, body:{ name, contributionAmount: amount, frequency, members } });
+      const body = { name, contributionAmount: amount, frequency, members, role, solidarityAmount, lateFee };
+      if(myMemberPosition) body.myMemberPosition = myMemberPosition;
+      const { tontine } = await apiFetch('/api/tontines', { method:'POST', auth:true, body });
       state.tontines.push(mapTontineFromApi(tontine));
       e.target.reset();
       document.getElementById('tontineFormCard').style.display = 'none';
     }
+    // Un groupe crée (ou se voit attribuer) sa cagnotte côté serveur : il faut
+    // la connaître pour afficher la position et l'exclure du disponible.
+    await refreshAccountsFromServer();
     renderAll();
   } catch(err){
     reportError("Impossible d'enregistrer la tontine : ", err);
   } finally {
     if(btn) btn.disabled = false;
+  }
+});
+
+/**
+ * Positions de tontine sur la page Comptes. Un solde positif est ce que le
+ * groupe me doit, un solde négatif ce qu'il me reste à cotiser après avoir
+ * encaissé mon tour. En fin de cycle, la position revient exactement à zéro.
+ */
+function renderTontinePositions(){
+  const card = document.getElementById('tontinePositionsCard');
+  const list = document.getElementById('tontinePositionsList');
+  if(!card || !list) return;
+  const groupes = state.tontines.filter(t => t.accountId);
+  if(!groupes.length){ card.style.display = 'none'; return; }
+  card.style.display = '';
+  list.innerHTML = groupes.map(t=>{
+    const pos = accountBalance(t.accountId);
+    const label = pos > 0
+      ? `Le groupe vous doit <b class="amt-pos">${fmt(pos)}</b>`
+      : pos < 0
+        ? `Il vous reste <b class="amt-neg">${fmt(-pos)}</b> à cotiser`
+        : '<b>À jour</b> — rien à verser, rien à recevoir';
+    return `<div class="legend-row">
+      <span class="lname">🤝 ${escapeHtml(t.name)}${t.myMemberName ? ` · moi : ${escapeHtml(t.myMemberName)}` : ' · <span style="color:var(--accent);">non configurée</span>'}</span>
+      <span class="lval">${label}</span>
+    </div>`;
+  }).join('');
+}
+
+/**
+ * Cocher cette cotisation va-t-il déplacer de l'argent qui m'appartient ?
+ * Oui pour ma propre cotisation, oui pour n'importe quelle cotisation si je
+ * suis collecteur (je récolte l'argent), non sinon — dans ce dernier cas,
+ * cocher reste un simple pointage et aucune fenêtre ne doit s'ouvrir.
+ */
+function contributionMovesMyMoney(t, memberName){
+  if(!tontineTracksMoney(t)) return false;
+  return memberName === t.myMemberName || t.role === 'collecteur';
+}
+
+/** Applique la réponse serveur et recharge ce que le mouvement a pu changer. */
+async function applyTontineUpdate(t, tontine){
+  const before = t.position;
+  Object.assign(t, mapTontineFromApi(tontine));
+  // Un mouvement réel change les soldes des comptes et l'historique : on
+  // recharge plutôt que de recalculer à la main côté client.
+  if(before !== t.position) await refreshAccountsAndTransfers();
+  renderAll();
+}
+
+/* ---------- Fenêtre de cotisation et d'encaissement ----------
+ * Une seule fenêtre pour les deux mouvements, parce qu'ils sont symétriques :
+ * la cotisation sort d'un compte qu'on choisit, l'encaissement entre dans un
+ * compte qu'on choisit. C'est le même virement, dans l'autre sens.
+ */
+let tontineDialogCtx = null;
+
+function openTontineDialog(t, memberName, memberId){
+  const isMe = memberName === t.myMemberName;
+  tontineDialogCtx = { mode: 'cotisation', tontineId: t.id, memberId };
+  document.getElementById('tontineSubmit').textContent = 'Valider';
+  document.getElementById('tontineAccountLabel').textContent = 'Compte à débiter';
+
+  document.getElementById('tontineDialogTitle').textContent = isMe
+    ? `Votre cotisation — ${t.name}`
+    : `Cotisation de ${memberName} — ${t.name}`;
+  document.getElementById('tontineDialogSub').textContent = isMe
+    ? `${fmt(t.amount)} partent de votre compte vers la cagnotte du groupe. C'est un virement : cet argent vous reviendra à votre tour, ce n'est pas une dépense.`
+    : `Vous êtes collecteur : les ${fmt(t.amount)} de ${memberName} entrent dans la cagnotte que vous détenez. Aucun de vos comptes n'est débité.`;
+
+  // Le compte et les frais ne concernent que MA cotisation : l'argent d'un
+  // autre membre ne sort d'aucun de mes comptes.
+  document.getElementById('tontineAccountField').hidden = !isMe;
+  document.getElementById('tontineFeeField').hidden = !isMe;
+  if(isMe){
+    const sel = document.getElementById('tontineAccount');
+    sel.innerHTML = activeAccounts().map(a=>`<option value="${a.id}">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} — ${fmt(accountBalance(a.id))}</option>`).join('');
+    const def = defaultAccountId();
+    if(def) sel.value = def;
+    document.getElementById('tontineFee').value = '0';
+  }
+
+  const hasPenalty = t.lateFee > 0;
+  document.getElementById('tontineLateField').hidden = !hasPenalty;
+  document.getElementById('tontineLate').checked = false;
+  document.getElementById('tontineLateDesc').textContent = hasPenalty
+    ? `Ajoute une pénalité de ${fmt(t.lateFee)}${isMe ? ', enregistrée comme une vraie dépense.' : ', encaissée avec sa cotisation.'}`
+    : '';
+
+  document.getElementById('tontineDate').value = todayISO(0);
+  document.getElementById('tontineMsg').textContent = t.solidarityAmount > 0 && isMe
+    ? `S'y ajoute la caisse de solidarité de ${fmt(t.solidarityAmount)}, enregistrée comme une vraie dépense.`
+    : '';
+  document.getElementById('tontineDialog').showModal();
+}
+
+/**
+ * C'est mon tour : la cagnotte revient chez moi. Le montant est important
+ * (14 × 50 000 = 700 000 sur « COEUR JOYEUX »), donc on demande explicitement
+ * sur quel compte il atterrit, dans une vraie fenêtre — un prompt() numéroté
+ * ne convient pas pour un mouvement pareil.
+ */
+function openTontinePayoutDialog(t, beneficiaryName){
+  const total = t.amount * t.members.length;
+  tontineDialogCtx = { mode: 'encaissement', tontineId: t.id };
+
+  document.getElementById('tontineDialogTitle').textContent = `Encaissement — ${t.name}`;
+  document.getElementById('tontineDialogSub').textContent =
+    `C'est votre tour : ${fmt(total)} quittent la cagnotte pour votre compte. C'est un virement, pas un revenu — c'est votre propre argent qui revient, versé ${fmt(t.amount)} à la fois.`;
+  document.getElementById('tontineSubmit').textContent = 'Encaisser';
+
+  const field = document.getElementById('tontineAccountField');
+  field.hidden = false;
+  document.getElementById('tontineAccountLabel').textContent = 'Compte à créditer';
+  const sel = document.getElementById('tontineAccount');
+  // La cagnotte elle-même n'est pas une destination possible.
+  const comptes = activeAccounts().filter(a => a.id !== t.accountId);
+  sel.innerHTML = comptes.map(a=>`<option value="${a.id}">${ACCOUNT_TYPE_ICONS[a.type] || ''} ${escapeHtml(a.name)} — ${fmt(accountBalance(a.id))}</option>`).join('');
+  const def = defaultAccountId();
+  if(comptes.some(a=>a.id===def)) sel.value = def;
+
+  // Ni frais ni retard à l'encaissement : on reçoit, on ne paie pas.
+  document.getElementById('tontineFeeField').hidden = true;
+  document.getElementById('tontineLateField').hidden = true;
+  document.getElementById('tontineDate').value = todayISO(0);
+  document.getElementById('tontineMsg').textContent = `Le tour passera ensuite à ${beneficiaryName ? 'la personne suivante' : 'la suite'}.`;
+  document.getElementById('tontineDialog').showModal();
+}
+
+document.getElementById('tontineCancel').addEventListener('click', ()=>{
+  document.getElementById('tontineDialog').close();
+  tontineDialogCtx = null;
+});
+
+document.getElementById('tontineMoneyForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  if(!tontineDialogCtx) return;
+  const { mode, tontineId, memberId } = tontineDialogCtx;
+  const t = state.tontines.find(x=>x.id===tontineId);
+  if(!t) return;
+  const occurredOn = document.getElementById('tontineDate').value || todayISO(0);
+
+  let path, body;
+  if(mode === 'encaissement'){
+    path = '/api/tontines/' + tontineId + '/close-round';
+    body = { accountId: document.getElementById('tontineAccount').value, occurredOn };
+    if(!body.accountId){ document.getElementById('tontineMsg').textContent = 'Choisissez le compte à créditer.'; return; }
+  } else {
+    path = '/api/tontines/' + tontineId + '/contributions';
+    body = { memberId, paid: true, occurredOn };
+    if(!document.getElementById('tontineAccountField').hidden){
+      body.accountId = document.getElementById('tontineAccount').value;
+      const fee = parseFloat(document.getElementById('tontineFee').value) || 0;
+      if(fee > 0) body.fee = fee;
+    }
+    if(document.getElementById('tontineLate').checked) body.late = true;
+  }
+
+  const submit = document.getElementById('tontineSubmit');
+  submit.disabled = true;
+  document.getElementById('tontineMsg').textContent = '';
+  try {
+    const { tontine } = await apiFetch(path, { method:'POST', auth:true, body });
+    document.getElementById('tontineDialog').close();
+    tontineDialogCtx = null;
+    await applyTontineUpdate(t, tontine);
+  } catch(err){
+    document.getElementById('tontineMsg').textContent = authErrorMessage(err);
+  } finally {
+    submit.disabled = false;
   }
 });
 
@@ -6356,7 +6700,7 @@ function renderTontines(){
     const membersHtml = t.members.map((m,i)=>`
       <div class="member-row">
         <div class="member-order">${i+1}</div>
-        <div class="member-name">${m}${m===beneficiary?' <span class="pill" style="margin-left:6px;">Bénéficiaire du tour</span>':''}</div>
+        <div class="member-name">${m}${m===beneficiary?' <span class="pill" style="margin-left:6px;">Bénéficiaire du tour</span>':''}${m===t.myMemberName?' <span class="pill" style="margin-left:6px;">Moi</span>':''}</div>
         <div class="member-status">${t.paidThisRound[m] ? '<span style="color:var(--good); font-weight:600;">Payé</span>' : '<span style="color:var(--text-muted);">En attente</span>'}</div>
         <button class="paid-check ${t.paidThisRound[m]?'paid':''}" data-ton="${t.id}" data-member="${m}">${t.paidThisRound[m]?'✓':''}</button>
       </div>`).join('');
@@ -6367,6 +6711,16 @@ function renderTontines(){
     // l'argent qui manque.
     const allPaid = paidCount === t.members.length;
     const due = allPaid ? null : tontineDueInfo(t);
+
+    // Position vis-à-vis du groupe (migrations/034). Un groupe non configuré
+    // ne déplace rien : on le dit, plutôt que d'afficher un zéro trompeur.
+    const positionLabel = !tontineTracksMoney(t)
+      ? `<span style="color:var(--accent);">⚠️ Pointage seul — <button type="button" class="btn btn-ghost" data-config-tontine="${t.id}" style="padding:2px 8px; font-size:11.5px;">désignez-vous</button></span>`
+      : t.position > 0
+        ? `<span>Le groupe vous doit : <b class="amt-pos">${fmt(t.position)}</b></span>`
+        : t.position < 0
+          ? `<span>Reste à cotiser : <b class="amt-neg">${fmt(-t.position)}</b></span>`
+          : `<span>Position : <b>à jour</b></span>`;
 
     return `
     <div class="tontine-card">
@@ -6379,6 +6733,7 @@ function renderTontines(){
             <span>Membres : <b>${t.members.length}</b></span>
             <span>Tour actuel : <b>${t.currentRound}</b></span>
             <span>Collecté : <b>${fmt(collected)}</b> / ${fmt(total)}</span>
+            ${positionLabel}
           </div>
         </div>
         <div style="display:flex; align-items:flex-start; gap:10px;">
@@ -6406,11 +6761,18 @@ function renderTontines(){
       const memberName = btn.dataset.member;
       const memberId = t._memberIdByName[memberName];
       const newPaid = !t.paidThisRound[memberName];
+
+      // Cocher une cotisation qui déplace MON argent ouvre un formulaire :
+      // il faut savoir depuis quel compte, avec quels frais et si elle est en
+      // retard. Décocher, en revanche, n'a rien à demander — ça défait.
+      if(newPaid && contributionMovesMyMoney(t, memberName)){
+        openTontineDialog(t, memberName, memberId);
+        return;
+      }
       btn.disabled = true;
       try {
         const { tontine } = await apiFetch('/api/tontines/' + t.id + '/contributions', { method:'POST', auth:true, body:{ memberId, paid: newPaid } });
-        Object.assign(t, mapTontineFromApi(tontine));
-        renderTontines();
+        await applyTontineUpdate(t, tontine);
       } catch(err){
         reportError('Mise à jour impossible : ', err);
         btn.disabled = false;
@@ -6420,15 +6782,33 @@ function renderTontines(){
   document.querySelectorAll('[data-close-round]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const t = state.tontines.find(x=>x.id===btn.dataset.closeRound);
+      const beneficiary = t.members[(t.currentRound-1) % t.members.length];
+      // C'est mon tour : la cagnotte revient chez moi, il faut savoir sur quel
+      // compte. On passe par la fenêtre dédiée — c'est un mouvement réel et
+      // important, il mérite mieux qu'une boîte de dialogue du navigateur.
+      if(tontineTracksMoney(t) && beneficiary === t.myMemberName){
+        if(!activeAccounts().some(a => a.id !== t.accountId)){
+          reportError('Encaissement impossible : ', new Error("vous n'avez aucun autre compte pour recevoir la cagnotte."));
+          return;
+        }
+        openTontinePayoutDialog(t, beneficiary);
+        return;
+      }
       btn.disabled = true;
       try {
-        const { tontine } = await apiFetch('/api/tontines/' + t.id + '/close-round', { method:'POST', auth:true });
-        Object.assign(t, mapTontineFromApi(tontine));
-        renderTontines();
+        const { tontine } = await apiFetch('/api/tontines/' + t.id + '/close-round', { method:'POST', auth:true, body: {} });
+        await applyTontineUpdate(t, tontine);
       } catch(err){
         reportError('Clôture impossible : ', err);
         btn.disabled = false;
       }
+    });
+  });
+  document.querySelectorAll('[data-config-tontine]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const t = state.tontines.find(x=>x.id===btn.dataset.configTontine);
+      if(t) enterTontineEditMode(t);
     });
   });
   document.querySelectorAll('[data-edit-tontine]').forEach(btn=>{
