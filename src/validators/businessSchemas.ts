@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TRANSACTION_METHODS, TONTINE_FREQUENCIES } from "../lib/categories.js";
+import { TONTINE_ROLES } from "../services/tontineService.js";
 
 // Historiquement un z.enum(CATEGORIES) fermé. Desserré en chaîne libre
 // (bornée) pour accepter aussi les catégories personnalisées de l'utilisateur
@@ -156,12 +157,37 @@ export const createTontineSchema = z.object({
   // Reprend le champ "membres séparés par une virgule" du prototype : on
   // accepte directement la liste de noms, dans l'ordre de passage.
   members: z.array(z.string().trim().min(1).max(80)).min(2).max(50),
+  // Argent réel (migrations/034). Le membre « c'est moi » est désigné par sa
+  // position dans l'ordre de passage : à la création, les identifiants
+  // n'existent pas encore côté client.
+  myMemberPosition: z.number().int().min(1).max(50).optional(),
+  role: z.enum(TONTINE_ROLES).optional(),
+  lateFee: z.number().min(0).max(1_000_000_000).optional(),
+  solidarityAmount: z.number().min(0).max(1_000_000_000).optional(),
 });
 
 export const markContributionSchema = z.object({
   memberId: z.string().uuid(),
   paid: z.boolean(),
+  // Cocher MA cotisation crée un vrai virement vers la cagnotte : d'où le
+  // compte à débiter, les frais éventuels et la date.
+  accountId: z.string().uuid().optional(),
+  late: z.boolean().optional(),
+  fee: z.number().min(0).max(1_000_000_000).optional(),
+  occurredOn: dateSchema.optional(),
 });
+
+// `.default({})` n'est pas cosmétique : jusqu'ici cette route n'avait pas de
+// corps, et le client PWA déployé l'appelle encore sans rien envoyer. Express
+// laisse alors `req.body` à undefined, ce qu'un z.object() refuserait — un
+// client en cache se retrouverait incapable de clôturer un tour.
+export const closeRoundSchema = z
+  .object({
+    // Compte qui reçoit la cagnotte quand c'est mon tour.
+    accountId: z.string().uuid().optional(),
+    occurredOn: dateSchema.optional(),
+  })
+  .default({});
 
 // Modification d'une tontine existante — tous les champs sont optionnels
 // (partial update). memberNames renomme les membres existants dans l'ordre
@@ -172,6 +198,11 @@ export const updateTontineSchema = z.object({
   contributionAmount: amountSchema.optional(),
   frequency: z.enum(TONTINE_FREQUENCIES).optional(),
   memberNames: z.array(z.string().trim().min(1).max(80)).min(2).max(50).optional(),
+  // `null` retire explicitement la désignation « c'est moi » ; absent = inchangé.
+  myMemberPosition: z.number().int().min(1).max(50).nullable().optional(),
+  role: z.enum(TONTINE_ROLES).optional(),
+  lateFee: z.number().min(0).max(1_000_000_000).optional(),
+  solidarityAmount: z.number().min(0).max(1_000_000_000).optional(),
 });
 
 // ---------------------------------------------------------------------------
