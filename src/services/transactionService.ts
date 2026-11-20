@@ -180,6 +180,7 @@ export async function updateTransaction(
   // suivent leur opération : on ne les modifie pas directement.
   if (current.transfer_id) throw Errors.transactionLinkedToTransfer();
   if (current.fee_parent_id) throw Errors.transactionIsFee();
+  await assertNotTontineMovement(id);
 
   // note/projectId/rubriqueId sont traités en tri-état (absent du body =
   // inchangé, null = effacé/détaché, valeur = remplacé) plutôt qu'avec
@@ -224,6 +225,25 @@ export async function updateTransaction(
   });
 }
 
+/**
+ * Une opération produite par le module Tontine (entrée dans la cagnotte,
+ * caisse de solidarité, pénalité, versement au bénéficiaire) ne se modifie ni
+ * ne se supprime depuis l'historique : elle est l'envers comptable d'une
+ * cotisation cochée ou d'un tour clôturé. La défaire ici laisserait la
+ * cotisation cochée en face de rien — le même défaut que
+ * TRANSFER_BACKS_SAVINGS corrige pour l'épargne. On décoche la cotisation dans
+ * le module Tontine, qui défait les deux ensemble.
+ */
+async function assertNotTontineMovement(id: string): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM tontine_contributions WHERE pot_transaction_id = $1 OR extra_transaction_id = $1
+     UNION ALL
+     SELECT 1 FROM tontine_round_history WHERE payout_transaction_id = $1`,
+    [id],
+  );
+  if (rows[0]) throw Errors.transactionIsTontineMovement();
+}
+
 /** Supprime une opération ; sa dépense de frais éventuelle part avec elle (ON DELETE CASCADE). */
 export async function deleteTransaction(userId: string, id: string): Promise<void> {
   const existing = await pool.query<{ transfer_id: string | null; fee_parent_id: string | null }>(
@@ -233,5 +253,6 @@ export async function deleteTransaction(userId: string, id: string): Promise<voi
   if (!existing.rows[0]) throw Errors.transactionNotFound();
   if (existing.rows[0].transfer_id) throw Errors.transactionLinkedToTransfer();
   if (existing.rows[0].fee_parent_id) throw Errors.transactionIsFee();
+  await assertNotTontineMovement(id);
   await pool.query(`DELETE FROM transactions WHERE id = $1 AND user_id = $2`, [id, userId]);
 }

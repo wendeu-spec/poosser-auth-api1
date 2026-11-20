@@ -14,8 +14,24 @@ import type { TransactionRow } from "./transactionService.js";
  * inexistant (404), jamais comme interdit (403), pour ne rien révéler.
  */
 
-export const ACCOUNT_TYPES = ["especes", "mobile_money", "banque", "epargne", "autre"] as const;
+export const ACCOUNT_TYPES = ["especes", "mobile_money", "banque", "epargne", "tontine", "autre"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
+
+/**
+ * Comptes qui ne font PAS partie de l'argent disponible (migrations/034).
+ *
+ * La cagnotte d'une tontine n'est jamais de l'argent qu'on peut dépenser :
+ * pour un simple participant c'est une créance sur le groupe, pour un
+ * collecteur c'est l'argent du groupe qu'il détient sans qu'il lui appartienne.
+ * Dans les deux cas, l'ajouter au « disponible » serait faux — c'est le même
+ * piège que le double comptage de l'épargne corrigé en migration 033. Le solde
+ * est affiché sur sa propre ligne.
+ */
+export const OFF_BUDGET_ACCOUNT_TYPES: readonly AccountType[] = ["tontine"];
+
+export function isOffBudgetAccount(type: AccountType): boolean {
+  return OFF_BUDGET_ACCOUNT_TYPES.includes(type);
+}
 
 // Moyen de paiement implicite d'un compte : reporté sur la dépense « frais »
 // d'un virement (la colonne transactions.method reste obligatoire).
@@ -24,6 +40,8 @@ export const METHOD_BY_ACCOUNT_TYPE: Record<AccountType, string> = {
   mobile_money: "Mobile Money",
   banque: "Virement bancaire",
   epargne: "Autre",
+  // Une tontine se cotise presque toujours en espèces, à la réunion.
+  tontine: "Espèces",
   autre: "Autre",
 };
 
@@ -83,8 +101,13 @@ function isUniqueViolation(err: unknown): boolean {
 export async function ensureDefaultAccount(userId: string, db: Queryable = pool): Promise<string> {
   const find = () =>
     db.query<{ id: string }>(
-      `SELECT id FROM accounts WHERE user_id = $1 AND archived = false ORDER BY created_at ASC, id ASC LIMIT 1`,
-      [userId],
+      // La cagnotte d'une tontine n'est jamais le compte par défaut d'une
+      // opération : ce n'est pas de l'argent dans lequel on puise (voir
+      // OFF_BUDGET_ACCOUNT_TYPES).
+      `SELECT id FROM accounts
+        WHERE user_id = $1 AND archived = false AND type <> ALL($2::text[])
+        ORDER BY created_at ASC, id ASC LIMIT 1`,
+      [userId, OFF_BUDGET_ACCOUNT_TYPES],
     );
   const existing = await find();
   if (existing.rows[0]) return existing.rows[0].id;
@@ -170,6 +193,37 @@ export interface AccountInput {
   name: string;
   type: AccountType;
   openingBalance?: number;
+}
+
+/**
+ * Crée un compte rattaché à une autre ressource (aujourd'hui : la cagnotte
+ * d'une tontine), DANS la transaction de l'appelant.
+ *
+ * Volontairement sans assertCanCreate : ce compte n'est pas un compte que
+ * l'utilisateur a choisi d'ouvrir, c'est l'envers comptable d'un groupe de
+ * tontine qui a, lui, déjà été compté par la limite `tontine`. Le faire
+ * compter deux fois empêcherait un utilisateur au Gratuit de créer la tontine
+ * à laquelle il a droit.
+ *
+ * Le nom est suffixé en cas de collision plutôt que de faire échouer la
+ * création du groupe pour un homonyme.
+ */
+export async function createLinkedAccount(
+  client: PoolClient,
+  userId: string,
+  input: AccountInput,
+): Promise<string> {
+  const base = input.name.trim().slice(0, 50);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const name = attempt === 0 ? base : `${base} (${attempt + 1})`;
+    const { rows } = await client.query<{ id: string }>(
+      `INSERT INTO accounts (user_id, name, type, opening_balance) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, lower(name)) DO NOTHING RETURNING id`,
+      [userId, name, input.type, input.openingBalance ?? 0],
+    );
+    if (rows[0]) return rows[0].id;
+  }
+  throw Errors.accountNameTaken();
 }
 
 export async function createAccount(userId: string, input: AccountInput): Promise<AccountWithBalanceRow> {
@@ -342,6 +396,15 @@ export async function deleteTransfer(userId: string, id: string): Promise<void> 
     [id, userId],
   );
   if (linked[0]) throw Errors.transferBacksSavings();
+  // Même raison pour la tontine (migrations/034) : supprimer le virement
+  // laisserait la cotisation cochée ou le tour clôturé en face de rien.
+  const { rows: tontineLinked } = await pool.query(
+    `SELECT 1 FROM tontine_contributions WHERE transfer_id = $1
+     UNION ALL
+     SELECT 1 FROM tontine_round_history WHERE transfer_id = $1`,
+    [id],
+  );
+  if (tontineLinked[0]) throw Errors.transferBacksTontine();
   const { rowCount } = await pool.query(`DELETE FROM transfers WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!rowCount) throw Errors.transferNotFound();
 }

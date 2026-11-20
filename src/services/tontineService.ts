@@ -2,6 +2,45 @@ import type { PoolClient } from "pg";
 import { assertCanCreate } from "./entitlementService.js";
 import { pool, withTransaction } from "../db/pool.js";
 import { Errors } from "../lib/errors.js";
+import {
+  METHOD_BY_ACCOUNT_TYPE,
+  accountBalanceOf,
+  assertAccountUsable,
+  createLinkedAccount,
+  createTransferIn,
+  ensureDefaultAccount,
+  type AccountType,
+} from "./accountService.js";
+
+/**
+ * Module tontine, branché sur l'argent réel depuis la migration 034 — voir ce
+ * fichier SQL pour les choix structurants validés avec Yannis.
+ *
+ * Les trois règles à garder en tête :
+ *
+ *   1. Cotiser et encaisser sont des VIREMENTS NEUTRES entre un compte réel et
+ *      la cagnotte du groupe. Les 700 000 FCFA encaissés à son tour ne sont pas
+ *      un revenu : c'est son propre argent qui revient, versé 50 000 à la fois.
+ *   2. La caisse de solidarité et les pénalités sont de VRAIES DÉPENSES : cet
+ *      argent-là ne revient jamais.
+ *   3. L'argent des AUTRES membres (rôle collecteur) entre dans la cagnotte
+ *      depuis l'extérieur des finances de l'utilisateur : c'est un revenu sur
+ *      le compte de la tontine, jamais un virement depuis un de ses comptes.
+ *
+ * Conséquence vérifiable : sur un cycle complet, le compte de la tontine
+ * retombe exactement à zéro. Les tests s'appuient dessus.
+ *
+ * Une tontine dont `account_id` ou `my_member_id` est NULL n'est pas encore
+ * configurée : elle reste un simple pointage, sans aucun mouvement d'argent.
+ * C'est l'état des groupes créés avant la migration 034, et on ne devine jamais
+ * rétroactivement ce qui a été payé ni depuis quel compte.
+ */
+
+export const TONTINE_ROLES = ["participant", "collecteur"] as const;
+export type TontineRole = (typeof TONTINE_ROLES)[number];
+
+/** Catégorie des dépenses réelles produites par le module (caisse, pénalités). */
+export const TONTINE_CATEGORY = "Tontine";
 
 export interface TontineMember {
   id: string;
@@ -27,9 +66,34 @@ export interface TontineView {
   // `touch_updated_at` — sans cette séparation, éditer une tontine aurait
   // réinitialisé à tort l'échéance de cotisation affichée au client.
   currentRoundStartedAt: string;
+
+  // ---- Argent réel (migrations/034) ----
+  /** Cagnotte du groupe. NULL = groupe non configuré, simple pointage. */
+  accountId: string | null;
+  /** Quel membre de la liste est l'utilisateur. NULL = pas encore désigné. */
+  myMemberId: string | null;
+  role: TontineRole;
+  lateFee: number;
+  solidarityAmount: number;
+  /**
+   * Solde de la cagnotte. Pour un participant : ce que le groupe lui doit
+   * (positif) ou ce qu'il doit encore au groupe (négatif, après avoir
+   * encaissé). Pour un collecteur : l'argent du groupe qu'il détient.
+   * Jamais compté dans le « disponible ».
+   */
+  position: number;
+  /** Cotisations du tour en cours payées en retard (pénalité appliquée). */
+  lateThisRound: Record<string, boolean>;
 }
 
-export interface CreateTontineInput {
+export interface TontineMoneySettings {
+  myMemberPosition?: number | null;
+  role?: TontineRole;
+  lateFee?: number;
+  solidarityAmount?: number;
+}
+
+export interface CreateTontineInput extends TontineMoneySettings {
   name: string;
   contributionAmount: number;
   frequency: string;
@@ -47,6 +111,8 @@ export interface UpdateTontineInput {
   memberNames?: string[];
 }
 
+export interface UpdateTontineInputFull extends UpdateTontineInput, TontineMoneySettings {}
+
 async function loadTontineView(client: PoolClient | typeof pool, userId: string, tontineId: string): Promise<TontineView | null> {
   const { rows: tontineRows } = await client.query(
     `SELECT * FROM tontines WHERE id = $1 AND user_id = $2`,
@@ -60,16 +126,18 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
     [tontineId],
   );
 
-  const { rows: contributions } = await client.query<{ member_id: string; paid: boolean; paid_at: Date | null }>(
-    `SELECT member_id, paid, paid_at FROM tontine_contributions WHERE tontine_id = $1 AND round_number = $2`,
+  const { rows: contributions } = await client.query<{ member_id: string; paid: boolean; paid_at: Date | null; late: boolean }>(
+    `SELECT member_id, paid, paid_at, late FROM tontine_contributions WHERE tontine_id = $1 AND round_number = $2`,
     [tontineId, tontine.current_round],
   );
   const paidThisRound: Record<string, boolean> = {};
   const paidAtThisRound: Record<string, string | null> = {};
-  for (const m of members) { paidThisRound[m.id] = false; paidAtThisRound[m.id] = null; }
+  const lateThisRound: Record<string, boolean> = {};
+  for (const m of members) { paidThisRound[m.id] = false; paidAtThisRound[m.id] = null; lateThisRound[m.id] = false; }
   for (const c of contributions) {
     paidThisRound[c.member_id] = c.paid;
     paidAtThisRound[c.member_id] = c.paid_at ? c.paid_at.toISOString() : null;
+    lateThisRound[c.member_id] = c.late;
   }
 
   const { rows: history } = await client.query<{
@@ -99,7 +167,142 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
       totalAmount: Number(h.total_amount),
     })),
     currentRoundStartedAt: new Date(tontine.round_started_at).toISOString(),
+    accountId: tontine.account_id ?? null,
+    myMemberId: tontine.my_member_id ?? null,
+    role: tontine.role as TontineRole,
+    lateFee: Number(tontine.late_fee),
+    solidarityAmount: Number(tontine.solidarity_amount),
+    // Le solde de la cagnotte est calculé à la lecture, comme tout solde de
+    // compte (accountService.BALANCE_SELECT) : un solde stocké finit toujours
+    // par diverger des mouvements.
+    position: tontine.account_id ? await accountBalanceOf(userId, tontine.account_id, client) : 0,
+    lateThisRound,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Argent réel
+// ---------------------------------------------------------------------------
+
+interface TontineRow {
+  id: string;
+  name: string;
+  contribution_amount: string;
+  current_round: number;
+  account_id: string | null;
+  my_member_id: string | null;
+  role: TontineRole;
+  late_fee: string;
+  solidarity_amount: string;
+}
+
+function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
+/** Un groupe ne déplace d'argent que s'il a une cagnotte ET un membre désigné. */
+function tracksMoney(t: TontineRow): boolean {
+  return Boolean(t.account_id && t.my_member_id);
+}
+
+/** Compte réel à débiter/créditer : celui demandé, sinon le compte par défaut. */
+async function resolveUserAccount(
+  client: PoolClient,
+  userId: string,
+  accountId: string | undefined,
+  potAccountId: string,
+): Promise<{ id: string; type: AccountType }> {
+  if (accountId) {
+    // La cagnotte ne peut pas être à la fois la source et la destination : ce
+    // serait un virement sur lui-même, refusé plus bas, avec un message
+    // incompréhensible. On le dit clairement ici.
+    if (accountId === potAccountId) throw Errors.tontineAccountNotUsable();
+    const account = await assertAccountUsable(userId, accountId, client);
+    if (account.type === "tontine") throw Errors.tontineAccountNotUsable();
+    return { id: account.id, type: account.type };
+  }
+  const id = await ensureDefaultAccount(userId, client);
+  const { rows } = await client.query<{ type: AccountType }>(`SELECT type FROM accounts WHERE id = $1`, [id]);
+  return { id, type: rows[0]!.type };
+}
+
+/**
+ * Caisse de solidarité + pénalité de retard, en UNE dépense réelle sur le
+ * compte qui paie. Volontairement pas un virement vers la cagnotte : cet
+ * argent ne revient jamais, et le faire transiter par la cagnotte empêcherait
+ * celle-ci de retomber à zéro en fin de cycle.
+ */
+async function recordExtras(
+  client: PoolClient,
+  userId: string,
+  t: TontineRow,
+  accountId: string,
+  accountType: AccountType,
+  late: boolean,
+  occurredOn: string,
+): Promise<string | null> {
+  const solidarity = Number(t.solidarity_amount);
+  const penalty = late ? Number(t.late_fee) : 0;
+  const total = round2(solidarity + penalty);
+  if (total <= 0) return null;
+
+  const parts = [
+    solidarity > 0 ? "caisse de solidarité" : null,
+    penalty > 0 ? "pénalité de retard" : null,
+  ].filter(Boolean).join(" + ");
+
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
+     VALUES ($1, 'depense', $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [userId, TONTINE_CATEGORY, total, occurredOn, METHOD_BY_ACCOUNT_TYPE[accountType], `${t.name} — ${parts}`, accountId],
+  );
+  return rows[0]!.id;
+}
+
+/** Argent d'un AUTRE membre entrant dans la cagnotte que je détiens (collecteur). */
+async function recordPotInflow(
+  client: PoolClient,
+  userId: string,
+  t: TontineRow,
+  memberName: string,
+  amount: number,
+  occurredOn: string,
+): Promise<string> {
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
+     VALUES ($1, 'revenu', $2, $3, $4, 'Espèces', $5, $6) RETURNING id`,
+    [userId, TONTINE_CATEGORY, amount, occurredOn, `${t.name} — cotisation de ${memberName}`, t.account_id],
+  );
+  return rows[0]!.id;
+}
+
+/** Défait tous les mouvements d'une cotisation qu'on décoche. */
+async function undoContributionMoney(
+  client: PoolClient,
+  contribution: { transfer_id: string | null; pot_transaction_id: string | null; extra_transaction_id: string | null },
+  contributionId: string,
+): Promise<void> {
+  // Les colonnes sont en ON DELETE RESTRICT : on détache AVANT de supprimer,
+  // sinon la contrainte refuse la suppression.
+  await client.query(
+    `UPDATE tontine_contributions
+        SET paid = false, paid_at = NULL, late = false,
+            transfer_id = NULL, pot_transaction_id = NULL, extra_transaction_id = NULL
+      WHERE id = $1`,
+    [contributionId],
+  );
+  // Supprimer le virement emporte sa dépense de frais (ON DELETE CASCADE,
+  // migrations/029).
+  if (contribution.transfer_id) {
+    await client.query(`DELETE FROM transfers WHERE id = $1`, [contribution.transfer_id]);
+  }
+  for (const txId of [contribution.pot_transaction_id, contribution.extra_transaction_id]) {
+    if (txId) await client.query(`DELETE FROM transactions WHERE id = $1`, [txId]);
+  }
 }
 
 export async function listTontines(userId: string): Promise<TontineView[]> {
@@ -121,9 +324,28 @@ export async function getTontine(userId: string, tontineId: string): Promise<Ton
 export async function createTontine(userId: string, input: CreateTontineInput): Promise<TontineView> {
   await assertCanCreate(userId, "tontine");
   return withTransaction(async (client) => {
+    // La cagnotte est créée avec le groupe : un compte de type `tontine`,
+    // exclu du disponible (voir OFF_BUDGET_ACCOUNT_TYPES). Il est créé même si
+    // l'utilisateur ne se désigne pas tout de suite, pour qu'il puisse le
+    // faire plus tard sans migration de données.
+    const accountId = await createLinkedAccount(client, userId, {
+      name: `Tontine ${input.name}`,
+      type: "tontine",
+    });
+
     const { rows } = await client.query<{ id: string }>(
-      `INSERT INTO tontines (user_id, name, contribution_amount, frequency) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [userId, input.name, input.contributionAmount, input.frequency],
+      `INSERT INTO tontines (user_id, name, contribution_amount, frequency, account_id, role, late_fee, solidarity_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [
+        userId,
+        input.name,
+        input.contributionAmount,
+        input.frequency,
+        accountId,
+        input.role ?? "participant",
+        input.lateFee ?? 0,
+        input.solidarityAmount ?? 0,
+      ],
     );
     const tontineId = rows[0]!.id;
 
@@ -142,6 +364,16 @@ export async function createTontine(userId: string, input: CreateTontineInput): 
       );
     }
 
+    // Le membre « c'est moi » est désigné par sa position dans l'ordre de
+    // passage, puisque les identifiants n'existent qu'après l'insertion.
+    if (input.myMemberPosition) {
+      const index = input.myMemberPosition - 1;
+      if (index < 0 || index >= memberIds.length) {
+        throw Errors.validation({ field: "myMemberPosition", reason: "doit désigner un membre existant" });
+      }
+      await client.query(`UPDATE tontines SET my_member_id = $2 WHERE id = $1`, [tontineId, memberIds[index]]);
+    }
+
     const view = await loadTontineView(client, userId, tontineId);
     if (!view) throw new Error("[createTontine] tontine introuvable juste après sa création");
     return view;
@@ -158,11 +390,11 @@ export async function createTontine(userId: string, input: CreateTontineInput): 
 export async function updateTontine(
   userId: string,
   tontineId: string,
-  input: UpdateTontineInput,
+  input: UpdateTontineInputFull,
 ): Promise<TontineView> {
   return withTransaction(async (client) => {
-    const { rows: tontineRows } = await client.query(
-      `SELECT id FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+    const { rows: tontineRows } = await client.query<{ id: string; account_id: string | null; name: string }>(
+      `SELECT id, account_id, name FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [tontineId, userId],
     );
     if (!tontineRows[0]) throw Errors.tontineNotFound();
@@ -180,15 +412,52 @@ export async function updateTontine(
       }
     }
 
-    if (input.name !== undefined || input.contributionAmount !== undefined || input.frequency !== undefined) {
-      await client.query(
-        `UPDATE tontines SET
-           name = COALESCE($2, name),
-           contribution_amount = COALESCE($3, contribution_amount),
-           frequency = COALESCE($4, frequency)
-         WHERE id = $1`,
-        [tontineId, input.name ?? null, input.contributionAmount ?? null, input.frequency ?? null],
-      );
+    await client.query(
+      `UPDATE tontines SET
+         name = COALESCE($2, name),
+         contribution_amount = COALESCE($3, contribution_amount),
+         frequency = COALESCE($4, frequency),
+         role = COALESCE($5, role),
+         late_fee = COALESCE($6, late_fee),
+         solidarity_amount = COALESCE($7, solidarity_amount)
+       WHERE id = $1`,
+      [
+        tontineId,
+        input.name ?? null,
+        input.contributionAmount ?? null,
+        input.frequency ?? null,
+        input.role ?? null,
+        input.lateFee ?? null,
+        input.solidarityAmount ?? null,
+      ],
+    );
+
+    // `null` retire explicitement la désignation (« finalement je ne suis pas
+    // membre de ce groupe, je ne fais que le tenir »), `undefined` ne touche
+    // à rien. Les cotisations déjà cochées gardent leurs mouvements : on ne
+    // réécrit jamais le passé parce que le réglage a changé.
+    if (input.myMemberPosition !== undefined) {
+      let myMemberId: string | null = null;
+      if (input.myMemberPosition !== null) {
+        const { rows } = await client.query<{ id: string }>(
+          `SELECT id FROM tontine_members WHERE tontine_id = $1 AND position = $2`,
+          [tontineId, input.myMemberPosition],
+        );
+        if (!rows[0]) throw Errors.validation({ field: "myMemberPosition", reason: "doit désigner un membre existant" });
+        myMemberId = rows[0].id;
+      }
+      await client.query(`UPDATE tontines SET my_member_id = $2 WHERE id = $1`, [tontineId, myMemberId]);
+    }
+
+    // Un groupe créé avant la migration 034 n'a pas de cagnotte : on la lui
+    // donne dès qu'il est modifié, pour qu'il puisse être configuré sans que
+    // l'utilisateur ait à le recréer.
+    if (!tontineRows[0].account_id) {
+      const accountId = await createLinkedAccount(client, userId, {
+        name: `Tontine ${input.name ?? tontineRows[0].name}`,
+        type: "tontine",
+      });
+      await client.query(`UPDATE tontines SET account_id = $2 WHERE id = $1`, [tontineId, accountId]);
     }
 
     const view = await loadTontineView(client, userId, tontineId);
@@ -197,32 +466,121 @@ export async function updateTontine(
   });
 }
 
+export interface MarkContributionOptions {
+  /** Compte réel qui paie (ma cotisation). Absent = compte par défaut. */
+  accountId?: string;
+  /** Cotisation payée en retard : déclenche la pénalité si le groupe en a une. */
+  late?: boolean;
+  /** Frais du virement (Mobile Money, banque). */
+  fee?: number;
+  occurredOn?: string;
+}
+
+/**
+ * Coche ou décoche la cotisation d'un membre pour le tour en cours, et déplace
+ * réellement l'argent quand c'est justifié :
+ *
+ *   * MA cotisation  → virement de mon compte vers la cagnotte (frais compris),
+ *     plus une vraie dépense si le groupe a une caisse de solidarité ou si la
+ *     cotisation est en retard ;
+ *   * la cotisation d'un AUTRE membre, et seulement si je suis collecteur →
+ *     entrée dans la cagnotte que je détiens (revenu sur le compte de la
+ *     tontine, jamais un virement depuis un de mes comptes : cet argent ne
+ *     vient pas de chez moi) ;
+ *   * tout le reste → simple pointage, aucun mouvement.
+ *
+ * Décocher défait exactement ce qui avait été créé : sans cela, un clic
+ * malheureux laisserait un virement fantôme dans les comptes.
+ */
 export async function markContribution(
   userId: string,
   tontineId: string,
   memberId: string,
   paid: boolean,
+  options: MarkContributionOptions = {},
 ): Promise<TontineView> {
   return withTransaction(async (client) => {
-    const { rows: tontineRows } = await client.query(
-      `SELECT current_round FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+    const { rows: tontineRows } = await client.query<TontineRow>(
+      `SELECT id, name, contribution_amount, current_round, account_id, my_member_id, role, late_fee, solidarity_amount
+         FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [tontineId, userId],
     );
     const tontine = tontineRows[0];
     if (!tontine) throw Errors.tontineNotFound();
 
-    const { rows: memberRows } = await client.query(
-      `SELECT id FROM tontine_members WHERE id = $1 AND tontine_id = $2`,
+    const { rows: memberRows } = await client.query<{ id: string; name: string }>(
+      `SELECT id, name FROM tontine_members WHERE id = $1 AND tontine_id = $2`,
       [memberId, tontineId],
     );
-    if (!memberRows[0]) throw Errors.tontineMemberNotFound();
+    const member = memberRows[0];
+    if (!member) throw Errors.tontineMemberNotFound();
+
+    // Ligne de cotisation du tour en cours, verrouillée : deux clics
+    // simultanés ne doivent pas produire deux virements.
+    const { rows: existingRows } = await client.query<{
+      id: string; paid: boolean;
+      transfer_id: string | null; pot_transaction_id: string | null; extra_transaction_id: string | null;
+    }>(
+      `INSERT INTO tontine_contributions (tontine_id, member_id, round_number, paid)
+       VALUES ($1, $2, $3, false)
+       ON CONFLICT (member_id, round_number) DO UPDATE SET tontine_id = EXCLUDED.tontine_id
+       RETURNING id, paid, transfer_id, pot_transaction_id, extra_transaction_id`,
+      [tontineId, memberId, tontine.current_round],
+    );
+    const contribution = existingRows[0]!;
+
+    if (!paid) {
+      if (contribution.paid) await undoContributionMoney(client, contribution, contribution.id);
+      const view = await loadTontineView(client, userId, tontineId);
+      if (!view) throw new Error("[markContribution] tontine introuvable après mise à jour");
+      return view;
+    }
+
+    // Déjà cochée : on ne recrée pas les mouvements. Pour changer le compte ou
+    // le retard, il faut décocher puis recocher — c'est explicite, et ça évite
+    // qu'un rafraîchissement double la cotisation.
+    if (contribution.paid) {
+      const view = await loadTontineView(client, userId, tontineId);
+      if (!view) throw new Error("[markContribution] tontine introuvable après mise à jour");
+      return view;
+    }
+
+    const late = options.late === true;
+    const occurredOn = options.occurredOn ?? todayUtc();
+    const amount = Number(tontine.contribution_amount);
+    let transferId: string | null = null;
+    let potTxId: string | null = null;
+    let extraTxId: string | null = null;
+
+    if (tracksMoney(tontine)) {
+      const potId = tontine.account_id!;
+      if (memberId === tontine.my_member_id) {
+        const from = await resolveUserAccount(client, userId, options.accountId, potId);
+        const { transfer } = await createTransferIn(client, userId, {
+          fromAccountId: from.id,
+          toAccountId: potId,
+          amount,
+          fee: options.fee ?? 0,
+          occurredOn,
+          note: `${tontine.name} — cotisation tour ${tontine.current_round}`,
+        });
+        transferId = transfer.id;
+        extraTxId = await recordExtras(client, userId, tontine, from.id, from.type, late, occurredOn);
+      } else if (tontine.role === "collecteur") {
+        // L'argent des autres, y compris leur caisse et leur pénalité, entre
+        // dans la cagnotte que je détiens : une seule entrée, car je reçois
+        // bien la somme complète.
+        const total = round2(amount + Number(tontine.solidarity_amount) + (late ? Number(tontine.late_fee) : 0));
+        potTxId = await recordPotInflow(client, userId, tontine, member.name, total, occurredOn);
+      }
+    }
 
     await client.query(
-      `INSERT INTO tontine_contributions (tontine_id, member_id, round_number, paid, paid_at)
-       VALUES ($1, $2, $3, $4, CASE WHEN $4 THEN now() ELSE NULL END)
-       ON CONFLICT (member_id, round_number)
-       DO UPDATE SET paid = EXCLUDED.paid, paid_at = EXCLUDED.paid_at`,
-      [tontineId, memberId, tontine.current_round, paid],
+      `UPDATE tontine_contributions
+          SET paid = true, paid_at = now(), late = $2,
+              transfer_id = $3, pot_transaction_id = $4, extra_transaction_id = $5
+        WHERE id = $1`,
+      [contribution.id, late, transferId, potTxId, extraTxId],
     );
 
     const view = await loadTontineView(client, userId, tontineId);
@@ -237,9 +595,19 @@ export async function markContribution(
  * même règle que le bouton "Clôturer le tour" désactivé côté prototype tant
  * que 100% des membres n'ont pas payé.
  */
-export async function closeRound(userId: string, tontineId: string): Promise<TontineView> {
+export interface CloseRoundOptions {
+  /** Compte réel qui reçoit la cagnotte quand c'est mon tour. */
+  accountId?: string;
+  occurredOn?: string;
+}
+
+export async function closeRound(
+  userId: string,
+  tontineId: string,
+  options: CloseRoundOptions = {},
+): Promise<TontineView> {
   return withTransaction(async (client) => {
-    const { rows: tontineRows } = await client.query(
+    const { rows: tontineRows } = await client.query<TontineRow>(
       `SELECT * FROM tontines WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [tontineId, userId],
     );
@@ -263,10 +631,47 @@ export async function closeRound(userId: string, tontineId: string): Promise<Ton
     const beneficiary = members[beneficiaryIndex]!;
     const totalAmount = Number(tontine.contribution_amount) * members.length;
 
+    // Versement réel au bénéficiaire.
+    const occurredOn = options.occurredOn ?? todayUtc();
+    let transferId: string | null = null;
+    let payoutTxId: string | null = null;
+
+    if (tracksMoney(tontine)) {
+      const potId = tontine.account_id!;
+      if (beneficiary.id === tontine.my_member_id) {
+        // C'est mon tour : la cagnotte revient chez moi. Virement neutre, donc
+        // AUCUN revenu — ces 700 000 FCFA sont mon propre argent qui rentre,
+        // versé cotisation après cotisation. Les compter en revenu ferait
+        // mentir toutes mes statistiques pendant un cycle entier.
+        //
+        // Pas de frais proposés ici : createTransferIn les imputerait à la
+        // cagnotte, alors qu'ils seraient les miens. Un dépôt payant se saisit
+        // comme une opération ordinaire.
+        const to = await resolveUserAccount(client, userId, options.accountId, potId);
+        const { transfer } = await createTransferIn(client, userId, {
+          fromAccountId: potId,
+          toAccountId: to.id,
+          amount: totalAmount,
+          occurredOn,
+          note: `${tontine.name} — encaissement du tour ${tontine.current_round}`,
+        });
+        transferId = transfer.id;
+      } else if (tontine.role === "collecteur") {
+        // Je détenais la cagnotte, elle part chez quelqu'un d'autre : elle
+        // quitte mes finances pour de bon.
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
+           VALUES ($1, 'depense', $2, $3, $4, 'Espèces', $5, $6) RETURNING id`,
+          [userId, TONTINE_CATEGORY, totalAmount, occurredOn, `${tontine.name} — versé à ${beneficiary.name}`, potId],
+        );
+        payoutTxId = rows[0]!.id;
+      }
+    }
+
     await client.query(
-      `INSERT INTO tontine_round_history (tontine_id, round_number, beneficiary_member_id, total_amount)
-       VALUES ($1, $2, $3, $4)`,
-      [tontineId, tontine.current_round, beneficiary.id, totalAmount],
+      `INSERT INTO tontine_round_history (tontine_id, round_number, beneficiary_member_id, total_amount, transfer_id, payout_transaction_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tontineId, tontine.current_round, beneficiary.id, totalAmount, transferId, payoutTxId],
     );
 
     const nextRound = tontine.current_round + 1;
