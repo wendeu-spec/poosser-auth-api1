@@ -49,6 +49,12 @@ export const Errors = {
   tontineMemberNotFound: () => new AppError("TONTINE_MEMBER_NOT_FOUND", 404),
   plannerEventNotFound: () => new AppError("PLANNER_EVENT_NOT_FOUND", 404),
   tontineRoundNotReady: () => new AppError("TONTINE_ROUND_NOT_READY", 409),
+  // Tontine adossée à un compte réel (voir migrations/034). La cagnotte d'une
+  // tontine n'est pas un compte dans lequel on puise : elle ne peut être ni la
+  // source d'une cotisation ni la destination d'un encaissement.
+  tontineAccountNotUsable: () => new AppError("TONTINE_ACCOUNT_NOT_USABLE", 409),
+  transactionIsTontineMovement: () => new AppError("TRANSACTION_IS_TONTINE_MOVEMENT", 409),
+  transferBacksTontine: () => new AppError("TRANSFER_BACKS_TONTINE", 409),
   transactionFavoriteNotFound: () => new AppError("TRANSACTION_FAVORITE_NOT_FOUND", 404),
   categoryNotFound: () => new AppError("CATEGORY_NOT_FOUND", 404),
   categoryAlreadyExists: () => new AppError("CATEGORY_ALREADY_EXISTS", 409),
