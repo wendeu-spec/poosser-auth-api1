@@ -53,6 +53,14 @@ export const Errors = {
   // tontine n'est pas un compte dans lequel on puise : elle ne peut être ni la
   // source d'une cotisation ni la destination d'un encaissement.
   tontineAccountNotUsable: () => new AppError("TONTINE_ACCOUNT_NOT_USABLE", 409),
+
+  // Caisse de secours (voir migrations/035_tontine_caisse.sql).
+  tontineNotConfigured: () => new AppError("TONTINE_NOT_CONFIGURED", 409),
+  tontineNotCollector: () => new AppError("TONTINE_NOT_COLLECTOR", 409),
+  caisseMovementNotFound: () => new AppError("CAISSE_MOVEMENT_NOT_FOUND", 404),
+  // `details` porte ce que la caisse détient, pour dire combien est possible
+  // plutôt que de refuser sans expliquer.
+  caisseEmpty: (details: Record<string, unknown>) => new AppError("CAISSE_INSUFFICIENT", 409, details),
   transactionIsTontineMovement: () => new AppError("TRANSACTION_IS_TONTINE_MOVEMENT", 409),
   transferBacksTontine: () => new AppError("TRANSFER_BACKS_TONTINE", 409),
   transactionFavoriteNotFound: () => new AppError("TRANSACTION_FAVORITE_NOT_FOUND", 404),
