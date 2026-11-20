@@ -10,7 +10,7 @@ import {
   createSavingsGoalSchema, updateSavingsGoalSchema, savingsMovementSchema,
   createProjectSchema, updateProjectSchema,
   createRubriqueSchema, updateRubriqueSchema,
-  createTontineSchema, updateTontineSchema, markContributionSchema,
+  createTontineSchema, updateTontineSchema, markContributionSchema, closeRoundSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
   askAssistantSchema,
   decideBudgetProposalSchema,
@@ -320,14 +320,19 @@ businessRouter.patch("/tontines/:id", validateBody(updateTontineSchema), async (
   const tontine = await tontines.updateTontine(req.auth!.userId, id, req.body);
   res.json({ tontine });
 });
+// Cocher une cotisation déplace désormais de l'argent pour de vrai quand c'est
+// justifié (migrations/034) : ma cotisation devient un virement vers la
+// cagnotte, celle d'un autre membre une entrée dans la cagnotte si je suis
+// collecteur. Décocher défait exactement ce qui avait été créé.
 businessRouter.post("/tontines/:id/contributions", validateBody(markContributionSchema), async (req, res) => {
   const id = requireParamId(req.params.id);
-  const tontine = await tontines.markContribution(req.auth!.userId, id, req.body.memberId, req.body.paid);
+  const { memberId, paid, ...options } = req.body;
+  const tontine = await tontines.markContribution(req.auth!.userId, id, memberId, paid, options);
   res.json({ tontine });
 });
-businessRouter.post("/tontines/:id/close-round", async (req, res) => {
+businessRouter.post("/tontines/:id/close-round", validateBody(closeRoundSchema), async (req, res) => {
   const id = requireParamId(req.params.id);
-  const tontine = await tontines.closeRound(req.auth!.userId, id);
+  const tontine = await tontines.closeRound(req.auth!.userId, id, req.body);
   res.json({ tontine });
 });
 businessRouter.delete("/tontines/:id", async (req, res) => {
