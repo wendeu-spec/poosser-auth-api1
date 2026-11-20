@@ -2897,9 +2897,30 @@ function monthLabel(offset){
 // l'assistant s'accumulaient depuis toujours au lieu de se réinitialiser
 // chaque mois. t.date est une chaîne "AAAA-MM-JJ" (voir mapTxFromApi) : on
 // compare juste son préfixe "AAAA-MM" à celui d'aujourd'hui.
+/**
+ * Transactions qui concernent vraiment VOTRE argent.
+ *
+ * Les mouvements portés par une cagnotte de tontine ou une caisse de secours
+ * en sont exclus : c'est l'argent du groupe, pas le vôtre. Un collecteur de 14
+ * membres encaisse chaque tour 650 000 FCFA qui ne lui appartiennent pas, et
+ * les reverse aussitôt — les compter faisait afficher 1 540 500 FCFA d'entrées
+ * du mois là où il y en avait 102 500, et faussait du même coup le score de
+ * santé, les moyennes, les projections et les anomalies.
+ *
+ * Ces mouvements restent dans state.transactions, parce que le solde de la
+ * cagnotte et la fiche du compte en ont besoin — mais ils n'entrent dans
+ * AUCUNE analyse. Toute fonction qui agrège des montants part d'ici.
+ */
+function ownTx(){
+  return state.transactions.filter(t => {
+    const a = accountById(t.accountId);
+    return !a || !OFF_BUDGET_TYPES.includes(a.type);
+  });
+}
+
 function currentMonthTx(){
   const ym = todayISO(0).slice(0, 7);
-  return state.transactions.filter(t => t.date.slice(0, 7) === ym);
+  return ownTx().filter(t => t.date.slice(0, 7) === ym);
 }
 function totalRevenu(){ return currentMonthTx().filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0); }
 function totalDepense(){ return currentMonthTx().filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0); }
@@ -3356,8 +3377,8 @@ function weeklySummary(){
   const curStart = todayISO(-6), curEnd = todayISO(0);
   const prevStart = todayISO(-13), prevEnd = todayISO(-7);
 
-  const curTx = state.transactions.filter(t => dateInRange(t.date, curStart, curEnd));
-  const prevTx = state.transactions.filter(t => dateInRange(t.date, prevStart, prevEnd));
+  const curTx = ownTx().filter(t => dateInRange(t.date, curStart, curEnd));
+  const prevTx = ownTx().filter(t => dateInRange(t.date, prevStart, prevEnd));
 
   const curRev = curTx.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0);
   const curDep = curTx.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
@@ -3629,7 +3650,7 @@ function renderBarChart(){
   const months = [-5,-4,-3,-2,-1,0].map(off=>{
     const d = new Date(now.getFullYear(), now.getMonth() + off, 1);
     const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-    const txs = state.transactions.filter(t => t.date.slice(0,7) === ym);
+    const txs = ownTx().filter(t => t.date.slice(0,7) === ym);
     return {
       label: monthLabel(off),
       rev: txs.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0),
@@ -3696,7 +3717,7 @@ function renderBarChart(){
 }
 
 function renderRecentTx(){
-  const rows = [...state.transactions].sort((a,b)=> b.date.localeCompare(a.date)).slice(0,5);
+  const rows = [...ownTx()].sort((a,b)=> b.date.localeCompare(a.date)).slice(0,5);
   document.querySelector('#recentTxTable tbody').innerHTML = rows.map(t=>`
     <tr>
       <td>${t.date}</td>
@@ -4345,7 +4366,7 @@ function updateTxResetVisibility(){
  * toujours exactement ce que l'utilisateur voit au moment où il l'exporte,
  * jamais la totalité non filtrée des mouvements. */
 function filteredTransactionRows(){
-  let rows = [...state.transactions].sort((a,b)=> b.date.localeCompare(a.date));
+  let rows = [...ownTx()].sort((a,b)=> b.date.localeCompare(a.date));
   if(txTypeFilter!=='all') rows = rows.filter(t=>t.type===txTypeFilter);
 
   // Recherche rapide : un seul champ choisi à l'avance, voir txSearchField.
@@ -4772,7 +4793,10 @@ function renderAccounts(){
   // ne se modifient pas, ne s'archivent pas et ne se suppriment pas à la main
   // (elles appartiennent à leur groupe). Elles sont donc rendues à part, sous
   // la liste des vrais comptes.
-  grid.innerHTML = state.accounts.filter(a=>a.type!=='tontine').map(a=>{
+  // Les cagnottes et les caisses de secours ne figurent pas ici : cet argent
+  // appartient au groupe, et il se gère dans le module Tontine. Les afficher
+  // parmi les comptes personnels laissait croire qu'on pouvait y puiser.
+  grid.innerHTML = state.accounts.filter(a=>!OFF_BUDGET_TYPES.includes(a.type)).map(a=>{
     const bal = accountBalance(a.id);
     const used = accountMovementCount(a.id);
     // Part du solde mise de côté pour des objectifs d'épargne : elle est
@@ -7902,7 +7926,7 @@ function generateInsights(){
   }
 
   const catTotals = {};
-  state.transactions.filter(t=>t.type==='depense').forEach(t=> catTotals[t.category] = (catTotals[t.category]||0)+t.amount);
+  ownTx().filter(t=>t.type==='depense').forEach(t=> catTotals[t.category] = (catTotals[t.category]||0)+t.amount);
   const sortedCats = Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
   if(sortedCats.length && dep>0){
     const [topCat, topVal] = sortedCats[0];
@@ -8017,7 +8041,7 @@ function answerQuestion(q){
     return `Vos revenus du mois s'élèvent à ${fmt(rev)}, répartis sur ${currentMonthTx().filter(t=>t.type==='revenu').length} mouvement(s).`;
   }
   if(/(dépense|dépens)/.test(lower)){
-    const topCat = Object.entries(state.transactions.filter(t=>t.type==='depense').reduce((acc,t)=>{acc[t.category]=(acc[t.category]||0)+t.amount; return acc;},{})).sort((a,b)=>b[1]-a[1])[0];
+    const topCat = Object.entries(ownTx().filter(t=>t.type==='depense').reduce((acc,t)=>{acc[t.category]=(acc[t.category]||0)+t.amount; return acc;},{})).sort((a,b)=>b[1]-a[1])[0];
     return `Vos dépenses du mois totalisent ${fmt(dep)}. ${topCat ? "Le principal poste est \""+topCat[0]+"\" avec "+fmt(topCat[1])+"." : ""}`;
   }
 
@@ -8134,7 +8158,7 @@ function statsStdDev(arr){
 function buildMonthlySeries(n = STATS_WINDOW_MONTHS){
   const keys = statsMonthKeys(n);
   return keys.map(key=>{
-    const txs = state.transactions.filter(t=>t.date.slice(0,7)===key);
+    const txs = ownTx().filter(t=>t.date.slice(0,7)===key);
     const rev = txs.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0);
     const dep = txs.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
     return { key, label: statsMonthLabel(key), rev, dep, solde: rev-dep };
@@ -8165,7 +8189,7 @@ function computeCategoryVolatility(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   return depenseCategories().map(cat=>{
     const monthlyTotals = keys.map(key =>
-      state.transactions
+      ownTx()
         .filter(t=>t.type==='depense' && t.category===cat && t.date.slice(0,7)===key)
         .reduce((a,t)=>a+t.amount, 0)
     );
@@ -8189,7 +8213,7 @@ function computeCategoryVolatility(){
 function computeAnomalies(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   const keySet = new Set(keys);
-  const windowTx = state.transactions.filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const windowTx = ownTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
   const byCat = {};
   windowTx.forEach(t=>{ (byCat[t.category] ||= []).push(t); });
 
@@ -8214,7 +8238,7 @@ function computeAnomalies(){
 function computeParetoCategories(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   const keySet = new Set(keys);
-  const windowDep = state.transactions.filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const windowDep = ownTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
   const totals = {};
   windowDep.forEach(t=> totals[t.category] = (totals[t.category]||0) + t.amount);
   const total = Object.values(totals).reduce((a,b)=>a+b, 0);
@@ -8234,7 +8258,7 @@ function computeParetoCategories(){
 function computeWeekdayAverages(){
   const keys = statsMonthKeys(STATS_WINDOW_MONTHS);
   const keySet = new Set(keys);
-  const windowDep = state.transactions.filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
+  const windowDep = ownTx().filter(t=>t.type==='depense' && keySet.has(t.date.slice(0,7)));
   if(!windowDep.length) return null;
 
   const [fy,fm] = keys[0].split('-').map(Number);
