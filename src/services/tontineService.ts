@@ -344,9 +344,10 @@ async function recordExtras(
   t: TontineRow,
   accountId: string,
   late: boolean,
+  solidarityDue: boolean,
   occurredOn: string,
 ): Promise<string | null> {
-  const total = extrasTotal(t, late);
+  const total = extrasTotal(t, late, solidarityDue);
   if (total <= 0) return null;
 
   const caisseId = await ensureCaisseAccount(client, userId, t);
@@ -355,19 +356,35 @@ async function recordExtras(
     toAccountId: caisseId,
     amount: total,
     occurredOn,
-    note: `${t.name} — ${extrasLabel(t, late)}`,
+    note: `${t.name} — ${extrasLabel(t, late, solidarityDue)}`,
   });
   return transfer.id;
 }
 
-function extrasTotal(t: TontineRow, late: boolean): number {
-  return round2(Number(t.solidarity_amount) + (late ? Number(t.late_fee) : 0));
+/**
+ * La caisse de solidarité se verse UNE SEULE FOIS par cycle complet, pas à
+ * chaque tour — décision de Yannis, et l'usage de COEUR JOYEUX : 14 membres,
+ * un bénéficiaire par mois, donc une cotisation sociale tous les 14 mois.
+ *
+ * Elle est prélevée au PREMIER tour de chaque cycle, en même temps que la
+ * cotisation. Un cycle fait autant de tours qu'il y a de membres : avec 14
+ * membres, les tours 1, 15, 29... ouvrent un cycle.
+ *
+ * La pénalité de retard, elle, s'applique au tour où le retard a lieu.
+ */
+function isFirstRoundOfCycle(t: TontineRow, memberCount: number): boolean {
+  if (memberCount <= 0) return true;
+  return (t.current_round - 1) % memberCount === 0;
 }
 
-function extrasLabel(t: TontineRow, late: boolean): string {
+function extrasTotal(t: TontineRow, late: boolean, solidarityDue: boolean): number {
+  return round2((solidarityDue ? Number(t.solidarity_amount) : 0) + (late ? Number(t.late_fee) : 0));
+}
+
+function extrasLabel(t: TontineRow, late: boolean, solidarityDue: boolean): string {
   const penalty = late ? Number(t.late_fee) : 0;
   return [
-    Number(t.solidarity_amount) > 0 ? "caisse de solidarité" : null,
+    solidarityDue && Number(t.solidarity_amount) > 0 ? "caisse de solidarité" : null,
     penalty > 0 ? "pénalité de retard" : null,
   ].filter(Boolean).join(" + ");
 }
@@ -384,15 +401,16 @@ async function recordCaisseInflowForOther(
   t: TontineRow,
   memberName: string,
   late: boolean,
+  solidarityDue: boolean,
   occurredOn: string,
 ): Promise<string | null> {
-  const total = extrasTotal(t, late);
+  const total = extrasTotal(t, late, solidarityDue);
   if (total <= 0) return null;
   const caisseId = await ensureCaisseAccount(client, userId, t);
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, account_id)
      VALUES ($1, 'revenu', $2, $3, $4, 'Espèces', $5, $6) RETURNING id`,
-    [userId, TONTINE_CATEGORY, total, occurredOn, `${t.name} — ${extrasLabel(t, late)} de ${memberName}`, caisseId],
+    [userId, TONTINE_CATEGORY, total, occurredOn, `${t.name} — ${extrasLabel(t, late, solidarityDue)} de ${memberName}`, caisseId],
   );
   return rows[0]!.id;
 }
@@ -698,6 +716,14 @@ export async function markContribution(
     let extraTxId: string | null = null;
     let extraTrId: string | null = null;
 
+    // La caisse de solidarité n'est due qu'au premier tour de chaque cycle
+    // (migration 036) : avec 14 membres, une fois tous les 14 mois.
+    const { rows: countRows } = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM tontine_members WHERE tontine_id = $1`,
+      [tontineId],
+    );
+    const solidarityDue = isFirstRoundOfCycle(tontine, Number(countRows[0]!.n));
+
     if (tracksMoney(tontine)) {
       const potId = tontine.account_id!;
       if (memberId === tontine.my_member_id) {
@@ -711,7 +737,7 @@ export async function markContribution(
           note: `${tontine.name} — cotisation tour ${tontine.current_round}`,
         });
         transferId = transfer.id;
-        extraTrId = await recordExtras(client, userId, tontine, from.id, late, occurredOn);
+        extraTrId = await recordExtras(client, userId, tontine, from.id, late, solidarityDue, occurredOn);
       } else if (tontine.role === "collecteur") {
         // L'argent d'un autre membre entre dans la cagnotte que je détiens,
         // mais SEULE sa cotisation : sa caisse de solidarité et sa pénalité
@@ -721,7 +747,7 @@ export async function markContribution(
         // retomber à zéro en fin de cycle dès que le groupe avait une caisse —
         // la cagnotte encaissait une solidarité qu'elle ne reversait jamais.
         potTxId = await recordPotInflow(client, userId, tontine, member.name, amount, occurredOn);
-        extraTxId = await recordCaisseInflowForOther(client, userId, tontine, member.name, late, occurredOn);
+        extraTxId = await recordCaisseInflowForOther(client, userId, tontine, member.name, late, solidarityDue, occurredOn);
       }
     }
 
