@@ -97,6 +97,8 @@ export interface TontineView {
   secoursMotifs: string[];
 }
 
+export interface TontineView extends PersonalPosition {}
+
 export interface TontineMoneySettings {
   myMemberPosition?: number | null;
   role?: TontineRole;
@@ -190,6 +192,17 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
     // par diverger des mouvements.
     position: tontine.account_id ? await accountBalanceOf(userId, tontine.account_id, client) : 0,
     lateThisRound,
+    // ---- Ma position personnelle (migration 038) ----
+    //
+    // `position` ci-dessus est le solde de la CAGNOTTE. Pour un participant
+    // c'est bien sa créance sur le groupe. Pour un COLLECTEUR, c'est la
+    // trésorerie du groupe qu'il détient — et l'afficher comme « le groupe
+    // vous doit » disait exactement l'inverse de la vérité.
+    //
+    // Les quatre chiffres ci-dessous disent, eux, la même chose quel que soit
+    // le rôle : ce que J'AI versé, ce que J'AI reçu, ce qu'il me reste à
+    // verser, et quand vient mon tour.
+    ...(await personalPosition(client, userId, tontine, members)),
     // ---- Caisse de secours (migration 035) ----
     caisseAccountId: tontine.caisse_account_id ?? null,
     // Ce que le groupe détient. Jamais compté dans le « disponible » : cet
@@ -204,6 +217,107 @@ async function loadTontineView(client: PoolClient | typeof pool, userId: string,
       ? await caisseContributedByUser(client, userId, tontine)
       : 0,
     secoursMotifs: secoursMotifsOf(tontine),
+  };
+}
+
+export interface PersonalPosition {
+  /** Ce que j'ai moi-même versé dans la cagnotte depuis le début. */
+  myContributed: number;
+  /** Ce que j'ai encaissé à mon ou mes tours. */
+  myReceived: number;
+  /** Ce qu'il me reste à cotiser d'ici la fin du cycle en cours. */
+  myRemainingToPay: number;
+  /** Numéro du tour où j'encaisse (le prochain si le mien est passé). NULL si non désigné. */
+  myTurnRound: number | null;
+  /** Mon tour de ce cycle est-il déjà passé ? */
+  myTurnPassed: boolean;
+  /**
+   * Collecteur seulement : ce que la cagnotte DEVRAIT contenir au vu des
+   * cotisations pointées ce tour. Comparé au solde réel, c'est le contrôle de
+   * caisse de celui qui manipule l'argent de tout le groupe.
+   */
+  expectedHeld: number | null;
+}
+
+/**
+ * Position personnelle dans le cycle, indépendante du rôle (migration 038).
+ *
+ * Calculée depuis les mouvements réels — mes virements vers la cagnotte et
+ * l'historique des tours — jamais depuis un compteur stocké, qui finirait par
+ * diverger comme tout solde mis en cache.
+ */
+async function personalPosition(
+  client: PoolClient | typeof pool,
+  userId: string,
+  tontine: {
+    id: string; current_round: number; contribution_amount: string;
+    my_member_id: string | null; role: TontineRole;
+  },
+  members: TontineMember[],
+): Promise<PersonalPosition> {
+  const vide: PersonalPosition = {
+    myContributed: 0, myReceived: 0, myRemainingToPay: 0,
+    myTurnRound: null, myTurnPassed: false, expectedHeld: null,
+  };
+  const n = members.length;
+  if (!tontine.my_member_id || n === 0) return vide;
+
+  // Mes cotisations : seules les miennes portent un virement depuis un de mes
+  // comptes (celles des autres sont des entrées sur la cagnotte).
+  const { rows: verse } = await client.query<{ total: string }>(
+    `SELECT COALESCE(SUM(tr.amount), 0) AS total
+       FROM tontine_contributions tc
+       JOIN transfers tr ON tr.id = tc.transfer_id
+      WHERE tc.tontine_id = $1 AND tc.member_id = $2`,
+    [tontine.id, tontine.my_member_id],
+  );
+
+  const { rows: recu } = await client.query<{ total: string }>(
+    `SELECT COALESCE(SUM(total_amount), 0) AS total
+       FROM tontine_round_history
+      WHERE tontine_id = $1 AND beneficiary_member_id = $2`,
+    [tontine.id, tontine.my_member_id],
+  );
+
+  // Ai-je cotisé pour le tour en cours ? Décide s'il me reste ce tour-ci à payer.
+  const { rows: ceTour } = await client.query<{ paid: boolean }>(
+    `SELECT paid FROM tontine_contributions
+      WHERE tontine_id = $1 AND member_id = $2 AND round_number = $3`,
+    [tontine.id, tontine.my_member_id, tontine.current_round],
+  );
+  const dejaPayeCeTour = ceTour[0]?.paid === true;
+
+  // Un cycle compte autant de tours qu'il y a de membres.
+  const rangDansLeCycle = ((tontine.current_round - 1) % n) + 1;
+  const toursRestants = n - rangDansLeCycle + (dejaPayeCeTour ? 0 : 1);
+
+  const maPosition = members.find((m) => m.id === tontine.my_member_id)?.position ?? null;
+  let myTurnRound: number | null = null;
+  let myTurnPassed = false;
+  if (maPosition) {
+    const cycle = Math.floor((tontine.current_round - 1) / n);
+    const tourDeCeCycle = cycle * n + maPosition;
+    myTurnPassed = tourDeCeCycle < tontine.current_round;
+    myTurnRound = myTurnPassed ? tourDeCeCycle + n : tourDeCeCycle;
+  }
+
+  let expectedHeld: number | null = null;
+  if (tontine.role === "collecteur") {
+    const { rows: pointes } = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM tontine_contributions
+        WHERE tontine_id = $1 AND round_number = $2 AND paid = true`,
+      [tontine.id, tontine.current_round],
+    );
+    expectedHeld = round2(Number(pointes[0]!.n) * Number(tontine.contribution_amount));
+  }
+
+  return {
+    myContributed: Number(verse[0]!.total),
+    myReceived: Number(recu[0]!.total),
+    myRemainingToPay: round2(Math.max(toursRestants, 0) * Number(tontine.contribution_amount)),
+    myTurnRound,
+    myTurnPassed,
+    expectedHeld,
   };
 }
 
