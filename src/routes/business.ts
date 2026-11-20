@@ -10,7 +10,7 @@ import {
   createSavingsGoalSchema, updateSavingsGoalSchema, savingsMovementSchema,
   createProjectSchema, updateProjectSchema,
   createRubriqueSchema, updateRubriqueSchema,
-  createTontineSchema, updateTontineSchema, markContributionSchema, closeRoundSchema,
+  createTontineSchema, updateTontineSchema, markContributionSchema, closeRoundSchema, caisseMovementSchema,
   createPlannerEventSchema, updatePlannerEventSchema, setPlannerEventStatusSchema,
   askAssistantSchema,
   decideBudgetProposalSchema,
@@ -339,6 +339,31 @@ businessRouter.delete("/tontines/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
   await tontines.deleteTontine(req.auth!.userId, id);
   res.status(204).send();
+});
+
+// Caisse de secours du groupe (migrations/035). Un versement l'alimente, un
+// secours en sort vers un membre — et seulement vers un membre : c'est ce qui
+// distingue une caisse mutuelle d'un compte d'épargne.
+businessRouter.get("/tontines/:id/caisse", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  res.json({ caisseMovements: await tontines.listCaisseMovements(req.auth!.userId, id) });
+});
+businessRouter.post("/tontines/:id/caisse/versements", validateBody(caisseMovementSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const tontine = await tontines.addCaisseVersement(req.auth!.userId, id, req.body);
+  res.status(201).json({ tontine });
+});
+businessRouter.post("/tontines/:id/caisse/secours", validateBody(caisseMovementSchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const tontine = await tontines.addSecours(req.auth!.userId, id, req.body);
+  res.status(201).json({ tontine });
+});
+// Annule un mouvement et défait l'argent qu'il avait créé — même principe que
+// décocher une cotisation.
+businessRouter.delete("/tontines/:id/caisse/:movementId", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const movementId = requireParamId(req.params.movementId);
+  res.json({ tontine: await tontines.deleteCaisseMovement(req.auth!.userId, id, movementId) });
 });
 
 // ---------------------------------------------------------------------------
