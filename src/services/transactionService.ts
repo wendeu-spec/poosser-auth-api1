@@ -7,7 +7,9 @@ import { assertAccountUsable, ensureDefaultAccount, feeCategoryFor, type Account
 export interface TransactionRow {
   id: string;
   type: "revenu" | "depense";
-  category: string;
+  // NULL pour une opération de projet : c'est sa rubrique qui la classe
+  // (migration 037). Tout affichage doit donc tolérer son absence.
+  category: string | null;
   amount: string;
   occurred_on: string;
   method: string;
@@ -26,7 +28,9 @@ export interface TransactionRow {
 
 export interface TransactionInput {
   type: "revenu" | "depense";
-  category: string;
+  // Facultative depuis la migration 037 : dans un projet, c'est la rubrique
+  // qui classe l'opération, et la catégorie n'est pas enregistrée.
+  category?: string;
   amount: number;
   occurredOn: string;
   method: string;
@@ -66,6 +70,40 @@ export async function assertProjectAndRubriqueConsistent(
   await assertRubriqueBelongsToProject(userId, rubriqueId, projectId);
 }
 
+/**
+ * Règle de classement d'une opération (migration 037).
+ *
+ * Hors projet : une CATÉGORIE, comme toujours.
+ * Dans un projet : une RUBRIQUE, et pas de catégorie — c'est la rubrique qui
+ * classe. Exiger les deux revenait à faire saisir deux taxonomies pour la même
+ * dépense, dont une que le Budget ignorait déjà.
+ *
+ * Renvoie la catégorie à écrire : celle fournie hors projet, `null` dedans.
+ * Appliqué ici plutôt que dans le validateur Zod parce que la règle dépend de
+ * l'appartenance de la rubrique au projet, qui demande la base.
+ */
+export function resolveClassement(
+  projectId: string | null | undefined,
+  rubriqueId: string | null | undefined,
+  category: string | null | undefined,
+): string | null {
+  if (projectId) {
+    // La rubrique n'est PAS exigée (choix de Yannis) : sans elle, l'opération
+    // est « Non classé », un état que la vue Projets affiche depuis toujours
+    // et que produit déjà la suppression d'une rubrique. Bloquer ici serait
+    // incohérent avec ce qui arrive par cette autre porte, et ferait perdre
+    // une dépense notée dans l'urgence sur un chantier.
+    //
+    // La catégorie éventuellement envoyée par un client plus ancien est
+    // ignorée, pas refusée : il n'a pas à connaître la règle.
+    return null;
+  }
+  if (!category) {
+    throw Errors.validation({ field: "category", reason: "required outside a project" });
+  }
+  return category;
+}
+
 // projectId n'a de garde-fou nulle part ailleurs : sans cette vérification,
 // un projectId appartenant à un autre utilisateur serait accepté tel quel et
 // fausserait silencieusement les totaux agrégés de SON projet (fuite de
@@ -96,8 +134,11 @@ export async function listTransactions(userId: string, projectId?: string): Prom
 
 type Queryable = Pick<PoolClient, "query">;
 
-function feeNote(note: string | null, category: string): string {
-  return `Frais · ${note || category}`.slice(0, 280);
+// L'opération d'origine peut n'avoir aucune catégorie (opération de projet,
+// migration 037) : on se rabat alors sur sa note, puis sur un libellé neutre,
+// plutôt que d'écrire « Frais · null » dans l'historique.
+function feeNote(note: string | null, category: string | null): string {
+  return `Frais · ${note || category || "opération"}`.slice(0, 280);
 }
 
 async function accountTypeOf(db: Queryable, accountId: string): Promise<AccountType> {
@@ -151,6 +192,7 @@ export async function createTransaction(
 ): Promise<{ transaction: TransactionRow; feeTransaction: TransactionRow | null }> {
   if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
   await assertProjectAndRubriqueConsistent(userId, input.projectId, input.rubriqueId);
+  const category = resolveClassement(input.projectId, input.rubriqueId, input.category);
 
   const accountId = input.accountId
     ? (await assertAccountUsable(userId, input.accountId)).id
@@ -160,7 +202,7 @@ export async function createTransaction(
     const { rows } = await client.query<TransactionRow>(
       `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id, account_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [userId, input.type, input.category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId],
+      [userId, input.type, category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId],
     );
     const transaction = rows[0]!;
     const feeTransaction = input.fee && input.fee > 0 ? await syncFee(client, userId, transaction, input.fee) : null;
@@ -195,6 +237,11 @@ export async function updateTransaction(
 
   if (nextProjectId) await assertProjectOwnedByUser(userId, nextProjectId);
   await assertProjectAndRubriqueConsistent(userId, nextProjectId, nextRubriqueId);
+  // Rattacher une opération existante à un projet efface sa catégorie, et
+  // l'en détacher en réclame une : le classement suit la destination, pas
+  // l'état d'origine. Dans un projet, l'absence de rubrique est permise et
+  // vaut « Non classé » (voir resolveClassement).
+  const nextCategory = resolveClassement(nextProjectId, nextRubriqueId, input.category ?? current.category);
 
   // Changer de compte : le nouveau doit appartenir à l'utilisateur et être
   // actif. Rester sur un compte depuis archivé reste permis (on corrige un
@@ -207,7 +254,7 @@ export async function updateTransaction(
     const { rows } = await client.query<TransactionRow>(
       `UPDATE transactions SET
          type = COALESCE($3, type),
-         category = COALESCE($4, category),
+         category = $4,
          amount = COALESCE($5, amount),
          occurred_on = COALESCE($6, occurred_on),
          method = COALESCE($7, method),
@@ -217,7 +264,7 @@ export async function updateTransaction(
          account_id = COALESCE($11, account_id)
        WHERE id = $1 AND user_id = $2
        RETURNING *`,
-      [id, userId, input.type ?? null, input.category ?? null, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId, input.accountId ?? null],
+      [id, userId, input.type ?? null, nextCategory, input.amount ?? null, input.occurredOn ?? null, input.method ?? null, nextNote, nextProjectId, nextRubriqueId, input.accountId ?? null],
     );
     const transaction = rows[0]!;
     const feeTransaction = await syncFee(client, userId, transaction, input.fee);
