@@ -1319,6 +1319,10 @@
             <label>Nom du projet</label>
             <input type="text" id="projName" placeholder="Ex: Construction maison" required>
           </div>
+          <!-- Proposition d'archétype reconnue depuis le nom (migration 038).
+               Rien n'est appliqué tant que l'utilisateur ne clique pas : la
+               reconnaissance propose, elle ne décide pas. -->
+          <div id="projArchetype" style="grid-column: 1 / -1; display:none;"></div>
           <div class="field">
             <label>Icône</label>
             <select id="projIcon">
@@ -1433,6 +1437,54 @@
             <label>Date cible (optionnel)</label>
             <input type="date" id="projEditTargetDate">
           </div>
+          <div class="field">
+            <label>Nature du projet</label>
+            <select id="projEditKind">
+              <option value="">Reconnue automatiquement</option>
+              <option value="depense">Dépenses seules — l'objectif est un budget</option>
+              <option value="activite">Activité — j'achète, je transforme, je vends</option>
+            </select>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:6px;">POOSSER reconnaît la nature au nom du projet et à ses mouvements. Ne la fixez ici que pour corriger.</div>
+          </div>
+          <!-- Prix de revient et marge (migration 038). Volontairement replié
+               et facultatif : deux nombres pour ceux qui vendent, invisible
+               pour ceux qui ne vendent pas. On utilise <details> et non
+               l'attribut hidden — ce dernier a déjà été écrasé trois fois par
+               un display de .field. -->
+          <details id="projEditEco" style="grid-column: 1 / -1; border:1px solid var(--border); border-radius:10px; padding:10px 12px;">
+            <summary style="cursor:pointer; font-size:13px; font-weight:600;">Vente et marge (optionnel)</summary>
+            <div style="font-size:11.5px; color:var(--text-muted); margin:8px 0 12px;">Deux nombres suffisent : POOSSER connaît déjà vos coûts par les rubriques. Ni stock, ni facturation, ni TVA — ce reste une application de finances personnelles.</div>
+            <div class="form-grid" style="margin:0;">
+              <div class="field">
+                <label>Quantité produite (optionnel)</label>
+                <input type="number" id="projEditQuantity" min="0" step="0.001" placeholder="Ex: 500">
+              </div>
+              <div class="field">
+                <label>Prix de vente unitaire (optionnel)</label>
+                <input type="number" id="projEditUnitPrice" min="0" step="0.01" placeholder="Ex: 4.5">
+              </div>
+              <div class="field">
+                <label>Devise de vente</label>
+                <select id="projEditSaleCurrency">
+                  <option value="XAF">FCFA (XAF)</option>
+                  <option value="XOF">FCFA (XOF)</option>
+                  <option value="EUR">Euro (EUR)</option>
+                  <option value="USD">Dollar (USD)</option>
+                  <option value="GBP">Livre (GBP)</option>
+                  <option value="CAD">Dollar canadien (CAD)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Taux de conversion</label>
+                <div id="projEditRateFixed" style="font-size:12.5px; color:var(--text-secondary); padding:6px 0;"></div>
+                <label style="display:flex; align-items:center; gap:8px; font-weight:400; font-size:12.5px; margin-top:4px;">
+                  <input type="checkbox" id="projEditRateCustom" style="width:auto; margin:0;">
+                  Mon taux est différent (changeur, bureau de change)
+                </label>
+                <input type="number" id="projEditExchangeRate" min="0" step="0.0001" placeholder="Ex: 640" style="display:none; margin-top:6px;">
+              </div>
+            </div>
+          </details>
           <div class="field" style="display:flex; flex-direction:row; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary">Enregistrer</button>
             <button type="button" class="btn btn-ghost" id="projEditCancel">Annuler</button>
@@ -1443,6 +1495,10 @@
       <div class="project-detail-tiles" id="projectDetailTiles"></div>
       <div id="projectDetailProgress" style="margin-bottom:18px;"></div>
       <div class="project-actions" id="projectDetailActions" style="margin-bottom:18px;"></div>
+      <!-- Statistiques propres à la nature du projet : rythme de dépense et
+           avancement dans le temps pour un chantier, rentabilité et prix de
+           revient pour une activité (migration 038). -->
+      <div id="projectInsights" style="display:grid; gap:18px; margin-bottom:18px;"></div>
 
       <div class="card" style="margin-bottom:18px;">
         <div class="page-head" style="margin-bottom:4px;">
@@ -1458,6 +1514,15 @@
             <div class="field">
               <label>Nom de la rubrique</label>
               <input type="text" id="rubName" placeholder="Ex: Fondation" required>
+            </div>
+            <!-- Frais d'approche (migration 038) : compte dans le prix de
+                 revient, pas dans le coût d'achat. -->
+            <div class="field" style="grid-column: 1 / -1;">
+              <label style="display:flex; align-items:center; gap:8px; font-weight:400; font-size:12.5px;">
+                <input type="checkbox" id="rubLandedCost" style="width:auto; margin:0;">
+                C'est un frais d'approche (transport, emballage, douane, manutention)
+              </label>
+              <div style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">Ce qui amène la marchandise à destination sans être la marchandise. Séparé du coût d'achat dans le calcul du prix de revient.</div>
             </div>
             <div class="field">
               <label id="rubPlannedLabel">Enveloppe (FCFA, optionnel)</label>
@@ -2418,7 +2483,41 @@ function mapProjectFromApi(p){
     target: p.target_amount != null ? Number(p.target_amount) : null,
     targetDate: p.target_date,
     status: p.status,
+    // Nature et économie du projet (migration 038). `kind` null = déduit des
+    // mouvements par projectKind().
+    kind: p.kind || null,
+    quantityProduced: p.quantity_produced != null ? Number(p.quantity_produced) : null,
+    unitPrice: p.unit_price != null ? Number(p.unit_price) : null,
+    saleCurrency: p.sale_currency || 'XAF',
+    exchangeRate: p.exchange_rate != null ? Number(p.exchange_rate) : null,
+    // Sert de date de départ à projectTimeProgress quand le projet n'a encore
+    // aucun mouvement ; sans elle l'avancement dans le temps partait
+    // d'aujourd'hui et affichait 0 % sur un projet créé il y a six mois.
+    createdAt: p.created_at ? String(p.created_at).slice(0, 10) : null,
   };
+}
+
+/**
+ * Parité fixe du franc CFA d'Afrique centrale : 1 € = 655,957 FCFA. Ce n'est
+ * pas un cours qui bouge, c'est un arrimage — d'où une constante et non un
+ * champ à saisir. Un projet peut tout de même porter son propre taux quand il
+ * passe par un changeur informel (projects.exchange_rate).
+ */
+const PARITE_FIXE = { EUR: 655.957, XOF: 1 };
+function tauxDeConversion(p){
+  if(p.exchangeRate) return p.exchangeRate;
+  return PARITE_FIXE[p.saleCurrency] || 1;
+}
+
+/**
+ * Nature du projet : celle que l'utilisateur a validée, sinon déduite des
+ * mouvements. Un projet qui n'a jamais rien encaissé est un projet de
+ * dépense, dont « l'objectif » est un budget à ne pas dépasser.
+ */
+function projectKind(p){
+  if(p.kind) return p.kind;
+  const s = projectStats(p.id);
+  return s.totalIn === 0 ? 'depense' : 'activite';
 }
 
 function projectStats(projectId){
@@ -2426,6 +2525,117 @@ function projectStats(projectId){
   const totalIn = rows.filter(t=>t.type==='revenu').reduce((a,t)=>a+t.amount,0);
   const totalOut = rows.filter(t=>t.type==='depense').reduce((a,t)=>a+t.amount,0);
   return { totalIn, totalOut, balance: totalIn - totalOut, count: rows.length };
+}
+
+/**
+ * Économie d'un projet d'activité : prix de revient, chiffre d'affaires,
+ * marge (migration 038).
+ *
+ * Tout se déduit de ce qui est déjà saisi, sauf deux nombres — la quantité
+ * produite et le prix de vente unitaire — et une case à cocher sur les
+ * rubriques de frais d'approche. C'est la limite volontaire de l'exercice :
+ * ni stock, ni facturation, ni TVA, ni amortissements.
+ */
+function projectEconomics(p){
+  const stats = projectStats(p.id);
+  const rubs = rubriquesForProject(p.id);
+  // Une rubrique « frais d'approche » n'est comptée QUE si aucun de ses
+  // ancêtres ne l'est déjà : rubriqueRollupStats additionne les
+  // sous-rubriques, donc marquer « Transport » et sa sous-rubrique « Fret »
+  // comptait le fret deux fois, et faisait sortir un coût d'achat trop bas —
+  // donc une marge trop belle.
+  const estCouvertParUnAncetre = (r) => {
+    let parent = r.parentId ? state.rubriques.find(x=>x.id===r.parentId) : null;
+    while(parent){
+      if(parent.isLandedCost) return true;
+      parent = parent.parentId ? state.rubriques.find(x=>x.id===parent.parentId) : null;
+    }
+    return false;
+  };
+  const fraisApproche = rubs.filter(r=>r.isLandedCost && !estCouvertParUnAncetre(r))
+    .reduce((a,r)=> a + rubriqueRollupStats(r.id).total, 0);
+  // Les dépenses non rattachées à une rubrique restent du coût d'achat : on
+  // part du total dépensé et on en retire les frais d'approche identifiés.
+  const coutAchat = Math.max(stats.totalOut - fraisApproche, 0);
+  const coutTotal = stats.totalOut;
+
+  const q = p.quantityProduced;
+  const taux = tauxDeConversion(p);
+  // Le prix de vente est exprimé dans la devise de vente ; les coûts sont en
+  // monnaie de l'utilisateur. On ramène tout à cette dernière — une marge ne
+  // se calcule pas entre deux devises.
+  const prixVenteConverti = p.unitPrice != null ? p.unitPrice * taux : null;
+
+  const prixRevientUnitaire = q ? coutTotal / q : null;
+  // Chiffre d'affaires : ce qui a RÉELLEMENT été encaissé s'il y en a, sinon
+  // la projection quantité × prix. Les deux sont utiles et ne disent pas la
+  // même chose, d'où les deux champs.
+  const caProjete = (q && prixVenteConverti != null) ? q * prixVenteConverti : null;
+  const caReel = stats.totalIn;
+
+  const base = caReel > 0 ? caReel : caProjete;
+  const marge = base != null ? base - coutTotal : null;
+  const margePct = (base != null && base > 0) ? marge / base * 100 : null;
+
+  return {
+    coutTotal, coutAchat, fraisApproche,
+    quantite: q, prixRevientUnitaire,
+    prixVenteUnitaire: p.unitPrice, prixVenteConverti, devise: p.saleCurrency, taux,
+    caProjete, caReel, marge, margePct,
+    // Part de chaque rubrique dans le prix de revient : c'est là qu'on décide
+    // quoi négocier.
+    postes: rubs.filter(r=>!r.parentId).map(r=>({
+      nom: r.name,
+      montant: rubriqueRollupStats(r.id).total,
+      fraisApproche: r.isLandedCost,
+      part: coutTotal > 0 ? rubriqueRollupStats(r.id).total / coutTotal * 100 : 0,
+      unitaire: q ? rubriqueRollupStats(r.id).total / q : null,
+    })).filter(x=>x.montant > 0).sort((a,b)=> b.montant - a.montant),
+  };
+}
+
+/**
+ * Rythme de dépense d'un chantier et date probable d'épuisement du budget.
+ * Répond à « à ce rythme, est-ce que je tiens ? » sans rien demander de plus
+ * que les dépenses déjà saisies.
+ */
+function projectBurnRate(p){
+  const rows = state.transactions.filter(t=>t.projectId===p.id && t.type==='depense');
+  if(rows.length < 2) return null;
+  const dates = rows.map(t=>t.date).sort();
+  const debut = new Date(dates[0]), fin = new Date(dates[dates.length-1]);
+  const jours = Math.max((fin - debut) / 86400000, 1);
+  const total = rows.reduce((a,t)=>a+t.amount,0);
+  const parMois = total / jours * 30;
+  if(!(parMois > 0)) return null;
+  const reste = p.target ? p.target - total : null;
+  return {
+    parMois,
+    moisRestants: reste != null && reste > 0 ? reste / parMois : null,
+    deja: total,
+  };
+}
+
+/**
+ * Où en est le projet dans le TEMPS, comparé à où il en est dans l'argent.
+ * « 60 % du budget consommé, 90 % du temps écoulé » dit quelque chose
+ * qu'aucun des deux chiffres ne dit seul.
+ */
+function projectTimeProgress(p){
+  if(!p.targetDate) return null;
+  const rows = state.transactions.filter(t=>t.projectId===p.id);
+  const debut = rows.length
+    ? new Date(rows.map(t=>t.date).sort()[0])
+    : new Date(p.createdAt || todayISO(0));
+  const fin = new Date(p.targetDate);
+  const aujourdhui = new Date(todayISO(0));
+  const total = (fin - debut) / 86400000;
+  if(!(total > 0)) return { pct: 100, depassee: aujourdhui > fin, joursRestants: Math.round((fin - aujourdhui) / 86400000) };
+  return {
+    pct: Math.max(Math.min((aujourdhui - debut) / 86400000 / total * 100, 999), 0),
+    depassee: aujourdhui > fin,
+    joursRestants: Math.round((fin - aujourdhui) / 86400000),
+  };
 }
 
 /**
@@ -2448,7 +2658,9 @@ function projectStats(projectId){
 function projectProgress(p){
   if(!p.target) return null;
   const stats = projectStats(p.id);
-  const depenseSeule = stats.totalIn === 0 && stats.totalOut > 0;
+  // La nature validée l'emporte sur l'heuristique : un chantier qui reçoit un
+  // remboursement reste un chantier (migration 038).
+  const depenseSeule = projectKind(p) === 'depense' && stats.totalOut > 0;
   const valeur = depenseSeule ? stats.totalOut : stats.balance;
   const pct = valeur / p.target * 100;
   return {
@@ -2474,6 +2686,9 @@ function mapRubriqueFromApi(r){
     name: r.name,
     plannedAmount: r.planned_amount != null ? Number(r.planned_amount) : null,
     parentId: r.parent_rubrique_id || null,
+    // Frais d'approche : compte dans le prix de revient, pas dans le coût
+    // d'achat (migration 038).
+    isLandedCost: !!r.is_landed_cost,
   };
 }
 function rubriqueById(id){ return state.rubriques.find(r=>r.id===id); }
@@ -5688,17 +5903,128 @@ document.getElementById('openProjectForm').addEventListener('click', ()=>{
     // vide à chaque nouvelle ouverture, pour ne pas recréer par erreur la
     // sélection d'un projet précédent.
     selectedRubriqueNames = [];
+    selectedLandedCostNames = [];
+    acceptedProjectKind = null;
+    pendingArchetype = null;
+    archetypeLastQuery = '';
+    const arch = document.getElementById('projArchetype');
+    arch.style.display = 'none';
+    arch.innerHTML = '';
     renderProjRubriqueChips();
   }
   card.style.display = willShow ? 'block' : 'none';
 });
 
 // ----- Suggestions de rubriques à la création d'un projet -----
-// Pour l'instant RUBRIQUE_SUGGESTIONS est une liste statique par icône (voir
-// plus haut) ; c'est le point d'entrée prévu pour qu'une IA propose plus tard
-// des rubriques personnalisées (ex: selon le nom du projet) sans toucher au
-// reste de ce flux — seule suggestRubriquesFor(icon) changerait.
+// Deux sources se complètent : RUBRIQUE_SUGGESTIONS, liste statique par
+// icône (voir plus haut), et la reconnaissance d'archétype depuis le NOM
+// (migration 038), servie par GET /api/project-archetype. La seconde est plus
+// précise mais ne couvre pas tout, d'où la première qui reste le filet.
 let selectedRubriqueNames = [];
+// Rubriques que l'archétype accepté désigne comme frais d'approche, par nom —
+// elles seront créées avec isLandedCost à vrai.
+let selectedLandedCostNames = [];
+// Nature proposée par l'archétype ET acceptée par l'utilisateur. Reste null
+// s'il ignore la proposition : la colonne kind est alors NULL en base et
+// l'heuristique de projectKind() s'applique.
+let acceptedProjectKind = null;
+// Dernière proposition affichée, non encore acceptée.
+let pendingArchetype = null;
+
+/**
+ * Reconnaissance d'archétype pendant la saisie du nom.
+ *
+ * La reconnaissance vit sur le SERVEUR (src/lib/projectArchetypes.ts) et non
+ * ici : une deuxième copie de la liste de mots déclencheurs dans le front
+ * finirait par dériver de la première, et c'est précisément le genre d'écart
+ * qu'on ne verrait pas.
+ *
+ * Elle PROPOSE, elle n'applique rien : tant que l'utilisateur ne clique pas,
+ * ni la nature ni les rubriques ne changent.
+ */
+let archetypeTimer = null;
+let archetypeLastQuery = '';
+function scheduleArchetypeLookup(){
+  clearTimeout(archetypeTimer);
+  archetypeTimer = setTimeout(lookupArchetype, 450);
+}
+async function lookupArchetype(){
+  const input = document.getElementById('projName');
+  const wrap = document.getElementById('projArchetype');
+  if(!input || !wrap) return;
+  const name = input.value.trim();
+  if(name.length < 3){
+    archetypeLastQuery = '';
+    pendingArchetype = null;
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  if(name === archetypeLastQuery) return;
+  archetypeLastQuery = name;
+  let suggestion = null;
+  try {
+    const res = await apiFetch('/api/project-archetype?name=' + encodeURIComponent(name), { auth:true });
+    suggestion = res.suggestion;
+  } catch(err){
+    // Une proposition est un bonus : si elle échoue, la création d'un projet
+    // doit continuer exactement comme avant. Pas de message d'erreur.
+    console.warn('Reconnaissance du projet indisponible :', err);
+    wrap.style.display = 'none';
+    return;
+  }
+  // La saisie a pu changer pendant la requête : ne pas afficher une
+  // proposition qui ne correspond plus à ce qui est écrit.
+  if(document.getElementById('projName').value.trim() !== name) return;
+  if(!suggestion){
+    pendingArchetype = null;
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  pendingArchetype = suggestion;
+  renderArchetypeProposal(suggestion);
+}
+
+function renderArchetypeProposal(s){
+  const wrap = document.getElementById('projArchetype');
+  const nature = s.kind === 'activite'
+    ? "une activité : POOSSER suivra son prix de revient et sa marge"
+    : "un projet de dépenses : son objectif se lira comme un budget à ne pas dépasser";
+  wrap.innerHTML = `
+    <div class="card" style="margin:0; border-color:var(--s1); background:var(--surface-2);">
+      <div style="font-size:13px; margin-bottom:4px;"><b>POOSSER reconnaît ${escapeHtml(s.label)}</b> <span class="pill">au mot « ${escapeHtml(s.matchedOn)} »</span></div>
+      <div class="sub" style="margin-bottom:10px;">C'est ${nature}.</div>
+      <div class="sub" style="margin-bottom:6px;">Rubriques proposées</div>
+      <div class="filters" style="margin:0 0 12px;">${s.rubriques.map(r=>
+        `<span class="chip" style="cursor:default;">${escapeHtml(r.name)}${r.isLandedCost ? ' <span class="pill" style="font-size:10px;">frais d’approche</span>' : ''}</span>`).join('')}</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary" id="projArchetypeAccept" style="padding:6px 12px; font-size:12.5px;">Utiliser cette proposition</button>
+        <button type="button" class="btn btn-ghost" id="projArchetypeDismiss" style="padding:6px 12px; font-size:12.5px;">Ignorer</button>
+      </div>
+    </div>`;
+  wrap.style.display = 'block';
+  document.getElementById('projArchetypeAccept').addEventListener('click', ()=> acceptArchetype(s));
+  document.getElementById('projArchetypeDismiss').addEventListener('click', ()=>{
+    pendingArchetype = null;
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+  });
+}
+
+function acceptArchetype(s){
+  acceptedProjectKind = s.kind;
+  selectedLandedCostNames = s.rubriques.filter(r=>r.isLandedCost).map(r=>r.name);
+  // On AJOUTE à ce qui est déjà coché plutôt que de remplacer : l'utilisateur
+  // a peut-être déjà ajouté une rubrique à lui avant d'accepter.
+  for(const r of s.rubriques){
+    if(!selectedRubriqueNames.some(n=>n.toLowerCase()===r.name.toLowerCase())) selectedRubriqueNames.push(r.name);
+  }
+  const wrap = document.getElementById('projArchetype');
+  wrap.innerHTML = `<div class="sub" style="padding:8px 0;">✓ Proposition appliquée — ${s.rubriques.length} rubrique(s) cochée(s) ci-dessous. Décochez celles qui ne vous servent pas.</div>`;
+  pendingArchetype = null;
+  renderProjRubriqueChips();
+}
 
 function renderProjRubriqueChips(){
   const icon = document.getElementById('projIcon').value;
@@ -5712,7 +6038,8 @@ function renderProjRubriqueChips(){
   wrap.innerHTML = allNames.map(name=>{
     const active = selectedRubriqueNames.includes(name);
     const safe = name.replace(/"/g, '&quot;');
-    return `<button type="button" class="chip ${active?'active':''}" data-rub-chip="${safe}">${active?'✓ ':''}${name}</button>`;
+    const landed = selectedLandedCostNames.includes(name) ? ' ·  frais d’approche' : '';
+    return `<button type="button" class="chip ${active?'active':''}" data-rub-chip="${safe}">${active?'✓ ':''}${name}${landed}</button>`;
   }).join('');
   wrap.querySelectorAll('[data-rub-chip]').forEach(chipBtn=>{
     chipBtn.addEventListener('click', ()=>{
@@ -5727,10 +6054,17 @@ function renderProjRubriqueChips(){
 
 document.getElementById('projIcon').addEventListener('change', ()=>{
   // Les suggestions dépendent de l'icône : on repart d'une sélection vide
-  // plutôt que de mélanger les suggestions de deux icônes différentes.
-  selectedRubriqueNames = [];
+  // plutôt que de mélanger les suggestions de deux icônes différentes. Seule
+  // exception : une proposition d'archétype déjà ACCEPTÉE survit au
+  // changement d'icône — l'utilisateur a validé ces rubriques-là, les lui
+  // retirer parce qu'il change d'emoji serait incompréhensible.
+  selectedRubriqueNames = acceptedProjectKind ? selectedRubriqueNames.slice() : [];
   renderProjRubriqueChips();
 });
+
+// Reconnaissance à la frappe. Debounce : on ne sollicite pas le serveur à
+// chaque lettre.
+document.getElementById('projName').addEventListener('input', scheduleArchetypeLookup);
 
 function addCustomRubriqueChip(){
   const input = document.getElementById('projRubriqueCustom');
@@ -5760,7 +6094,11 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { project } = await apiFetch('/api/projects', { method:'POST', auth:true, body:{ name, icon, targetAmount, targetDate } });
+    // kind n'est envoyé que si l'utilisateur a accepté la proposition : sinon
+    // la colonne reste NULL et projectKind() déduit la nature des mouvements.
+    const body = { name, icon, targetAmount, targetDate };
+    if(acceptedProjectKind) body.kind = acceptedProjectKind;
+    const { project } = await apiFetch('/api/projects', { method:'POST', auth:true, body });
     state.projects.push(mapProjectFromApi(project)); // projet neuf : totaux à 0, mapProjectFromApi est donc sûr ici
 
     // Création séquentielle des rubriques sélectionnées — pas d'endpoint
@@ -5769,7 +6107,8 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
     // projet déjà créé (l'utilisateur pourra toujours l'ajouter à la main).
     for(const rubName of selectedRubriqueNames){
       try {
-        const { rubrique } = await apiFetch(`/api/projects/${project.id}/rubriques`, { method:'POST', auth:true, body:{ name: rubName } });
+        const isLandedCost = selectedLandedCostNames.includes(rubName);
+        const { rubrique } = await apiFetch(`/api/projects/${project.id}/rubriques`, { method:'POST', auth:true, body:{ name: rubName, isLandedCost } });
         state.rubriques.push(mapRubriqueFromApi(rubrique));
       } catch(err){
         console.error('Rubrique non créée à la création du projet :', rubName, err);
@@ -5778,6 +6117,12 @@ document.getElementById('projectForm').addEventListener('submit', async (e)=>{
 
     e.target.reset();
     selectedRubriqueNames = [];
+    selectedLandedCostNames = [];
+    acceptedProjectKind = null;
+    pendingArchetype = null;
+    archetypeLastQuery = '';
+    document.getElementById('projArchetype').style.display = 'none';
+    document.getElementById('projArchetype').innerHTML = '';
     renderProjRubriqueChips();
     document.getElementById('projectFormCard').style.display = 'none';
     populateProjectSelect();
@@ -6170,10 +6515,102 @@ function renderProjectDetail(){
   document.getElementById('projMarkDone').addEventListener('click', ()=> toggleProjectDone(p.id));
   document.getElementById('projDelete').addEventListener('click', ()=> deleteProjectWithConfirm(p.id));
 
+  renderProjectInsights(p);
   renderProjTxFilters(p.id);
   renderProjectDetailTxTable();
 
   renderProjectRubriques(p);
+}
+
+/**
+ * Les statistiques propres à la nature du projet (migration 038).
+ *
+ * Un chantier veut savoir s'il va tenir son budget et où ça dérape ; une
+ * activité veut savoir si elle gagne de l'argent. Afficher les mêmes chiffres
+ * aux deux, c'est n'en servir aucun correctement.
+ */
+function renderProjectInsights(p){
+  const wrap = document.getElementById('projectInsights');
+  if(!wrap) return;
+  const nature = projectKind(p);
+  const blocs = [];
+
+  // Avancement dans le temps : vaut pour les deux natures.
+  const temps = projectTimeProgress(p);
+  if(temps){
+    const prog = projectProgress(p);
+    const argent = prog ? Math.round(prog.pct) : null;
+    const ecart = (argent !== null && nature === 'depense') ? Math.round(temps.pct) - argent : null;
+    blocs.push(`
+      <div class="card">
+        <h3 style="margin:0 0 10px;">🗓️ Où en est le projet dans le temps</h3>
+        <div class="goal-amounts">
+          <span>Temps écoulé : <b${temps.depassee ? ' class="amt-neg"' : ''}>${Math.round(temps.pct)}%</b></span>
+          <span>${temps.depassee
+            ? `<b class="amt-neg">Échéance dépassée de ${Math.abs(temps.joursRestants)} jour(s)</b>`
+            : `${temps.joursRestants} jour(s) restant(s)`}</span>
+        </div>
+        <div class="bar-track" style="margin-top:6px;"><div class="bar-fill" style="width:${Math.min(temps.pct,100)}%; background:${temps.depassee ? 'var(--critical)' : 'var(--s2, var(--s1))'};"></div></div>
+        ${ecart !== null && Math.abs(ecart) >= 15 ? `<div class="sub" style="margin-top:8px;">${ecart > 0
+          ? `Vous avez consommé ${argent} % du budget pour ${Math.round(temps.pct)} % du temps : le chantier avance moins vite que le calendrier.`
+          : `Vous avez consommé ${argent} % du budget pour ${Math.round(temps.pct)} % du temps : la dépense va plus vite que le calendrier.`}</div>` : ''}
+      </div>`);
+  }
+
+  if(nature === 'depense'){
+    const burn = projectBurnRate(p);
+    if(burn){
+      blocs.push(`
+        <div class="card">
+          <h3 style="margin:0 0 10px;">🔥 Rythme de dépense</h3>
+          <div class="goal-amounts">
+            <span>Environ <b>${fmt(burn.parMois)}</b> par mois</span>
+            <span>${burn.moisRestants !== null
+              ? `Budget épuisé dans ~<b>${burn.moisRestants.toFixed(1)}</b> mois à ce rythme`
+              : 'Budget déjà épuisé'}</span>
+          </div>
+        </div>`);
+    }
+  } else {
+    const eco = projectEconomics(p);
+    const lignes = [];
+    lignes.push(`<span>Coût d'achat : <b>${fmt(eco.coutAchat)}</b></span>`);
+    if(eco.fraisApproche > 0) lignes.push(`<span>Frais d'approche : <b>${fmt(eco.fraisApproche)}</b></span>`);
+    lignes.push(`<span>Coût de revient : <b>${fmt(eco.coutTotal)}</b></span>`);
+
+    const unitaires = [];
+    if(eco.prixRevientUnitaire !== null){
+      unitaires.push(`<span>Prix de revient : <b>${fmt(eco.prixRevientUnitaire)}</b> / unité</span>`);
+      if(eco.prixVenteConverti !== null){
+        unitaires.push(`<span>Prix de vente : <b>${fmt(eco.prixVenteConverti)}</b>${eco.devise !== currencyCode() ? ` (${eco.prixVenteUnitaire} ${eco.devise})` : ''} / unité</span>`);
+      }
+    }
+
+    blocs.push(`
+      <div class="card">
+        <h3 style="margin:0 0 10px;">💰 Rentabilité</h3>
+        <div class="goal-amounts" style="flex-wrap:wrap; gap:14px;">${lignes.join('')}</div>
+        ${unitaires.length ? `<div class="goal-amounts" style="flex-wrap:wrap; gap:14px; margin-top:6px;">${unitaires.join('')}</div>` : ''}
+        ${eco.marge !== null ? `
+          <div class="goal-amounts" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--grid);">
+            <span>Marge : <b class="${eco.marge >= 0 ? 'amt-pos' : 'amt-neg'}">${fmt(eco.marge)}</b></span>
+            <span>${eco.margePct !== null ? `<b class="${eco.margePct >= 0 ? 'amt-pos' : 'amt-neg'}">${eco.margePct.toFixed(1)} %</b> du chiffre d'affaires` : ''}</span>
+          </div>
+          <div class="sub" style="margin-top:4px;">${eco.caReel > 0
+            ? `Sur ${fmt(eco.caReel)} réellement encaissés.`
+            : `Projection : ${fmt(eco.caProjete)} si tout est vendu au prix indiqué.`}</div>
+        ` : `<div class="sub" style="margin-top:8px;">Renseignez la quantité produite et le prix de vente dans « ✏️ Modifier » pour voir le prix de revient et la marge.</div>`}
+        ${eco.postes.length ? `
+          <div class="sub" style="margin:12px 0 6px;">Poids de chaque poste dans le coût de revient</div>
+          <div class="legend">${eco.postes.map(x=>`
+            <div class="legend-row">
+              <span class="lname">${escapeHtml(x.nom)}${x.fraisApproche ? ' <span class="pill" style="font-size:10.5px;">frais d&rsquo;approche</span>' : ''}</span>
+              <span class="lval">${fmt(x.montant)} · ${x.part.toFixed(0)} %${x.unitaire !== null ? ` · ${fmt(x.unitaire)}/u` : ''}</span>
+            </div>`).join('')}</div>` : ''}
+      </div>`);
+  }
+
+  wrap.innerHTML = blocs.join('');
 }
 
 // N'écrase QUE les champs renvoyés par PATCH /api/projects/:id (nom, icône,
@@ -6186,6 +6623,14 @@ function applyProjectPatch(p, apiRow){
   p.target = apiRow.target_amount != null ? Number(apiRow.target_amount) : null;
   p.targetDate = apiRow.target_date;
   p.status = apiRow.status;
+  // Nature et économie (migration 038). Le serveur renvoie ces colonnes
+  // telles qu'elles sont APRÈS la mise à jour, y compris quand elles valent
+  // null : effacer une quantité saisie par erreur doit se voir tout de suite.
+  p.kind = apiRow.kind || null;
+  p.quantityProduced = apiRow.quantity_produced != null ? Number(apiRow.quantity_produced) : null;
+  p.unitPrice = apiRow.unit_price != null ? Number(apiRow.unit_price) : null;
+  p.saleCurrency = apiRow.sale_currency || 'XAF';
+  p.exchangeRate = apiRow.exchange_rate != null ? Number(apiRow.exchange_rate) : null;
 }
 
 // Ouvre le formulaire de modification pré-rempli avec les valeurs actuelles
@@ -6201,6 +6646,17 @@ function openProjectEditForm(p){
   document.getElementById('projEditIcon').value = p.icon;
   document.getElementById('projEditTarget').value = p.target || '';
   document.getElementById('projEditTargetDate').value = p.targetDate || '';
+  document.getElementById('projEditKind').value = p.kind || '';
+  document.getElementById('projEditQuantity').value = p.quantityProduced ?? '';
+  document.getElementById('projEditUnitPrice').value = p.unitPrice ?? '';
+  document.getElementById('projEditSaleCurrency').value = p.saleCurrency || 'XAF';
+  document.getElementById('projEditRateCustom').checked = p.exchangeRate != null;
+  document.getElementById('projEditExchangeRate').value = p.exchangeRate ?? '';
+  syncProjEditRate();
+  // Déplié d'emblée pour une activité ou dès qu'un chiffre y est déjà saisi ;
+  // replié sinon, pour qu'un chantier ne voie jamais ces champs.
+  document.getElementById('projEditEco').open =
+    projectKind(p) === 'activite' || p.quantityProduced != null || p.unitPrice != null;
   document.getElementById('projectEditFormCard').style.display = 'block';
   document.getElementById('projectEditFormCard').scrollIntoView({ behavior:'smooth', block:'center' });
   document.getElementById('projEditName').focus();
@@ -6208,6 +6664,35 @@ function openProjectEditForm(p){
 document.getElementById('projEditCancel').addEventListener('click', ()=>{
   document.getElementById('projectEditFormCard').style.display = 'none';
 });
+
+/**
+ * Taux de conversion : on AFFICHE la parité fixe plutôt que de la faire
+ * saisir — 1 € = 655,957 FCFA est un arrimage, pas un cours. Le champ libre
+ * n'apparaît que pour le cas du changeur informel, dont le taux s'en écarte.
+ */
+function syncProjEditRate(){
+  const devise = document.getElementById('projEditSaleCurrency').value;
+  const custom = document.getElementById('projEditRateCustom');
+  const champ = document.getElementById('projEditExchangeRate');
+  const fixe = document.getElementById('projEditRateFixed');
+  const parite = PARITE_FIXE[devise];
+  const meme = devise === currencyCode();
+  if(meme){
+    fixe.textContent = 'Même devise que vos comptes — aucune conversion.';
+  } else if(parite){
+    // Virgule décimale : on écrit « 655,957 » comme au Cameroun, pas « 655.957 ».
+    fixe.textContent = `Parité fixe : 1 ${devise} = ${String(parite).replace('.', ',')} ${currencyUnitLabel()}.`;
+  } else {
+    fixe.textContent = `Pas de parité fixe pour ${devise} — indiquez votre taux ci-dessous.`;
+  }
+  // Sans parité connue, le taux n'est pas une option : on le réclame.
+  const obligatoire = !meme && !parite;
+  if(obligatoire) custom.checked = true;
+  custom.disabled = meme || obligatoire;
+  champ.style.display = (custom.checked && !meme) ? 'block' : 'none';
+}
+document.getElementById('projEditSaleCurrency').addEventListener('change', syncProjEditRate);
+document.getElementById('projEditRateCustom').addEventListener('change', syncProjEditRate);
 document.getElementById('projectEditForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const p = projectById(selectedProjectId);
@@ -6218,10 +6703,33 @@ document.getElementById('projectEditForm').addEventListener('submit', async (e)=
   const targetAmount = targetRaw ? parseFloat(targetRaw) : undefined;
   const targetDate = document.getElementById('projEditTargetDate').value || undefined;
   if(!name) return;
+  // Champs économiques : sémantique tri-état assumée côté serveur — un champ
+  // vidé envoie null et EFFACE la valeur, au contraire de l'objectif. C'est
+  // volontaire : une quantité saisie par erreur doit pouvoir se retirer.
+  const num = (id) => {
+    const raw = document.getElementById(id).value.trim();
+    if(!raw) return null;
+    const v = parseFloat(raw);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
+  const saleCurrency = document.getElementById('projEditSaleCurrency').value;
+  const tauxPerso = document.getElementById('projEditRateCustom').checked && saleCurrency !== currencyCode();
+  const body = {
+    name, icon, targetAmount, targetDate,
+    kind: document.getElementById('projEditKind').value || null,
+    quantityProduced: num('projEditQuantity'),
+    unitPrice: num('projEditUnitPrice'),
+    saleCurrency,
+    exchangeRate: tauxPerso ? num('projEditExchangeRate') : null,
+  };
+  if(body.exchangeRate === null && tauxPerso && !PARITE_FIXE[saleCurrency] && saleCurrency !== currencyCode()){
+    reportError('', new Error(`Indiquez votre taux de conversion : POOSSER ne connaît pas de parité fixe pour ${saleCurrency}.`));
+    return;
+  }
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
-    const { project } = await apiFetch('/api/projects/' + p.id, { method:'PATCH', auth:true, body:{ name, icon, targetAmount, targetDate } });
+    const { project } = await apiFetch('/api/projects/' + p.id, { method:'PATCH', auth:true, body });
     applyProjectPatch(p, project);
     document.getElementById('projectEditFormCard').style.display = 'none';
     populateProjectSelect(); // le nom/icône apparaissent aussi dans la liste déroulante "Projet" du formulaire de transaction
@@ -6278,6 +6786,7 @@ function openRubriqueEditForm(r){
   editingRubriqueId = r.id;
   document.getElementById('rubName').value = r.name;
   document.getElementById('rubPlanned').value = r.plannedAmount || '';
+  document.getElementById('rubLandedCost').checked = !!r.isLandedCost;
   populateRubParentSelect(p.id, r.id);
   document.getElementById('rubParent').value = r.parentId || '';
   document.getElementById('rubParent').disabled = false;
@@ -6318,16 +6827,20 @@ document.getElementById('rubriqueForm').addEventListener('submit', async (e)=>{
   // qui permet de détacher une sous-rubrique (repasser à "Aucune") via ce
   // même formulaire, pas seulement d'en fixer un.
   const parentRubriqueId = document.getElementById('rubParent').value || null;
+  // Toujours envoyé explicitement, comme parentRubriqueId : c'est ce qui
+  // permet de DÉCOCHER un frais d'approche marqué par erreur (false n'est pas
+  // null, donc le COALESCE serveur le prend bien en compte).
+  const isLandedCost = document.getElementById('rubLandedCost').checked;
   if(!name) return;
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
   try {
     if(editingRubriqueId){
-      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques/${editingRubriqueId}`, { method:'PATCH', auth:true, body:{ name, plannedAmount, parentRubriqueId } });
+      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques/${editingRubriqueId}`, { method:'PATCH', auth:true, body:{ name, plannedAmount, parentRubriqueId, isLandedCost } });
       const existing = rubriqueById(editingRubriqueId);
       Object.assign(existing, mapRubriqueFromApi(rubrique));
     } else {
-      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques`, { method:'POST', auth:true, body:{ name, plannedAmount, parentRubriqueId } });
+      const { rubrique } = await apiFetch(`/api/projects/${p.id}/rubriques`, { method:'POST', auth:true, body:{ name, plannedAmount, parentRubriqueId, isLandedCost } });
       state.rubriques.push(mapRubriqueFromApi(rubrique));
     }
     editingRubriqueId = null;
@@ -6404,7 +6917,7 @@ function renderRubriqueRow(r, depth, topColor){
   const row = `
     <div class="budget-item" style="padding-left:${depth*22}px;">
       <div class="budget-top">
-        <div class="cat">${prefix}${toggle}${swatch}${r.name}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
+        <div class="cat">${prefix}${toggle}${swatch}${r.name}${r.isLandedCost ? ' <span class="pill" style="font-size:10.5px;">frais d’approche</span>' : ''}${st ? ` <span class="status-tag status-${st.cls}">${st.label}</span>` : ''}</div>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <div class="nums">${fmt(rollupSpent)}${r.plannedAmount ? ' / ' + fmt(r.plannedAmount) : ''}</div>
           <button type="button" class="btn btn-ghost" data-add-sub-rubrique="${r.id}" style="padding:3px 8px; font-size:11px;" title="Ajouter une sous-rubrique">+ Sous-rub.</button>
