@@ -994,8 +994,12 @@
       <div id="txSavedNote" class="tx-saved" role="status" hidden></div>
       <div class="voice-bar">
         <button type="button" class="btn btn-ghost mic-btn" id="txMicBtn">🎤 Dicter un mouvement</button>
-        <button type="button" class="btn btn-ghost" id="smsOpenBtn" aria-controls="smsPanel" aria-expanded="false">📋 Coller un SMS</button>
-        <div class="voice-status" id="txVoiceStatus">Ex : « Dépense de 15000 FCFA pour Alimentation, marché du dimanche, payé en mobile money »</div>
+        <!-- Le raccourci le plus utile de l'application au Cameroun — presque
+             tous les paiements laissent un SMS — était un bouton gris parmi
+             d'autres. Il est mis en avant, et sa ligne d'explication juste
+             en dessous. -->
+        <button type="button" class="btn btn-primary" id="smsOpenBtn" aria-controls="smsPanel" aria-expanded="false">📋 Coller un SMS MoMo / OM</button>
+        <div class="voice-status" id="txVoiceStatus">Collez le SMS de confirmation MTN MoMo ou Orange Money : montant, date, frais et compte se remplissent seuls. Ou dictez : « Dépense de 15000 FCFA pour Alimentation, marché du dimanche ».</div>
       </div>
       <!-- Coller un SMS MTN MoMo / Orange Money : le texte est lu par
            POST /api/sms/parse (rien n'est enregistré côté serveur) puis le
@@ -1025,9 +1029,22 @@
         </div>
         <div class="field">
           <label id="txAmountLabel">Montant (FCFA)</label>
-          <input type="number" id="txAmount" min="1" placeholder="Ex: 15000" required>
+          <!-- `text` et non `number` : c'est POOSSER qui lit le montant, pas
+               le navigateur. « 2.500 », « 2 500 » et « 2500 » veulent tous
+               dire deux mille cinq cents ici ; avec `number`, le point
+               devenait une virgule décimale et la saisie était refusée par un
+               message du navigateur. `inputmode` garde le pavé numérique sur
+               téléphone — le champ le plus tapé de l'application n'en avait
+               pas, alors que « Frais », bien plus rare, en avait un. -->
+          <input type="text" id="txAmount" inputmode="numeric" autocomplete="off" placeholder="Ex: 15000" required>
+          <!-- Le montant relu, formaté : c'est ce qui rattrape un zéro de
+               trop avant d'enregistrer. -->
+          <div class="sub" id="txAmountEcho" style="margin:4px 0 0; min-height:17px;"></div>
         </div>
-        <div class="field">
+        <!-- Les frais ne concernent guère que le Mobile Money : le champ reste
+             replié tant que la méthode ne l'est pas (voir syncTxFeeVisibility),
+             pour rendre sa place au milieu du formulaire. -->
+        <div class="field" id="txFeeField" style="display:none;">
           <label id="txFeeLabel" for="txFee">Frais (FCFA)</label>
           <input type="number" id="txFee" min="0" step="any" placeholder="0" inputmode="decimal">
         </div>
@@ -3123,6 +3140,43 @@ function currencyUnitLabel(){
 function fmt(n){
   return new Intl.NumberFormat('fr-FR', { style:'currency', currency: currencyCode(), maximumFractionDigits:0 }).format(Math.round(n));
 }
+// Devises sans centimes : un montant y est toujours un entier, donc tout
+// séparateur saisi est un séparateur de milliers.
+const DEVISES_SANS_CENTIMES = ['XAF', 'XOF'];
+/**
+ * Lit un montant tapé à la main, dans l'écriture de celui qui le tape.
+ *
+ * « 2500 », « 2 500 », « 2.500 », « 2,500 » et même « 2500 FCFA » veulent
+ * tous dire la même chose au Cameroun. Le champ était en `type="number"` :
+ * le navigateur prenait le point pour une virgule décimale, lisait 2,5 et
+ * refusait la saisie avec son propre message, incompréhensible puisque le
+ * montant tapé avait l'air juste.
+ *
+ * Règle : on retire tout ce qui n'est ni chiffre ni séparateur, puis — pour
+ * une devise à centimes seulement — le DERNIER séparateur suivi d'un ou deux
+ * chiffres est la virgule décimale. Tous les autres sont des milliers.
+ * Renvoie null si rien d'exploitable.
+ */
+function parseMontantSaisi(raw){
+  const texte = String(raw == null ? '' : raw).replace(/[^\d.,]/g, '');
+  if(!texte) return null;
+  let valeur;
+  if(DEVISES_SANS_CENTIMES.includes(currencyCode())){
+    valeur = Number(texte.replace(/[.,]/g, ''));
+  } else {
+    const decimal = texte.match(/^(.*)[.,](\d{1,2})$/);
+    valeur = decimal
+      ? Number(decimal[1].replace(/[.,]/g, '') + '.' + decimal[2])
+      : Number(texte.replace(/[.,]/g, ''));
+  }
+  return Number.isFinite(valeur) && valeur > 0 ? valeur : null;
+}
+// Comme fmt(), mais garde les centimes quand la devise en a : l'écho doit
+// montrer EXACTEMENT ce qui sera enregistré, sinon il ment.
+function fmtExact(n){
+  const max = DEVISES_SANS_CENTIMES.includes(currencyCode()) ? 0 : 2;
+  return new Intl.NumberFormat('fr-FR', { style:'currency', currency: currencyCode(), maximumFractionDigits: max }).format(n);
+}
 // jsPDF (polices standard Helvetica/WinAnsi) ne sait afficher ni les emoji
 // ni les espaces insécables qu'Intl.NumberFormat('fr-FR', {style:'currency'})
 // utilise — une espace fine (U+202F) entre les groupes de milliers ET une
@@ -3559,8 +3613,69 @@ function handlePlanError(err){
 }
 
 /** Signale une erreur : boîte dédiée pour un refus de formule, alerte sinon. */
-function reportError(prefix, err){
+/**
+ * Notification maison, reprise du centre de notifications déjà construit pour
+ * le Planner. Ne bloque pas l'écran, se met aux couleurs de POOSSER, et peut
+ * porter des boutons — ce qu'une boîte du navigateur ne sait pas faire.
+ *
+ * actions : [{ label, primary?, onClick? }]. Sans onClick, le bouton ferme
+ * simplement la notification. timeout à 0 = elle reste jusqu'au clic : une
+ * notification qui propose une action ne doit pas disparaître pendant qu'on
+ * la lit.
+ */
+function showToast({ title, body, actions = [], tone = 'info', timeout = 0 }){
+  const container = document.getElementById('notifCenter');
+  if(!container) return null;
+  const el = document.createElement('div');
+  el.className = 'notif-toast';
+  el.setAttribute('role', 'status');
+  el.innerHTML = `
+    <div class="nt-head"><span class="notif-dot ${tone === 'alerte' ? 'end' : ''}"></span>${escapeHtml(title)}</div>
+    ${body ? `<div class="nt-body">${escapeHtml(body)}</div>` : ''}
+    ${actions.length ? `<div class="nt-actions">${actions.map((a,i)=>
+      `<button type="button" class="btn ${a.primary ? 'btn-primary' : 'btn-ghost'}" data-toast-i="${i}">${escapeHtml(a.label)}</button>`
+    ).join('')}</div>` : ''}`;
+  container.appendChild(el);
+  const fermer = () => el.remove();
+  el.querySelectorAll('[data-toast-i]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const action = actions[Number(btn.dataset.toastI)];
+      fermer();
+      if(action && action.onClick) await action.onClick();
+    });
+  });
+  if(timeout > 0) setTimeout(fermer, timeout);
+  return fermer;
+}
+
+/**
+ * Une panne de réseau n'est pas une erreur applicative : c'est l'état normal
+ * d'un téléphone sur un chantier. Le message disait « Vérifiez l'adresse du
+ * serveur (réglages avancés) et que le back-end est démarré » — une phrase de
+ * développeur, adressée à quelqu'un qui n'a tout simplement pas de barres.
+ *
+ * `retry` (optionnel) : ce qu'il faut rejouer quand l'utilisateur appuie sur
+ * « Réessayer ».
+ */
+function estPanneReseau(err){
+  // rawApiFetch lève ApiError('NETWORK_ERROR', 0) quand fetch lui-même échoue.
+  return !!err && (err.code === 'NETWORK_ERROR' || /Failed to fetch|NetworkError/i.test(err.message || ''));
+}
+function reportError(prefix, err, retry){
   if(handlePlanError(err)) return;
+  if(estPanneReseau(err)){
+    showToast({
+      title: '📵 Pas de réseau',
+      body: navigator.onLine === false
+        ? "Votre téléphone est hors connexion. Ce que vous avez tapé reste à l'écran : réessayez dès que le réseau revient."
+        : "POOSSER n'arrive pas à joindre le serveur. Ce que vous avez tapé reste à l'écran : réessayez dans un instant.",
+      tone: 'alerte',
+      actions: retry
+        ? [{ label: 'Réessayer', primary: true, onClick: retry }, { label: 'Plus tard' }]
+        : [{ label: "J'ai compris", primary: true }],
+    });
+    return;
+  }
   alert(prefix + authErrorMessage(err));
 }
 
@@ -4285,6 +4400,10 @@ function prefillTxFormFields(t){
   // choix valide, sinon « + Ajouter une rubrique… » puis Annuler ramènerait à
   // la rubrique d'avant la reprise.
   rememberRubriqueChoice(rubSel);
+  // Le montant et les frais viennent d'être remplis par du code : l'écho et le
+  // repli du champ « Frais » ne se déclenchent pas tout seuls.
+  syncTxAmountEcho();
+  syncTxFeeVisibility();
 }
 
 function focusTxAmount(){
@@ -4338,7 +4457,15 @@ async function saveTransactionAsFavorite(t){
 
 function renderFavorites(){
   const card = document.getElementById('favCard');
-  card.style.display = state.favorites.length ? '' : 'none';
+  // La carte reste VISIBLE même sans favori. Masquée tant qu'il n'y en a pas,
+  // elle ne pouvait se découvrir que par hasard : il fallait déjà savoir
+  // qu'elle existait pour créer le premier favori qui la ferait apparaître.
+  card.style.display = '';
+  if(!state.favorites.length){
+    document.getElementById('favChips').innerHTML =
+      `<span class="sub" style="margin:0;">Aucun favori pour l'instant. Dans l'historique ci-dessous, « ☆ Favori » sur un mouvement qui revient souvent — le loyer, le transport du matin — le place ici, et un seul tap remplit le formulaire.</span>`;
+    return;
+  }
   document.getElementById('favChips').innerHTML = state.favorites.map(f => `
     <button type="button" class="chip fav-chip" data-fav-apply="${f.id}" title="Pré-remplir le formulaire avec ce favori">
       ${f.label} · ${fmt(f.amount)}
@@ -4542,6 +4669,10 @@ async function analyzeSms(){
   const who = p.counterparty ? (p.kind === 'reception' ? 'Reçu de ' : p.kind === 'paiement' ? 'Paiement ' : 'Envoi à ') + p.counterparty : '';
   document.getElementById('txNote').value = smsNote(p, who);
   document.getElementById('txFee').value = p.fee > 0 ? p.fee : '';
+  // Montant et frais viennent d'être posés par le code : l'écho et le repli
+  // du champ « Frais » ne se déclenchent pas tout seuls.
+  syncTxAmountEcho();
+  syncTxFeeVisibility();
 
   const kindLabel = { reception:'Argent reçu', envoi:'Transfert envoyé', paiement:'Paiement' }[p.kind] || 'Opération';
   lines.unshift(`<span class="ok">${kindLabel} de ${fmt(p.amount)} : formulaire rempli.</span> Choisissez la catégorie puis validez.`);
@@ -4589,9 +4720,50 @@ function showTxSaved(t){
   box.innerHTML = `<div><b>✓ Enregistré :</b> ${t.type==='revenu'?'+':'−'} ${fmt(t.amount)} · ${escapeHtml(t.category)} · ${escapeHtml(accountName(t.accountId))} · ${dayLabel}.</div>`
     + (feeAmt ? `<div>Frais : − ${fmt(feeAmt)} en « ${escapeHtml(feeTx.category)} ».</div>` : '')
     + (otherMonth ? `<div>Il compte pour <b>${monthLabelTx}</b> : il n'entre donc pas dans les totaux de ${thisMonth} du tableau de bord, mais il est bien dans l'Historique et dans le solde du compte.</div>` : '')
-    + `<button type="button" class="btn btn-ghost" id="txSavedShow">Voir dans l'historique</button>`;
+    + `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">`
+    + `<button type="button" class="btn btn-ghost" id="txSavedShow">Voir dans l'historique</button>`
+    + `<button type="button" class="btn btn-ghost" id="txSavedUndo">↩ Annuler cet enregistrement</button>`
+    + `</div>`;
   box.hidden = false;
   document.getElementById('txSavedShow').onclick = () => revealTxRow(t.id);
+  document.getElementById('txSavedUndo').onclick = () => undoTxSave(t);
+}
+
+/**
+ * Défaire le dernier enregistrement.
+ *
+ * Volontairement SANS compte à rebours : un délai de cinq secondes oblige à
+ * lire vite, et le cas qu'on rattrape ici — un zéro de trop — se remarque
+ * justement en relisant. Le bouton vit aussi longtemps que la confirmation,
+ * laquelle est remplacée au mouvement suivant.
+ *
+ * Supprimer plutôt que corriger : le mouvement vient d'être créé, il n'a
+ * aucune histoire à conserver, et le serveur retire ses frais éventuels avec
+ * lui. Le formulaire se remplit ensuite avec les mêmes valeurs, pour qu'on
+ * corrige le montant au lieu de tout retaper.
+ */
+async function undoTxSave(t){
+  const btn = document.getElementById('txSavedUndo');
+  if(btn){ btn.disabled = true; btn.textContent = 'Annulation…'; }
+  try {
+    await apiFetch('/api/transactions/' + t.id, { method:'DELETE', auth:true });
+    state.transactions = state.transactions.filter(x => x.id !== t.id && x.feeParentId !== t.id);
+    const box = document.getElementById('txSavedNote');
+    if(box){ box.hidden = true; box.innerHTML = ''; }
+    renderAll();
+    // On repropose la saisie telle qu'elle était : neuf fois sur dix on
+    // annule pour corriger un chiffre, pas pour renoncer.
+    prefillTxFormFields(t);
+    focusTxAmount();
+    showToast({
+      title: '↩ Enregistrement annulé',
+      body: `${fmtExact(t.amount)} · ${t.category || 'projet'} — le mouvement est supprimé et le formulaire est repris tel quel.`,
+      timeout: 6000,
+    });
+  } catch(err){
+    if(btn){ btn.disabled = false; btn.textContent = '↩ Annuler cet enregistrement'; }
+    reportError("Impossible d'annuler : ", err, () => undoTxSave(t));
+  }
 }
 function revealTxRow(id){
   if(!filteredTransactionRows().some(r => r.id === id)){
@@ -4607,7 +4779,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const type = document.getElementById('txType').value;
   const category = document.getElementById('txCategory').value;
-  const amount = parseFloat(document.getElementById('txAmount').value);
+  const amount = parseMontantSaisi(document.getElementById('txAmount').value);
   const method = document.getElementById('txMethod').value;
   const date = document.getElementById('txDate').value || todayISO(0);
   const note = document.getElementById('txNote').value;
@@ -4620,7 +4792,15 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const rubriqueId = (rubriqueRaw && rubriqueRaw !== ADD_RUBRIQUE_OPTION_VALUE) ? rubriqueRaw : undefined;
   const accountId = document.getElementById('txAccount').value || undefined;
   const fee = readFeeInput('txFee');
-  if(!amount || amount<=0) return;
+  // Le champ est en `text` : c'est à nous de refuser ce qui n'est pas un
+  // montant, et de le DIRE. Un retour silencieux laissait l'utilisateur
+  // appuyer deux fois sans comprendre.
+  if(amount === null){
+    syncTxAmountEcho();
+    flashField('txAmount');
+    document.getElementById('txAmount').focus();
+    return;
+  }
   // Volontairement AUCUN blocage quand un projet n'a pas de rubrique choisie :
   // l'opération part en « Non classé » et se range plus tard. Arrêter la
   // saisie ferait perdre la dépense plus sûrement qu'un classement différé.
@@ -4661,6 +4841,7 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       if(accountId) lastUsedAccountId = accountId;
       e.target.reset();
       document.getElementById('txDate').value = todayISO(0);
+      syncTxAmountEcho();
       populateCategorySelect();
       populateRubriqueSelectForProject('');
       populateAccountSelects();
@@ -4670,7 +4851,9 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       showTxSaved(savedTx);
     }
   } catch(err){
-    reportError("Impossible d'enregistrer la transaction : ", err);
+    // Hors réseau, « Réessayer » rejoue la même saisie : le formulaire a tout
+    // gardé, il n'y a rien à retaper.
+    reportError("Impossible d'enregistrer la transaction : ", err, () => e.target.requestSubmit());
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -5154,8 +5337,53 @@ function syncTxMethodWithAccount(){
   const method = METHOD_BY_ACCOUNT_TYPE[acc.type];
   const methodSel = document.getElementById('txMethod');
   if([...methodSel.options].some(o=>o.value===method)) methodSel.value = method;
+  syncTxFeeVisibility();
 }
 document.getElementById('txAccount').addEventListener('change', syncTxMethodWithAccount);
+
+/**
+ * « Frais » ne se montre qu'en Mobile Money — ou dès qu'un montant y est
+ * déjà, pour ne jamais cacher un chiffre saisi (une reprise d'opération, un
+ * SMS analysé). Un champ caché est aussi un champ vidé : sans cela, des frais
+ * tapés puis masqués par un changement de méthode partiraient en douce.
+ *
+ * On passe par style.display et non par l'attribut `hidden` : `.field` est en
+ * `display: flex`, et ce piège a déjà coûté trois corrections dans ce projet.
+ */
+function syncTxFeeVisibility(){
+  const champ = document.getElementById('txFeeField');
+  const input = document.getElementById('txFee');
+  if(!champ || !input) return;
+  const mobileMoney = document.getElementById('txMethod').value === 'Mobile Money';
+  const dejaSaisi = parseFloat(input.value) > 0;
+  const visible = mobileMoney || dejaSaisi;
+  champ.style.display = visible ? '' : 'none';
+  if(!visible) input.value = '';
+}
+document.getElementById('txMethod').addEventListener('change', syncTxFeeVisibility);
+
+/**
+ * Relit le montant sous le champ, formaté. Nielsen Norman Group place cette
+ * relecture parmi les remèdes aux « slips » — l'erreur commise en pilote
+ * automatique, le zéro de trop : un nombre formaté se vérifie d'un coup d'œil,
+ * « 150000 » non.
+ */
+function syncTxAmountEcho(){
+  const echo = document.getElementById('txAmountEcho');
+  const input = document.getElementById('txAmount');
+  if(!echo || !input) return;
+  const brut = input.value.trim();
+  if(!brut){ echo.textContent = ''; echo.style.color = ''; return; }
+  const valeur = parseMontantSaisi(brut);
+  if(valeur === null){
+    echo.textContent = 'Montant non compris — tapez des chiffres, par exemple 15000.';
+    echo.style.color = 'var(--critical)';
+    return;
+  }
+  echo.style.color = '';
+  echo.textContent = fmtExact(valeur);
+}
+document.getElementById('txAmount').addEventListener('input', syncTxAmountEcho);
 
 function renderDashAccountsCard(){
   const card = document.getElementById('dashAccountsCard');
@@ -9754,6 +9982,8 @@ initVoiceInput('txMicBtn', 'txVoiceStatus', (parsed, transcript)=>{
   if(parsed.amount) document.getElementById('txAmount').value = parsed.amount;
   if(parsed.method) document.getElementById('txMethod').value = parsed.method;
   document.getElementById('txNote').value = transcript.trim();
+  syncTxAmountEcho();
+  syncTxFeeVisibility();
 });
 
 initVoiceInput('evMicBtn', 'evVoiceStatus', (parsed, transcript)=>{
