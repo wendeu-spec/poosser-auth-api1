@@ -131,6 +131,15 @@ export const createProjectSchema = z.object({
   icon: z.string().trim().min(1).max(8).optional(),
   targetAmount: amountSchema.optional(),
   targetDate: dateSchema.optional(),
+  // Nature et économie du projet (migration 038). `null` efface, absent laisse
+  // inchangé — on doit pouvoir retirer une quantité saisie par erreur.
+  kind: z.enum(["depense", "activite"]).nullable().optional(),
+  quantityProduced: z.number().positive().max(1_000_000_000).nullable().optional(),
+  unitPrice: z.number().positive().max(1_000_000_000).nullable().optional(),
+  saleCurrency: z.enum(["XAF", "XOF", "EUR", "USD", "GBP", "CAD"]).optional(),
+  // Seulement pour un taux qui s'écarte de la parité fixe ; sinon le client
+  // applique 1 EUR = 655,957 FCFA.
+  exchangeRate: z.number().positive().max(100_000).nullable().optional(),
 });
 export const updateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -138,6 +147,15 @@ export const updateProjectSchema = z.object({
   targetAmount: amountSchema.optional(),
   targetDate: dateSchema.optional(),
   status: z.enum(["actif", "termine", "archive"]).optional(),
+  // Nature et économie du projet (migration 038). `null` efface, absent laisse
+  // inchangé — on doit pouvoir retirer une quantité saisie par erreur.
+  kind: z.enum(["depense", "activite"]).nullable().optional(),
+  quantityProduced: z.number().positive().max(1_000_000_000).nullable().optional(),
+  unitPrice: z.number().positive().max(1_000_000_000).nullable().optional(),
+  saleCurrency: z.enum(["XAF", "XOF", "EUR", "USD", "GBP", "CAD"]).optional(),
+  // Seulement pour un taux qui s'écarte de la parité fixe ; sinon le client
+  // applique 1 EUR = 655,957 FCFA.
+  exchangeRate: z.number().positive().max(100_000).nullable().optional(),
 });
 
 // Rubriques (postes de dépense à l'intérieur d'un projet, ex: "Transport",
@@ -150,6 +168,9 @@ export const createRubriqueSchema = z.object({
   name: z.string().trim().min(1).max(120),
   plannedAmount: amountSchema.optional(),
   parentRubriqueId: z.string().uuid().nullable().optional(),
+  // Frais d'approche : compte dans le prix de revient, pas dans le coût
+  // d'achat (migration 038).
+  isLandedCost: z.boolean().optional(),
 });
 export const updateRubriqueSchema = createRubriqueSchema.partial();
 
