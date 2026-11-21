@@ -2267,6 +2267,10 @@ const CAT_HEX = { // resolved hex (light) for conic-gradient which can't read CS
 // Budget, Planner) pour créer une catégorie personnalisée sans changer d'écran
 // — voir wireAddCategoryOption() et le bloc CATÉGORIES PERSONNALISÉES plus bas.
 const ADD_CATEGORY_OPTION_VALUE = '__add_category__';
+// Même principe que ci-dessus, pour les rubriques de projet : dans un projet
+// c'est la rubrique qui classe l'opération (migration 037), donc elle doit
+// pouvoir se créer en pleine saisie exactement comme une catégorie.
+const ADD_RUBRIQUE_OPTION_VALUE = '__add_rubrique__';
 
 // Catégories personnalisées (état chargé depuis GET /api/categories — voir
 // bootstrapAfterAuth) : toujours disponibles à la fois en dépense et en
@@ -4127,12 +4131,85 @@ function populateRubriqueSelectForProject(projectId, keepCurrent){
   })(null, 0);
   // « Non classé » est un choix explicite, pas un oubli : c'est l'état que la
   // vue Projets affiche déjà pour une dépense sans rubrique.
-  sel.innerHTML = '<option value="">— Non classé —</option>' + options.join('');
+  sel.innerHTML = '<option value="">— Non classé —</option>' + options.join('')
+    + `<option value="${ADD_RUBRIQUE_OPTION_VALUE}">+ Ajouter une rubrique…</option>`;
   // Par défaut on propose la première rubrique du projet plutôt que « Non
   // classé » : classer doit être le geste naturel, ne pas classer le choix
   // délibéré.
   if(options.length) sel.selectedIndex = 1;
   if([...sel.options].some(o=>o.value===current)) sel.value = current;
+  rememberRubriqueChoice(sel);
+  wireAddRubriqueOption(sel);
+}
+
+/**
+ * Mémorise le dernier choix VALIDE du menu des rubriques.
+ *
+ * Stocké sur l'élément et non dans une variable de fermeture : ce <select>
+ * est repeuplé et réaffecté de l'extérieur (changement de projet, reprise
+ * d'une opération, création d'une rubrique depuis la fiche projet), et une
+ * valeur capturée une seule fois aurait vieilli sans qu'on le voie.
+ */
+function rememberRubriqueChoice(sel){
+  if(sel.value !== ADD_RUBRIQUE_OPTION_VALUE) sel.dataset.lastValue = sel.value;
+}
+
+/**
+ * Création d'une rubrique en pleine saisie d'opération.
+ *
+ * Dans un projet, la rubrique remplace la catégorie : être arrêté parce que la
+ * rubrique n'existe pas encore, téléphone en main sur le chantier, ferait
+ * perdre la dépense. Même geste que « + Ajouter une catégorie… ».
+ *
+ * La rubrique créée ici est de PREMIER NIVEAU et n'est pas un frais
+ * d'approche : ces deux réglages se posent depuis la fiche du projet, où l'on
+ * voit l'arborescence. Ici on ne demande que le nom.
+ */
+function wireAddRubriqueOption(sel){
+  // Affectation et non addEventListener : populateRubriqueSelectForProject est
+  // rappelée plusieurs fois dans la vie de l'application sur ce même <select>,
+  // et un écouteur empilé ferait apparaître l'invite deux fois.
+  sel.onchange = async ()=>{
+    if(sel.value !== ADD_RUBRIQUE_OPTION_VALUE){ rememberRubriqueChoice(sel); return; }
+    const projectId = document.getElementById('txProject').value;
+    const p = projectById(projectId);
+    // On quitte l'option « + Ajouter » AVANT l'invite : quoi qu'il arrive
+    // ensuite (annulation, erreur réseau), le menu ne reste jamais bloqué
+    // dessus.
+    const retour = () => {
+      sel.value = [...sel.options].some(o=>o.value===sel.dataset.lastValue) ? sel.dataset.lastValue : '';
+    };
+    if(!p){ retour(); return; }
+    const name = (prompt(`Nouvelle rubrique de « ${p.name} » :`) || '').trim();
+    if(!name){ retour(); return; }
+    // Déjà créée entre-temps (depuis la fiche projet, ou deux saisies de
+    // suite) : on la sélectionne au lieu d'en faire un doublon.
+    const existante = state.rubriques.find(r=>r.projectId===projectId && r.name.toLowerCase()===name.toLowerCase());
+    if(existante){
+      sel.value = existante.id;
+      rememberRubriqueChoice(sel);
+      return;
+    }
+    retour();
+    try {
+      const { rubrique } = await apiFetch(`/api/projects/${projectId}/rubriques`, { method:'POST', auth:true, body:{ name } });
+      state.rubriques.push(mapRubriqueFromApi(rubrique));
+      // On reconstruit la liste pour que la nouvelle rubrique y figure à sa
+      // place, puis on la sélectionne : c'est elle qu'on vient de créer.
+      populateRubriqueSelectForProject(projectId, true);
+      sel.value = rubrique.id;
+      rememberRubriqueChoice(sel);
+      // Si la fiche du projet est ouverte derrière, elle doit montrer la
+      // nouvelle rubrique elle aussi.
+      if(selectedProjectId === projectId
+         && document.getElementById('projectDetailState').style.display === 'block'){
+        renderProjectRubriques(p);
+      }
+    } catch(err){
+      reportError("Impossible de créer la rubrique : ", err);
+      retour();
+    }
+  };
 }
 document.getElementById('txProject').addEventListener('change', (e)=>{
   populateRubriqueSelectForProject(e.target.value);
@@ -4204,6 +4281,10 @@ function prefillTxFormFields(t){
   populateRubriqueSelectForProject(projSel.value);
   const rubSel = document.getElementById('txRubrique');
   if([...rubSel.options].some(o=>o.value===(t.rubriqueId||''))) rubSel.value = t.rubriqueId || '';
+  // Le menu vient d'être réaffecté de l'extérieur : on remet à jour le dernier
+  // choix valide, sinon « + Ajouter une rubrique… » puis Annuler ramènerait à
+  // la rubrique d'avant la reprise.
+  rememberRubriqueChoice(rubSel);
 }
 
 function focusTxAmount(){
@@ -4531,7 +4612,12 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   const date = document.getElementById('txDate').value || todayISO(0);
   const note = document.getElementById('txNote').value;
   const projectId = document.getElementById('txProject').value || undefined;
-  const rubriqueId = document.getElementById('txRubrique').value || undefined;
+  // Le sentinelle « + Ajouter une rubrique… » n'est jamais censé arriver
+  // jusqu'ici (on en sort avant l'invite de saisie), mais s'il y parvenait il
+  // serait envoyé comme identifiant et le serveur répondrait 400 : on le
+  // traite comme « non classé ».
+  const rubriqueRaw = document.getElementById('txRubrique').value;
+  const rubriqueId = (rubriqueRaw && rubriqueRaw !== ADD_RUBRIQUE_OPTION_VALUE) ? rubriqueRaw : undefined;
   const accountId = document.getElementById('txAccount').value || undefined;
   const fee = readFeeInput('txFee');
   if(!amount || amount<=0) return;
