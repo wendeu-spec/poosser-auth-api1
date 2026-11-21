@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAccessToken } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { Errors } from "../lib/errors.js";
+import { suggestArchetype } from "../lib/projectArchetypes.js";
 import {
   createTransactionSchema, updateTransactionSchema,
   createTransactionFavoriteSchema, updateTransactionFavoriteSchema,
@@ -252,6 +253,19 @@ businessRouter.get("/savings-goal-contributions", async (req, res) => {
 // ---------------------------------------------------------------------------
 businessRouter.get("/projects", async (req, res) => {
   res.json({ projects: await projects.listProjects(req.auth!.userId) });
+});
+/**
+ * Reconnaît l'archétype d'un projet depuis son nom et PROPOSE sa nature et
+ * une liste de rubriques (migration 038). Rien n'est créé : c'est le client
+ * qui affiche la proposition, et l'utilisateur qui la valide ou l'ignore —
+ * même principe que la proposition de budget mensuel.
+ *
+ * Renvoie `{ suggestion: null }` quand rien ne correspond : mieux vaut ne
+ * rien proposer qu'une liste à côté de la plaque.
+ */
+businessRouter.get("/project-archetype", async (req, res) => {
+  const name = typeof req.query.name === "string" ? req.query.name : "";
+  res.json({ suggestion: suggestArchetype(name) });
 });
 businessRouter.get("/projects/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
