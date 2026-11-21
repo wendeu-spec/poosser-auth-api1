@@ -6,6 +6,10 @@ export interface RubriqueRow {
   project_id: string;
   name: string;
   planned_amount: string | null;
+  // Frais d'approche (migration 038) : compte dans le prix de revient, pas
+  // dans le coût d'achat. Transport, emballage, douane — ce qui amène la
+  // marchandise jusqu'à destination.
+  is_landed_cost: boolean;
   position: number;
   parent_rubrique_id: string | null;
   created_at: Date;
@@ -15,6 +19,7 @@ export interface RubriqueRow {
 export interface RubriqueInput {
   name: string;
   plannedAmount?: number;
+  isLandedCost?: boolean;
   // undefined = non fourni (ne touche pas au parent existant, en update) ;
   // null = retire explicitement le parent (la rubrique redevient de premier
   // niveau) ; string = rattache à cette rubrique parente. Profondeur
@@ -113,9 +118,10 @@ export async function createRubrique(userId: string, projectId: string, input: R
     [projectId],
   );
   const { rows } = await pool.query<RubriqueRow>(
-    `INSERT INTO rubriques (project_id, name, planned_amount, position, parent_rubrique_id)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [projectId, input.name, input.plannedAmount ?? null, posRows[0]!.next_position, input.parentRubriqueId ?? null],
+    `INSERT INTO rubriques (project_id, name, planned_amount, position, parent_rubrique_id, is_landed_cost)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, false)) RETURNING *`,
+    [projectId, input.name, input.plannedAmount ?? null, posRows[0]!.next_position, input.parentRubriqueId ?? null,
+     input.isLandedCost ?? null],
   );
   return rows[0]!;
 }
@@ -148,10 +154,11 @@ export async function updateRubrique(
     `UPDATE rubriques SET
        name              = COALESCE($3, name),
        planned_amount    = COALESCE($4, planned_amount),
-       parent_rubrique_id = $5
+       parent_rubrique_id = $5,
+       is_landed_cost    = COALESCE($6, is_landed_cost)
      WHERE id = $1 AND project_id = $2
      RETURNING *`,
-    [id, projectId, input.name ?? null, input.plannedAmount ?? null, nextParentId],
+    [id, projectId, input.name ?? null, input.plannedAmount ?? null, nextParentId, input.isLandedCost ?? null],
   );
   return rows[0]!;
 }
