@@ -793,6 +793,51 @@
       <button type="submit" class="btn btn-primary auth-submit" id="loginSubmitBtn">Se connecter</button>
     </form>
 
+    <!-- ===== Saisie rapide hors réseau (maj33) =====
+         Se connecter exige le serveur : sans réseau, l'application ne s'ouvre
+         pas, et la file d'attente était donc inatteignable là où elle sert le
+         plus — dehors, sur un chantier.
+
+         Cet écran ne MONTRE rien : ni compte, ni solde, ni historique, ni
+         catégorie personnelle. Il ne fait qu'écrire. Le PIN reste exigé pour
+         voir quoi que ce soit, et aucune vérification de sécurité ne passe
+         côté téléphone. -->
+    <div id="offlineCapture" class="auth-step" hidden>
+      <div class="auth-msg info" style="margin-bottom:12px;">
+        Pas de réseau : impossible de se connecter pour l'instant. Vous pouvez
+        tout de même noter une dépense — elle partira à votre prochaine
+        connexion.
+      </div>
+      <form id="offlineCaptureForm">
+        <div class="auth-row">
+          <div class="auth-field">
+            <label>Type</label>
+            <select id="ocType"><option value="depense">Dépense</option><option value="revenu">Revenu</option></select>
+          </div>
+          <div class="auth-field">
+            <label id="ocAmountLabel">Montant (FCFA)</label>
+            <input type="text" id="ocAmount" inputmode="numeric" autocomplete="off" placeholder="Ex: 15000" required>
+          </div>
+        </div>
+        <div class="sub" id="ocAmountEcho" style="margin:-6px 0 10px; min-height:17px;"></div>
+        <div class="auth-field">
+          <label>Catégorie</label>
+          <select id="ocCategory"></select>
+        </div>
+        <div class="auth-field">
+          <label>Date</label>
+          <input type="date" id="ocDate">
+        </div>
+        <div class="auth-field">
+          <label>Note (optionnel)</label>
+          <input type="text" id="ocNote" placeholder="Ex: Ciment, 3 sacs">
+        </div>
+        <button type="submit" class="btn btn-primary auth-submit">Garder pour plus tard</button>
+      </form>
+      <div id="ocQueued" class="sub" style="margin-top:10px;"></div>
+      <button type="button" class="auth-link" id="ocBackToLogin">← Revenir à la connexion</button>
+    </div>
+
     <!-- ===== Inscription — étape 1 : identité ===== -->
     <form id="registerIdentityForm" class="auth-step" hidden>
       <div class="auth-row">
@@ -976,6 +1021,11 @@
         <p>Enregistrez chaque mouvement pour garder une vue claire de vos finances.</p>
       </div>
     </div>
+
+    <!-- File d'attente hors réseau (maj33) : placée au-dessus de tout le
+         reste, parce qu'une opération qui n'est pas encore partie est la
+         première chose à savoir en ouvrant cet écran. -->
+    <div class="card" id="outboxBanner" role="status" style="margin-bottom:18px; display:none; border-color:var(--s2, var(--s1));"></div>
 
     <div class="card" id="favCard" style="margin-bottom:18px; display:none;">
       <h3>⭐ Favoris</h3>
@@ -2365,7 +2415,14 @@ let session = { accessToken: null, refreshToken: null, user: null, cookieMode: f
 const DEVICE_ID_KEY = 'poosser.deviceId';
 const REMEMBER_PREF_KEY = 'poosser.rememberMe';
 function storageGet(key){ try { return window.localStorage.getItem(key); } catch { return null; } }
-function storageSet(key, value){ try { window.localStorage.setItem(key, value); } catch { /* stockage indisponible */ } }
+// Renvoie false quand l'écriture a échoué (navigation privée, stockage plein,
+// données de site bloquées). Un appelant qui PROMET quelque chose à
+// l'utilisateur doit regarder ce retour : la file d'attente annonçait
+// « gardée sur votre téléphone » alors que rien n'avait été écrit.
+function storageSet(key, value){
+  try { window.localStorage.setItem(key, value); return true; }
+  catch { return false; }
+}
 let deviceFingerprint = storageGet(DEVICE_ID_KEY);
 if(!deviceFingerprint || !/^web-[a-z0-9]{8,40}$/.test(deviceFingerprint)){
   deviceFingerprint = 'web-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -2473,7 +2530,11 @@ function authErrorMessage(err){
 
 /* ---- adaptateurs API -> forme interne du prototype (inchangée pour le rendu) ---- */
 function mapTxFromApi(t){
-  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null, accountId: t.account_id || null, transferId: t.transfer_id || null, feeParentId: t.fee_parent_id || null };
+  // clientKey : la clé de la file d'attente (migration 039). Elle permet de
+  // reconnaître qu'une opération encore en file est en réalité DÉJÀ passée —
+  // réponse perdue — et d'éviter de la compter deux fois à l'écran en
+  // attendant que le renvoi le confirme.
+  return { id: t.id, date: t.occurred_on, type: t.type, category: t.category, amount: Number(t.amount), method: t.method, note: t.note || '', projectId: t.project_id || null, rubriqueId: t.rubrique_id || null, accountId: t.account_id || null, transferId: t.transfer_id || null, feeParentId: t.fee_parent_id || null, clientKey: t.client_key || null };
 }
 function mapAccountFromApi(a){
   return { id: a.id, name: a.name, type: a.type, openingBalance: Number(a.opening_balance), archived: !!a.archived };
@@ -2910,6 +2971,12 @@ async function bootstrapAfterAuth(){
   } catch (err) {
     alert("Vos données n'ont pas pu être chargées : " + authErrorMessage(err) + " — vous pouvez continuer, mais certaines informations manqueront tant que le problème persiste.");
   }
+  // Ce qui attendait depuis la dernière coupure : on le remet à l'écran
+  // AVANT tout rendu, puis on tente de l'envoyer en arrière-plan. Sans ce
+  // `await`-less, un serveur lent retarderait l'ouverture de l'application
+  // pour une opération qui peut très bien partir dix secondes plus tard.
+  outboxSync();
+  outboxFlush();
   // Séparé du bloc critique ci-dessus par choix délibéré : un souci sur la
   // proposition automatique de budget (fonctionnalité secondaire) ne doit
   // jamais empêcher le chargement du reste de l'application.
@@ -2936,6 +3003,12 @@ async function onAuthenticated(data){
   session.refreshToken = data.refreshToken || null;
   session.cookieMode = !data.refreshToken;
   session.user = data.user;
+  // Les saisies faites hors réseau AVANT de pouvoir se connecter rejoignent
+  // la file de cette personne, et on le lui dit. À faire ici, avant
+  // bootstrapAfterAuth : c'est lui qui déclenche l'envoi de la file.
+  outboxAdopterPrelogin(data.user);
+  storageSet(DERNIER_UTILISATEUR_KEY, data.user.id);
+  setOfflineCapture(false);
   const label = [data.user.firstName, data.user.lastName].filter(Boolean).join(' ') || data.user.phone || 'Mon compte';
   document.getElementById('sidebarUserName').textContent = label;
   document.getElementById('currencySelect').value = currencyCode();
@@ -2972,6 +3045,10 @@ function setAuthStep(id){
   ['loginForm','registerIdentityForm','registerOtpForm','registerPinForm'].forEach(fid=>{
     document.getElementById(fid).hidden = fid !== id;
   });
+  // Changer d'étape referme toujours la saisie hors réseau : sinon deux
+  // formulaires se superposeraient sur la même carte.
+  const oc = document.getElementById('offlineCapture');
+  if(oc) oc.hidden = true;
 }
 document.getElementById('authTabLogin').addEventListener('click', ()=>{
   document.getElementById('authTabLogin').classList.add('active');
@@ -3012,7 +3089,11 @@ document.getElementById('loginForm').addEventListener('submit', async (e)=>{
     storageSet(REMEMBER_PREF_KEY, rememberMe ? '1' : '0');
     await onAuthenticated(data);
   } catch(err){
-    showAuthMsg(authErrorMessage(err));
+    // Pas de réseau : au lieu d'une impasse, on propose de noter quand même
+    // la dépense. C'est le cas du chantier, et c'est le seul moment où cet
+    // écran a un sens.
+    if(estPanneReseau(err)) offrirSaisieHorsReseau();
+    else showAuthMsg(authErrorMessage(err));
   } finally {
     btn.disabled = false; btn.textContent = 'Se connecter';
   }
@@ -3197,6 +3278,7 @@ function applyCurrencyLabels(){
   const set = (id, text) => { const el = document.getElementById(id); if(el) el.textContent = text; };
   set('revDepSubLabel', `6 derniers mois, en ${u}`);
   set('txAmountLabel', `Montant (${u})`);
+  set('ocAmountLabel', `Montant (${u})`);
   set('projTargetLabel', `Objectif (${u}, optionnel)`);
   set('projEditTargetLabel', `Objectif (${u}, optionnel)`);
   set('rubPlannedLabel', `Enveloppe (${u}, optionnel)`);
@@ -4551,6 +4633,399 @@ function readFeeInput(id){
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+/* =====================================================================
+   FILE D'ATTENTE HORS RÉSEAU (maj33)
+   =====================================================================
+   Saisir une dépense est exactement ce qu'on fait debout, dehors, là où le
+   réseau est le plus mauvais. Jusqu'ici, une coupure faisait perdre la
+   saisie dès qu'on quittait l'écran. Maintenant l'opération part dans le
+   stockage du téléphone, apparaît tout de suite dans l'historique avec une
+   pastille « en attente », et POOSSER la renvoie seul quand le réseau
+   revient.
+
+   Trois garde-fous, sans lesquels une file d'attente crée plus de dégâts
+   qu'elle n'en évite :
+
+   1. UNE CLÉ PAR OPÉRATION (migration 039). Si la réponse du serveur se
+      perd après l'enregistrement, le renvoi porte la même clé et le serveur
+      renvoie l'opération déjà passée. Sans cela, le renvoi ferait un
+      doublon — et c'est le cas le plus probable en réseau intermittent.
+
+   2. UNE LIMITE D'ANCIENNETÉ. Une opération de trois semaines ne remonte
+      pas en silence : on la montre et on demande.
+
+   3. RIEN QUI TOUCHE UN SOLDE PARTAGÉ. Virements, tontine, épargne ne
+      passent jamais par la file : l'ordre y compte, et deux appareils
+      pourraient se contredire. Seules les opérations simples — 95 % des
+      saisies — sont mises en attente.
+
+   Ce qui est stocké : les champs de l'opération, tels qu'ils partiraient au
+   serveur. Aucun jeton, aucun PIN. La clé de stockage porte l'identifiant de
+   l'utilisateur, pour que deux personnes sur le même téléphone ne voient
+   jamais la file de l'autre. */
+
+const OUTBOX_AGE_MAX_JOURS = 14;
+let outboxEnvoiEnCours = false;
+let outboxAncienssSignales = false;
+
+function outboxKey(){
+  const uid = session.user && session.user.id;
+  return uid ? 'poosser.outbox.' + uid : null;
+}
+function outboxLire(){
+  const key = outboxKey();
+  if(!key) return [];
+  try {
+    const brut = JSON.parse(storageGet(key) || '[]');
+    return Array.isArray(brut) ? brut : [];
+  } catch { return []; }
+}
+// Renvoie false si la file n'a PAS pu être écrite. Le stockage d'un
+// navigateur peut refuser : navigation privée, quota atteint, données de site
+// bloquées. Dans ce cas la promesse « c'est gardé sur votre téléphone » est
+// fausse, et il vaut infiniment mieux le dire que de laisser l'utilisateur
+// ranger son téléphone en croyant sa dépense en sécurité.
+function outboxEcrire(items){
+  const key = outboxKey();
+  if(!key) return false;
+  return storageSet(key, JSON.stringify(items));
+}
+function outboxAge(item){
+  return (Date.now() - (item.queuedAt || 0)) / 86400000;
+}
+
+/**
+ * Les lignes « en attente » que l'historique et les totaux doivent voir.
+ *
+ * Elles sont comptées comme de vraies opérations, volontairement : l'argent
+ * est sorti de la poche, le solde doit le dire. La pastille signale que le
+ * serveur ne le sait pas encore. Une opération à frais produit DEUX lignes,
+ * comme côté serveur, sinon les frais manqueraient au solde jusqu'à l'envoi.
+ */
+function outboxAsTransactions(){
+  const lignes = [];
+  // Une opération dont le serveur nous a déjà renvoyé la clé est passée : sa
+  // réponse s'était perdue, elle attend encore dans la file mais le renvoi
+  // va la résoudre. On ne la montre pas une seconde fois entre-temps.
+  const dejaPassees = new Set(state.transactions.filter(t => t.clientKey).map(t => t.clientKey));
+  for(const item of outboxLire()){
+    if(dejaPassees.has(item.clientKey)) continue;
+    const b = item.body;
+    lignes.push({
+      id: 'file:' + item.clientKey, pending: true,
+      date: b.occurredOn, type: b.type, category: b.category || null,
+      amount: b.amount, method: b.method, note: b.note || '',
+      projectId: b.projectId || null, rubriqueId: b.rubriqueId || null,
+      accountId: b.accountId || null, transferId: null, feeParentId: null,
+    });
+    if(b.fee > 0){
+      lignes.push({
+        id: 'file:' + item.clientKey + ':frais', pending: true,
+        date: b.occurredOn, type: 'depense', category: 'Frais',
+        amount: b.fee, method: b.method, note: 'Frais de l’opération',
+        projectId: null, rubriqueId: null, accountId: b.accountId || null,
+        transferId: null, feeParentId: 'file:' + item.clientKey,
+      });
+    }
+  }
+  return lignes;
+}
+
+/** Recharge les lignes en attente dans state.transactions, sans doublon. */
+function outboxSync(){
+  state.transactions = state.transactions.filter(t => !t.pending).concat(outboxAsTransactions());
+}
+
+/**
+ * Met une opération en attente et l'affiche tout de suite.
+ *
+ * Renvoie null quand le stockage du téléphone a REFUSÉ d'écrire : rien n'est
+ * mis en file, et l'appelant doit alors s'en tenir à ce que faisait maj32 —
+ * garder la saisie à l'écran et proposer « Réessayer ». Annoncer « c'est
+ * gardé » sans que rien soit gardé est pire que l'erreur d'origine : on fait
+ * ranger le téléphone à quelqu'un dont la dépense vient de disparaître.
+ */
+function outboxAjouter(body){
+  const clientKey = (crypto.randomUUID ? crypto.randomUUID() : 'cle-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  const items = outboxLire();
+  items.push({ clientKey, queuedAt: Date.now(), body: Object.assign({}, body, { clientKey }) });
+  if(!outboxEcrire(items)) return null;
+  outboxSync();
+  renderAll();
+  return clientKey;
+}
+
+function outboxRetirer(clientKey){
+  outboxEcrire(outboxLire().filter(i => i.clientKey !== clientKey));
+  outboxSync();
+  renderAll();
+}
+
+/**
+ * Renvoie ce qui attend. Appelée au retour du réseau, à l'ouverture, et par
+ * le bouton « Envoyer maintenant ».
+ *
+ * Panne réseau = on s'arrête et on garde tout : rien n'est perdu, on
+ * réessaiera. Refus du serveur (projet supprimé, compte archivé) = on retire
+ * de la file et on le DIT avec les montants : une opération qui disparaît en
+ * silence est pire qu'une opération refusée.
+ */
+async function outboxFlush({ manuel = false } = {}){
+  if(outboxEnvoiEnCours || !session.accessToken) return;
+  const items = outboxLire();
+  if(!items.length) return;
+  outboxEnvoiEnCours = true;
+  renderOutboxBanner();
+
+  let envoyees = 0;
+  const refusees = [];
+  try {
+    for(const item of items){
+      // Trop ancienne : on ne l'envoie pas toute seule. L'utilisateur
+      // tranche, depuis la bannière.
+      if(!manuel && outboxAge(item) > OUTBOX_AGE_MAX_JOURS) continue;
+      try {
+        const { transaction, feeTransaction } = await apiFetch('/api/transactions', { method:'POST', auth:true, body: item.body });
+        outboxEcrire(outboxLire().filter(i => i.clientKey !== item.clientKey));
+        // REMPLACER, jamais ajouter : quand la réponse du premier envoi s'est
+        // perdue, le serveur renvoie l'opération DÉJÀ enregistrée (c'est tout
+        // l'objet de la clé d'idempotence). Un simple push en ferait alors un
+        // doublon à l'écran et fausserait le solde — l'erreur que la clé est
+        // justement censée éviter, reproduite côté téléphone.
+        state.transactions = state.transactions.filter(t => t.id !== transaction.id);
+        state.transactions.push(mapTxFromApi(transaction));
+        applyFeeFromServer(transaction.id, feeTransaction);
+        envoyees++;
+      } catch(err){
+        if(estPanneReseau(err)) break;           // toujours hors ligne : on garde tout
+        outboxEcrire(outboxLire().filter(i => i.clientKey !== item.clientKey));
+        refusees.push({ item, err });
+      }
+    }
+  } finally {
+    outboxEnvoiEnCours = false;
+    outboxSync();
+    renderAll();
+  }
+
+  if(envoyees){
+    showToast({
+      title: '✅ ' + envoyees + ' opération(s) envoyée(s)',
+      body: 'Ce qui attendait pendant la coupure est enregistré.',
+      timeout: 6000,
+    });
+  }
+  for(const { item, err } of refusees){
+    showToast({
+      title: '⚠️ Une opération en attente a été refusée',
+      body: `${fmtExact(item.body.amount)} · ${item.body.category || 'projet'} · ${item.body.occurredOn}`
+        + ` — ${authErrorMessage(err)} Ressaisissez-la si elle compte.`,
+    });
+  }
+}
+
+/** Bannière « N en attente », au-dessus de l'historique. */
+function renderOutboxBanner(){
+  const el = document.getElementById('outboxBanner');
+  if(!el) return;
+  const items = outboxLire();
+  if(!items.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  const anciennes = items.filter(i => outboxAge(i) > OUTBOX_AGE_MAX_JOURS);
+  el.style.display = '';
+  el.innerHTML = `
+    <div><b>⏳ ${items.length} opération(s) en attente d'envoi.</b>
+    ${navigator.onLine === false
+      ? 'Votre téléphone est hors connexion — elles partiront seules dès le retour du réseau.'
+      : 'Elles partiront seules ; vous pouvez aussi les envoyer maintenant.'}</div>
+    ${anciennes.length ? `<div style="margin-top:4px;">${anciennes.length} attend(ent) depuis plus de ${OUTBOX_AGE_MAX_JOURS} jours : POOSSER ne les envoie plus tout seul, à vous de décider.</div>` : ''}
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+      <button type="button" class="btn btn-ghost" id="outboxSendNow"${outboxEnvoiEnCours ? ' disabled' : ''}>${outboxEnvoiEnCours ? 'Envoi…' : 'Envoyer maintenant'}</button>
+    </div>`;
+  const btn = document.getElementById('outboxSendNow');
+  if(btn) btn.onclick = () => outboxFlush({ manuel: true });
+}
+
+window.addEventListener('online', () => outboxFlush());
+window.addEventListener('offline', renderOutboxBanner);
+
+/* =====================================================================
+   SAISIE RAPIDE HORS RÉSEAU, AVANT CONNEXION (maj33)
+   =====================================================================
+   Se connecter passe par le serveur : sans réseau, l'application ne s'ouvre
+   pas. La file d'attente était donc inatteignable exactement là où elle
+   devait servir — dehors, sur un chantier, téléphone en main.
+
+   Cet écran n'affiche AUCUNE donnée : pas de compte, pas de solde, pas
+   d'historique, pas même les catégories personnelles (seule la liste
+   générale, qui n'apprend rien sur personne). Il ne fait qu'écrire. Le PIN
+   reste exigé pour voir quoi que ce soit, et aucune vérification de sécurité
+   ne se fait côté téléphone.
+
+   Les saisies atterrissent dans une file SANS propriétaire, puisqu'on ne
+   sait pas encore qui tient le téléphone. À la première connexion réussie,
+   elles sont reprises dans la file de cette personne — et on le lui DIT,
+   avec les montants, pour qu'un téléphone prêté ne fasse jamais hériter
+   quelqu'un des dépenses d'un autre en silence. */
+
+const OUTBOX_PRELOGIN_KEY = 'poosser.outbox.prelogin';
+const DERNIER_UTILISATEUR_KEY = 'poosser.dernierUtilisateur';
+
+function preloginLire(){
+  try { const b = JSON.parse(storageGet(OUTBOX_PRELOGIN_KEY) || '[]'); return Array.isArray(b) ? b : []; }
+  catch { return []; }
+}
+function preloginEcrire(items){ return storageSet(OUTBOX_PRELOGIN_KEY, JSON.stringify(items)); }
+
+/** Affiche ou masque l'écran de saisie rapide. */
+function setOfflineCapture(open){
+  const panneau = document.getElementById('offlineCapture');
+  if(!panneau) return;
+  ['loginForm','registerIdentityForm','registerOtpForm','registerPinForm'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.hidden = open ? true : el.hidden;
+  });
+  if(!open) setAuthStep('loginForm');
+  panneau.hidden = !open;
+  if(open){
+    document.getElementById('ocDate').value = todayISO(0);
+    const sel = document.getElementById('ocCategory');
+    // Liste GÉNÉRALE seulement : les catégories personnelles diraient déjà
+    // quelque chose du propriétaire du téléphone.
+    const liste = document.getElementById('ocType').value === 'revenu' ? CATEGORIES_REVENU : CATEGORIES_DEPENSE;
+    sel.innerHTML = liste.map(c=>`<option value="${c}">${c}</option>`).join('');
+    renderPreloginCount();
+    document.getElementById('ocAmount').focus();
+  }
+}
+
+function renderPreloginCount(){
+  const el = document.getElementById('ocQueued');
+  if(!el) return;
+  const n = preloginLire().length;
+  el.textContent = n
+    ? `${n} saisie(s) en attente sur ce téléphone. Elles partiront à votre prochaine connexion.`
+    : '';
+}
+
+/**
+ * Propose l'écran de saisie rapide quand se connecter est impossible faute
+ * de réseau : échec d'une tentative, ou téléphone déjà annoncé hors
+ * connexion à l'ouverture. Dans ce dernier cas, afficher un formulaire de
+ * connexion qui ne peut pas aboutir ne sert personne.
+ *
+ * Le lien « Revenir à la connexion » reste là : le navigateur se trompe
+ * parfois sur l'état du réseau, et l'utilisateur doit pouvoir passer outre.
+ */
+function offrirSaisieHorsReseau(){
+  showAuthMsg('');
+  setOfflineCapture(true);
+}
+window.addEventListener('DOMContentLoaded', ()=>{
+  if(navigator.onLine === false && document.getElementById('appShell').hidden) offrirSaisieHorsReseau();
+});
+// Le réseau revient pendant qu'on note : on rend la main à la connexion.
+// Toujours — y compris avec des saisies en attente, qui sont justement ce
+// qu'il faut se connecter pour envoyer. Les laisser derrière l'écran de
+// secours ferait une impasse à l'envers.
+window.addEventListener('online', ()=>{
+  const oc = document.getElementById('offlineCapture');
+  if(!oc || oc.hidden) return;
+  const enAttente = preloginLire().length;
+  setOfflineCapture(false);
+  if(enAttente){
+    showToast({
+      title: '📶 Le réseau est revenu',
+      body: `Connectez-vous : ${enAttente} saisie(s) notée(s) hors connexion partiront aussitôt.`,
+      timeout: 10000,
+    });
+  }
+});
+
+/**
+ * Reprend les saisies faites avant connexion dans la file de la personne qui
+ * vient de se connecter, et le lui dit. Jamais en silence : sur un téléphone
+ * prêté, hériter des dépenses de quelqu'un d'autre sans le savoir serait pire
+ * que de perdre les siennes.
+ */
+function outboxAdopterPrelogin(user){
+  const items = preloginLire();
+  if(!items.length) return;
+  const memeQuAvant = storageGet(DERNIER_UTILISATEUR_KEY) === user.id;
+  const file = outboxLire();
+  for(const item of items) file.push(item);
+  if(!outboxEcrire(file)) return;     // stockage refusé : on garde la file d'avant
+  preloginEcrire([]);
+  outboxSync();
+  const total = items.reduce((a,i)=> a + (i.body.amount || 0), 0);
+  showToast({
+    title: `⏳ ${items.length} saisie(s) hors réseau reprise(s)`,
+    body: `${fmtExact(total)} au total, notée(s) sur ce téléphone avant connexion. POOSSER les envoie maintenant.`
+      + (memeQuAvant ? '' : " Ce téléphone a servi à quelqu'un d'autre avant vous : vérifiez qu'elles sont bien à vous."),
+    tone: memeQuAvant ? 'info' : 'alerte',
+    timeout: memeQuAvant ? 8000 : 0,
+    actions: memeQuAvant ? [] : [
+      { label: 'Ce sont les miennes', primary: true },
+      { label: 'Les retirer', onClick: () => {
+        const cles = new Set(items.map(i=>i.clientKey));
+        outboxEcrire(outboxLire().filter(i => !cles.has(i.clientKey)));
+        outboxSync(); renderAll();
+      } },
+    ],
+  });
+}
+
+(function wireOfflineCapture(){
+  const form = document.getElementById('offlineCaptureForm');
+  if(!form) return;
+  document.getElementById('ocType').addEventListener('change', ()=> setOfflineCapture(true));
+  document.getElementById('ocAmount').addEventListener('input', ()=>{
+    const echo = document.getElementById('ocAmountEcho');
+    const v = parseMontantSaisi(document.getElementById('ocAmount').value);
+    echo.textContent = document.getElementById('ocAmount').value.trim()
+      ? (v === null ? 'Montant non compris — tapez des chiffres.' : fmtExact(v))
+      : '';
+    echo.style.color = v === null && document.getElementById('ocAmount').value.trim() ? 'var(--critical)' : '';
+  });
+  document.getElementById('ocBackToLogin').addEventListener('click', ()=> setOfflineCapture(false));
+  form.addEventListener('submit', (e)=>{
+    e.preventDefault();
+    const amount = parseMontantSaisi(document.getElementById('ocAmount').value);
+    if(amount === null){ flashField('ocAmount'); document.getElementById('ocAmount').focus(); return; }
+    const clientKey = (crypto.randomUUID ? crypto.randomUUID() : 'cle-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    const body = {
+      clientKey,
+      type: document.getElementById('ocType').value,
+      category: document.getElementById('ocCategory').value,
+      amount,
+      occurredOn: document.getElementById('ocDate').value || todayISO(0),
+      // Aucun compte choisi : le serveur rattache au compte par défaut, et
+      // l'opération se corrige une fois connecté.
+      method: 'Espèces',
+      note: document.getElementById('ocNote').value || undefined,
+    };
+    const items = preloginLire();
+    items.push({ clientKey, queuedAt: Date.now(), body });
+    if(!preloginEcrire(items)){
+      showToast({
+        title: '⚠️ Impossible de garder cette dépense ici',
+        body: "Le stockage de ce navigateur refuse d'écrire (navigation privée, ou mémoire pleine). Notez-la ailleurs : POOSSER ne peut pas la garder.",
+        tone: 'alerte',
+      });
+      return;
+    }
+    form.reset();
+    document.getElementById('ocDate').value = todayISO(0);
+    document.getElementById('ocAmountEcho').textContent = '';
+    renderPreloginCount();
+    showToast({
+      title: '⏳ Gardée sur ce téléphone',
+      body: `${fmtExact(amount)} partira dès votre prochaine connexion. Elle sera rattachée à votre compte par défaut : vous pourrez la corriger ensuite.`,
+      timeout: 7000,
+    });
+    document.getElementById('ocAmount').focus();
+  });
+})();
+
 function renderSmsQuota(){
   const el = document.getElementById('smsQuota');
   if(!el) return;
@@ -4851,8 +5326,44 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
       showTxSaved(savedTx);
     }
   } catch(err){
-    // Hors réseau, « Réessayer » rejoue la même saisie : le formulaire a tout
-    // gardé, il n'y a rien à retaper.
+    // Hors réseau sur une NOUVELLE opération : on la met en file plutôt que
+    // de la laisser mourir à l'écran. Une MODIFICATION, elle, ne va pas en
+    // file — elle porte sur une ligne que le serveur connaît déjà, et deux
+    // modifications différées pourraient se contredire ; on se contente alors
+    // de proposer « Réessayer ».
+    if(estPanneReseau(err) && !editingTxId){
+      const miseEnFile = outboxAjouter({
+        type, category: projectId ? undefined : category, amount, occurredOn: date, method,
+        note: note || undefined, projectId, rubriqueId, accountId, fee,
+      });
+      // Le stockage a refusé : on NE vide pas le formulaire et on ne promet
+      // rien. On retombe sur le comportement de maj32, qui au moins ne ment
+      // pas — la saisie reste à l'écran, « Réessayer » est là.
+      if(!miseEnFile){
+        showToast({
+          title: '⚠️ Impossible de garder cette dépense ici',
+          body: "Le stockage de ce navigateur refuse d'écrire (navigation privée, ou mémoire pleine). Votre saisie reste à l'écran : gardez cet écran ouvert et réessayez dès le retour du réseau.",
+          tone: 'alerte',
+          actions: [{ label: 'Réessayer', primary: true, onClick: () => e.target.requestSubmit() }, { label: 'Plus tard' }],
+        });
+        return;
+      }
+      e.target.reset();
+      document.getElementById('txDate').value = todayISO(0);
+      syncTxAmountEcho();
+      populateCategorySelect();
+      populateRubriqueSelectForProject('');
+      populateAccountSelects();
+      syncTxMethodWithAccount();
+      renderAll();
+      showToast({
+        title: '⏳ Gardée pour plus tard',
+        body: `${fmtExact(amount)} est enregistrée sur votre téléphone et compte déjà dans vos totaux. POOSSER l'enverra seul dès le retour du réseau.`,
+        tone: 'alerte',
+        timeout: 8000,
+      });
+      return;
+    }
     reportError("Impossible d'enregistrer la transaction : ", err, () => e.target.requestSubmit());
   } finally {
     if(btn) btn.disabled = false;
@@ -5009,7 +5520,10 @@ function renderTxTable(){
       <td>${t.method}</td>
       <td>${t.note||'—'}</td>
       <td style="text-align:right" class="${t.type==='revenu'?'amt-pos':'amt-neg'}">${t.type==='revenu'?'+':'-'} ${fmt(t.amount)}${feeOf(t.id) ? `<div class="fee-hint">frais ${fmt(feeOf(t.id))}</div>` : ''}</td>
-      <td style="white-space:normal; min-width:260px;">${t.feeParentId ? `
+      <td style="white-space:normal; min-width:260px;">${t.pending ? `
+        <span class="pill" title="Enregistrée sur ce téléphone, pas encore envoyée au serveur">⏳ En attente d'envoi</span>
+        ${t.feeParentId ? '' : `<button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:4px 6px 0 0;" data-outbox-del="${t.id.slice(5)}" title="Retirer cette opération de la file : elle ne sera jamais envoyée">Retirer de la file</button>`}`
+        : t.feeParentId ? `
         <span class="pill" title="Frais payés pour une opération : ils se modifient avec elle">⤷ Frais de l'opération</span>
         <button class="btn btn-ghost" style="padding:5px 10px; font-size:12px; margin:4px 0 0 0;" data-goto-parent="${t.feeParentId}">Voir l'opération</button>` : t.transferId ? `
         <span class="pill" title="Ces frais suivent leur virement : gérez-les depuis l'onglet Comptes">↔ Frais de virement</span>
@@ -5026,6 +5540,12 @@ function renderTxTable(){
   });
   document.querySelectorAll('#txTable [data-goto-parent]').forEach(btn=>{
     btn.addEventListener('click', ()=> revealTxRow(btn.dataset.gotoParent));
+  });
+  document.querySelectorAll('#txTable [data-outbox-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      if(!confirm("Retirer cette opération de la file ?\nElle ne sera jamais envoyée et disparaîtra de vos totaux.")) return;
+      outboxRetirer(btn.dataset.outboxDel);
+    });
   });
 
   document.querySelectorAll('[data-edit]').forEach(btn=>{
@@ -9962,6 +10482,7 @@ function renderAll(){
   renderAssistant();
   renderStats();
   renderBudgetProposalBanner();
+  renderOutboxBanner();
 }
 
 populateCategorySelect();
@@ -10041,6 +10562,10 @@ if ('serviceWorker' in navigator) {
     } catch (err) {
       session = { accessToken: null, refreshToken: null, user: null, cookieMode: false };
       showAuthMsg('');
+      // Le chemin le plus fréquent du quotidien : on ouvre l'application et
+      // il n'y a pas de réseau. Plutôt qu'un écran de connexion muet, on
+      // propose tout de suite de noter la dépense.
+      if (estPanneReseau(err)) offrirSaisieHorsReseau();
     }
   });
 })();
