@@ -33,6 +33,12 @@ export const createTransactionSchema = z.object({
   // une dépense de frais liée. 0 / absent = aucun ; en modification, absent =
   // inchangés, 0 = supprimés.
   fee: z.number().min(0).max(1_000_000_000).optional(),
+  // Clé d'idempotence de la file d'attente hors réseau (migration 039).
+  // Uniquement à la création : rejouer la même clé renvoie l'opération déjà
+  // enregistrée au lieu d'en créer une seconde. Format libre mais borné —
+  // le client y met un UUID ; on n'impose pas le format pour ne pas casser
+  // un client plus ancien ou un autre générateur.
+  clientKey: z.string().trim().min(8).max(128).optional(),
 });
 // note/projectId/rubriqueId sont nullables (en plus d'optionnels) ici pour
 // pouvoir les effacer/détacher explicitement en modification (bouton
