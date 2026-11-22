@@ -22,6 +22,9 @@ export interface TransactionRow {
   transfer_id: string | null;
   // Dépense « frais » d'une opération : l'opération d'origine (migration 031).
   fee_parent_id: string | null;
+  // Clé d'idempotence de la file d'attente hors réseau (migration 039). NULL
+  // pour toute opération saisie en ligne.
+  client_key: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -50,6 +53,10 @@ export interface TransactionInput {
   // Frais payés pour cette opération (0 ou absent = aucun). Enregistrés comme
   // une dépense de frais liée, voir createTransaction.
   fee?: number;
+  // Clé d'idempotence (migration 039) : posée par la file d'attente hors
+  // réseau avant le premier envoi et rejouée à chaque renvoi. Absente pour
+  // une saisie en ligne.
+  clientKey?: string;
 }
 
 // La rubrique n'a de sens qu'à l'intérieur d'un projet donné : on exige donc
@@ -190,6 +197,16 @@ export async function createTransaction(
   userId: string,
   input: TransactionInput,
 ): Promise<{ transaction: TransactionRow; feeTransaction: TransactionRow | null }> {
+  // Rejeu d'une opération déjà passée (migration 039) : la réponse s'est
+  // perdue, le téléphone réessaie avec la même clé. On renvoie ce qui existe
+  // déjà, sans rien créer. Ce contrôle vient AVANT toute validation : une
+  // opération déjà enregistrée n'a pas à être revalidée, et son projet a pu
+  // être supprimé entre-temps.
+  if (input.clientKey) {
+    const deja = await findByClientKey(userId, input.clientKey);
+    if (deja) return deja;
+  }
+
   if (input.projectId) await assertProjectOwnedByUser(userId, input.projectId);
   await assertProjectAndRubriqueConsistent(userId, input.projectId, input.rubriqueId);
   const category = resolveClassement(input.projectId, input.rubriqueId, input.category);
@@ -198,16 +215,50 @@ export async function createTransaction(
     ? (await assertAccountUsable(userId, input.accountId)).id
     : await ensureDefaultAccount(userId);
 
-  return withTransaction(async (client) => {
-    const { rows } = await client.query<TransactionRow>(
-      `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id, account_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [userId, input.type, category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId],
-    );
-    const transaction = rows[0]!;
-    const feeTransaction = input.fee && input.fee > 0 ? await syncFee(client, userId, transaction, input.fee) : null;
-    return { transaction, feeTransaction };
-  });
+  try {
+    return await withTransaction(async (client) => {
+      const { rows } = await client.query<TransactionRow>(
+        `INSERT INTO transactions (user_id, type, category, amount, occurred_on, method, note, project_id, rubrique_id, account_id, client_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [userId, input.type, category, input.amount, input.occurredOn, input.method, input.note ?? null, input.projectId ?? null, input.rubriqueId ?? null, accountId, input.clientKey ?? null],
+      );
+      const transaction = rows[0]!;
+      const feeTransaction = input.fee && input.fee > 0 ? await syncFee(client, userId, transaction, input.fee) : null;
+      return { transaction, feeTransaction };
+    });
+  } catch (err) {
+    // Deux renvois partis en même temps : le premier a gagné la course, le
+    // second heurte l'index unique. Ce n'est pas une erreur du point de vue
+    // de l'utilisateur — son opération est bien enregistrée — donc on lui
+    // renvoie celle qui est passée plutôt qu'un 500.
+    if (input.clientKey && (err as { code?: string }).code === "23505") {
+      const gagnante = await findByClientKey(userId, input.clientKey);
+      if (gagnante) return gagnante;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Retrouve une opération déjà enregistrée sous cette clé, avec ses frais
+ * éventuels — la réponse doit être identique à celle du premier envoi, sans
+ * quoi le client croirait les frais perdus.
+ */
+async function findByClientKey(
+  userId: string,
+  clientKey: string,
+): Promise<{ transaction: TransactionRow; feeTransaction: TransactionRow | null } | null> {
+  const { rows } = await pool.query<TransactionRow>(
+    `SELECT * FROM transactions WHERE user_id = $1 AND client_key = $2`,
+    [userId, clientKey],
+  );
+  const transaction = rows[0];
+  if (!transaction) return null;
+  const fees = await pool.query<TransactionRow>(
+    `SELECT * FROM transactions WHERE user_id = $1 AND fee_parent_id = $2`,
+    [userId, transaction.id],
+  );
+  return { transaction, feeTransaction: fees.rows[0] ?? null };
 }
 
 export async function updateTransaction(
