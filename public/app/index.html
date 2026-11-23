@@ -651,7 +651,13 @@
      suppression fait perdre, ni se laisser tester. */
   #askDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 420px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
   #askDialog::backdrop { background: rgba(8,18,34,.55); }
-  #askDialog .field input { width: 100%; }
+  #askDialog .field input, #askDialog .field select { width: 100%; }
+  #catDialog { border: 0; border-radius: 18px; padding: 22px; width: min(94vw, 460px); max-height: 88vh; overflow-y: auto; background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
+  #catDialog::backdrop { background: rgba(8,18,34,.55); }
+  #catDialog .cat-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--grid); flex-wrap: wrap; }
+  #catDialog .cat-row:last-of-type { border-bottom: 0; }
+  #catDialog .cat-name { font-weight: 600; font-size: 13.5px; flex: 1; min-width: 120px; }
+  #catDialog .cat-usage { font-size: 11.5px; color: var(--text-muted); width: 100%; margin-top: -6px; }
   #askDialog .ask-body { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 6px 0 0; white-space: pre-line; }
   #askDialog .ask-warn { font-size: 12.5px; color: var(--critical); font-weight: 600; margin-top: 10px; }
   #askDialog .ask-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
@@ -2298,6 +2304,18 @@
   </form>
 </dialog>
 
+<!-- Gestion des catégories personnelles (maj35). Les catégories de base n'y
+     figurent pas : elles sont le socle commun des budgets et des comparaisons
+     dans le temps, et ne se renomment pas. -->
+<dialog id="catDialog" aria-labelledby="catDialogTitle">
+  <h3 id="catDialogTitle" style="margin:0 0 4px;">Mes catégories</h3>
+  <p class="sub" id="catDialogSub" style="margin:0 0 12px;">Renommer corrige le nom partout : opérations, budgets, échéances et favoris.</p>
+  <div id="catDialogList"></div>
+  <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+    <button type="button" class="btn btn-primary" id="catDialogClose">Fermer</button>
+  </div>
+</dialog>
+
 <!-- Dialogue maison unique (maj34) : sert aux confirmations ET aux saisies
      d'un texte court, là où l'application appelait confirm() et prompt().
 
@@ -2313,6 +2331,12 @@
     <div class="field" id="askField" style="display:none; margin-top:14px;">
       <label for="askInput" id="askLabel"></label>
       <input type="text" id="askInput" autocomplete="off" maxlength="120">
+    </div>
+    <!-- Choix dans une liste (maj35) : sert à désigner la catégorie vers
+         laquelle réaffecter ce qui portait celle qu'on supprime. -->
+    <div class="field" id="askChoiceField" style="display:none; margin-top:14px;">
+      <label for="askChoice" id="askChoiceLabel"></label>
+      <select id="askChoice"></select>
     </div>
     <div class="ask-warn" id="askWarn" style="display:none;"></div>
     <div class="ask-actions">
@@ -2371,6 +2395,10 @@ const CAT_HEX = { // resolved hex (light) for conic-gradient which can't read CS
 // Budget, Planner) pour créer une catégorie personnalisée sans changer d'écran
 // — voir wireAddCategoryOption() et le bloc CATÉGORIES PERSONNALISÉES plus bas.
 const ADD_CATEGORY_OPTION_VALUE = '__add_category__';
+// Gérer ses catégories (maj35) : renommer celle qu'on a mal orthographiée,
+// supprimer celle qui ne sert plus. Placé dans le menu lui-même, là où le
+// problème se remarque, plutôt que dans un écran à aller chercher.
+const MANAGE_CATEGORY_OPTION_VALUE = '__manage_categories__';
 // Même principe que ci-dessus, pour les rubriques de projet : dans un projet
 // c'est la rubrique qui classe l'opération (migration 037), donc elle doit
 // pouvoir se créer en pleine saisie exactement comme une catégorie.
@@ -3820,7 +3848,12 @@ function askFermer(valeur){
   document.getElementById('askForm').addEventListener('submit', (e)=>{
     e.preventDefault();
     const champ = document.getElementById('askField');
-    if(champ.style.display === 'none'){ askFermer(true); return; }
+    const champChoix = document.getElementById('askChoiceField');
+    if(champ.style.display === 'none'){
+      // Avec une liste de choix, c'est la valeur choisie qui est la réponse.
+      askFermer(champChoix.style.display === 'none' ? true : document.getElementById('askChoice').value);
+      return;
+    }
     const valeur = document.getElementById('askInput').value.trim();
     if(!valeur){ flashField('askField'); document.getElementById('askInput').focus(); return; }
     askFermer(valeur);
@@ -3835,7 +3868,7 @@ function askFermer(valeur){
  * réservé à ce qui ne se défait pas.
  */
 function demander({ titre, corps = '', confirmer = 'Confirmer', annuler = 'Annuler',
-                    danger = false, avertissement = '', saisie = null }){
+                    danger = false, avertissement = '', saisie = null, choix = null }){
   const dlg = document.getElementById('askDialog');
   // Un dialogue déjà ouvert : showModal() lèverait. On refuse plutôt que de
   // fermer celui de l'utilisateur sous ses yeux.
@@ -3852,6 +3885,20 @@ function demander({ titre, corps = '', confirmer = 'Confirmer', annuler = 'Annul
   btn.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
   document.getElementById('askCancel').textContent = annuler;
 
+  // Liste de choix optionnelle (maj35).
+  const champChoix = document.getElementById('askChoiceField');
+  const selChoix = document.getElementById('askChoice');
+  if(choix){
+    champChoix.style.display = '';
+    document.getElementById('askChoiceLabel').textContent = choix.label || '';
+    selChoix.innerHTML = choix.options.map(o =>
+      `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
+    if(choix.valeur) selChoix.value = choix.valeur;
+  } else {
+    champChoix.style.display = 'none';
+    selChoix.innerHTML = '';
+  }
+
   const champ = document.getElementById('askField');
   const input = document.getElementById('askInput');
   if(saisie){
@@ -3863,6 +3910,9 @@ function demander({ titre, corps = '', confirmer = 'Confirmer', annuler = 'Annul
   } else {
     champ.style.display = 'none';
     input.value = '';
+    // On vide aussi l'étiquette : cachée, elle reste lisible par un lecteur
+    // d'écran et par tout ce qui lit le texte du dialogue.
+    document.getElementById('askLabel').textContent = '';
   }
 
   const attente = new Promise(resolve => { askEnCours = resolve; });
@@ -3885,6 +3935,174 @@ async function demanderTexte(options){
   const r = await demander(Object.assign({ confirmer: 'Valider' }, options,
     { saisie: Object.assign({ label: '' }, options.saisie) }));
   return typeof r === 'string' ? r : null;
+}
+
+/* =====================================================================
+   GÉRER SES CATÉGORIES (maj35)
+   =====================================================================
+   Une catégorie mal orthographiée restait dans les menus pour toujours :
+   rien ne permettait de la renommer, et la suppression n'était branchée
+   nulle part côté application.
+
+   Le fond du problème est dans le modèle : une catégorie est recopiée TELLE
+   QUELLE dans quatre tables (opérations, budgets, échéances, favoris). Rien
+   ne relie « Scolarité » le budget à « Scolarité » la catégorie, sinon le
+   mot. Le serveur réécrit donc le mot PARTOUT, en une seule transaction SQL
+   (voir categoryService.renameCategory) — et l'écran l'annonce avant de le
+   faire, parce qu'une correction d'orthographe qui déplace un budget sans
+   prévenir est une mauvaise surprise.
+
+   Décision de Yannis : PAS DE FUSION. Renommer vers un nom déjà pris est
+   refusé, pas deviné. */
+
+function usageEnPhrase(u){
+  const parts = [];
+  if(u.transactions) parts.push(`${u.transactions} opération(s)`);
+  if(u.budgets)      parts.push(`${u.budgets} budget(s)`);
+  if(u.plannerEvents) parts.push(`${u.plannerEvents} échéance(s)`);
+  if(u.favorites)    parts.push(`${u.favorites} favori(s)`);
+  if(!parts.length) return "Utilisée nulle part pour l'instant.";
+  return parts.join(' · ');
+}
+
+async function chargerUsages(){
+  const usages = {};
+  await Promise.all(state.customCategories.map(async (c)=>{
+    try {
+      const { usage } = await apiFetch(`/api/categories/${c.id}/usage`, { auth:true });
+      usages[c.id] = usage;
+    } catch { usages[c.id] = null; }
+  }));
+  return usages;
+}
+
+async function ouvrirGestionCategories(){
+  const dlg = document.getElementById('catDialog');
+  if(!dlg || dlg.open) return;
+  // Même raison : jamais au-dessus d'un dialogue de saisie en cours.
+  if(document.getElementById('askDialog').open) return;
+  const liste = document.getElementById('catDialogList');
+  liste.innerHTML = '<div class="sub">Lecture en cours…</div>';
+  dlg.showModal();
+  document.getElementById('catDialogClose').onclick = ()=> dlg.close();
+  dlg.onclick = (e)=>{ if(e.target === dlg) dlg.close(); };
+  await renderGestionCategories();
+}
+
+async function renderGestionCategories(){
+  const liste = document.getElementById('catDialogList');
+  if(!liste) return;
+  if(!state.customCategories.length){
+    liste.innerHTML = '<div class="sub">Vous n\'avez aucune catégorie personnelle. Les catégories d\'origine ne se renomment pas : elles servent de socle commun à vos budgets et à vos comparaisons dans le temps.</div>';
+    return;
+  }
+  const usages = await chargerUsages();
+  liste.innerHTML = state.customCategories.map(c=>`
+    <div class="cat-row" data-cat-row="${c.id}">
+      <span class="swatch" style="background:${c.color || 'var(--s1)'}"></span>
+      <span class="cat-name">${escapeHtml(c.name)}</span>
+      <button type="button" class="btn btn-ghost" data-cat-rename="${c.id}" style="padding:5px 10px; font-size:12px;">✎ Renommer</button>
+      <button type="button" class="btn-danger" data-cat-del="${c.id}" style="padding:5px 10px; font-size:12px;">Supprimer</button>
+      <div class="cat-usage">${usages[c.id] ? escapeHtml(usageEnPhrase(usages[c.id])) : 'Usage non lu'}</div>
+    </div>`).join('');
+  liste.querySelectorAll('[data-cat-rename]').forEach(b=>
+    b.addEventListener('click', ()=> renommerCategorie(b.dataset.catRename, usages[b.dataset.catRename])));
+  liste.querySelectorAll('[data-cat-del]').forEach(b=>
+    b.addEventListener('click', ()=> supprimerCategorie(b.dataset.catDel, usages[b.dataset.catDel])));
+}
+
+async function renommerCategorie(id, usage){
+  // Un dialogue de saisie déjà ouvert veut dire qu'une action est en cours :
+  // on ne la double pas. Sans ce garde-fou, demander() renverrait null (il
+  // refuse d'empiler) et on rouvrirait la liste PAR-DESSUS le dialogue
+  // ouvert, qui deviendrait inatteignable — plus aucun clic ne passerait.
+  if(document.getElementById('askDialog').open) return;
+  const cat = state.customCategories.find(c=>c.id===id);
+  if(!cat) return;
+  const dlg = document.getElementById('catDialog');
+  dlg.close();   // un seul dialogue à la fois : plus prévisible qu'un empilement
+  const nom = await demanderTexte({
+    titre: `Renommer « ${cat.name} »`,
+    corps: usage && (usage.transactions || usage.budgets || usage.plannerEvents || usage.favorites)
+      ? `${usageEnPhrase(usage)} portent ce nom. Tout sera renommé en même temps : rien ne se détache, rien ne devient orphelin.`
+      : "Cette catégorie n'est utilisée nulle part pour l'instant.",
+    saisie: { label: 'Nouveau nom', valeur: cat.name },
+    confirmer: 'Renommer partout',
+  });
+  if(!nom || nom === cat.name){ await ouvrirGestionCategories(); return; }
+  try {
+    const { category, usage: reecrit } = await apiFetch(`/api/categories/${id}`, { method:'PATCH', auth:true, body:{ name: nom } });
+    // Le nom est recopié dans state.transactions, state.budgets,
+    // state.plannerEvents et state.favorites : on recharge tout plutôt que
+    // de réécrire quatre listes à la main et d'en oublier une.
+    await bootstrapAfterAuth();
+    const total = reecrit.transactions + reecrit.budgets + reecrit.plannerEvents + reecrit.favorites;
+    showToast({
+      title: `✓ Renommée en « ${category.name} »`,
+      body: total ? `${usageEnPhrase(reecrit)} ont été renommés avec elle.` : 'Aucune ligne ne la portait.',
+      timeout: 7000,
+    });
+  } catch(err){
+    if(err && err.code === 'CATEGORY_ALREADY_EXISTS'){
+      showToast({
+        title: `« ${nom} » existe déjà`,
+        body: "POOSSER ne fusionne pas deux catégories : leurs historiques et leurs budgets se mélangeraient. Choisissez un autre nom, ou réaffectez les opérations une par une.",
+        tone: 'alerte',
+      });
+    } else {
+      reportError('Renommage impossible : ', err);
+    }
+  }
+  await ouvrirGestionCategories();
+}
+
+async function supprimerCategorie(id, usage){
+  // Un dialogue de saisie déjà ouvert veut dire qu'une action est en cours :
+  // on ne la double pas. Sans ce garde-fou, demander() renverrait null (il
+  // refuse d'empiler) et on rouvrirait la liste PAR-DESSUS le dialogue
+  // ouvert, qui deviendrait inatteignable — plus aucun clic ne passerait.
+  if(document.getElementById('askDialog').open) return;
+  const cat = state.customCategories.find(c=>c.id===id);
+  if(!cat) return;
+  const dlg = document.getElementById('catDialog');
+  dlg.close();
+  const utilisee = usage && (usage.transactions || usage.plannerEvents || usage.favorites);
+  const autres = [...depenseCategories(), ...revenuCategories()]
+    .filter((v,i,a)=> a.indexOf(v)===i && v.toLowerCase() !== cat.name.toLowerCase());
+
+  let reponse;
+  if(utilisee){
+    reponse = await demander({
+      titre: `Supprimer « ${cat.name} » ?`,
+      corps: `${usageEnPhrase(usage)} la portent.`
+        + (usage.budgets ? `\nSon budget sera supprimé avec elle : une limite fixée pour « ${cat.name} » ne dit rien de ce que devrait être celle d'une autre catégorie.` : ''),
+      choix: { label: 'Reclasser ce qui la portait dans', options: autres.map(v=>({ value:v, label:v })) },
+      confirmer: 'Supprimer et reclasser', danger: true,
+    });
+  } else {
+    reponse = await demanderConfirmation({
+      titre: `Supprimer « ${cat.name} » ?`,
+      corps: "Elle n'est utilisée nulle part : rien ne sera perdu de votre historique.",
+      confirmer: 'Supprimer', danger: true,
+    });
+  }
+  if(!reponse){ await ouvrirGestionCategories(); return; }
+
+  try {
+    const cible = typeof reponse === 'string' ? reponse : null;
+    const res = await apiFetch(`/api/categories/${id}` + (cible ? `?reassignTo=${encodeURIComponent(cible)}` : ''),
+      { method:'DELETE', auth:true });
+    await bootstrapAfterAuth();
+    showToast({
+      title: `✓ « ${cat.name} » supprimée`,
+      body: cible ? `Ce qui la portait est désormais classé dans « ${cible} ».` : 'Elle ne sera plus proposée à la saisie.',
+      timeout: 7000,
+    });
+    void res;
+  } catch(err){
+    reportError('Suppression impossible : ', err);
+  }
+  await ouvrirGestionCategories();
 }
 
 function reportError(prefix, err, retry){
@@ -4374,8 +4592,13 @@ function renderRecentTx(){
 // spéciale "+ Ajouter une catégorie…" — utilisée par les trois formulaires
 // qui proposent une catégorie (Transaction, Budget, Planner).
 function categorySelectOptionsHtml(list){
+  // « Gérer » n'apparaît que si l'utilisateur a des catégories à lui : les
+  // catégories de base ne se renomment pas, proposer un écran vide serait une
+  // fausse piste.
+  const gerer = state.customCategories.length
+    ? `<option value="${MANAGE_CATEGORY_OPTION_VALUE}">⚙ Gérer mes catégories…</option>` : '';
   return list.map(c=>`<option value="${c}">${c}</option>`).join('')
-    + `<option value="${ADD_CATEGORY_OPTION_VALUE}">+ Ajouter une catégorie…</option>`;
+    + `<option value="${ADD_CATEGORY_OPTION_VALUE}">+ Ajouter une catégorie…</option>` + gerer;
 }
 
 // Branche la gestion de l'option "+ Ajouter une catégorie…" sur un <select>
@@ -4396,6 +4619,14 @@ function wireAddCategoryOption(selectEl, refresh, onCreated){
   // à chaque rappel et ferait apparaître l'invite de saisie plusieurs fois.
   let previousValue = selectEl.value;
   selectEl.onchange = async ()=>{
+    if(selectEl.value === MANAGE_CATEGORY_OPTION_VALUE){
+      // On quitte l'option AVANT d'ouvrir l'écran : quoi qu'il arrive
+      // ensuite, le menu ne reste jamais bloqué sur une entrée qui n'est pas
+      // un choix de catégorie.
+      selectEl.value = previousValue;
+      await ouvrirGestionCategories();
+      return;
+    }
     if(selectEl.value !== ADD_CATEGORY_OPTION_VALUE){ previousValue = selectEl.value; return; }
     const name = await demanderTexte({
       titre: 'Nouvelle catégorie',
