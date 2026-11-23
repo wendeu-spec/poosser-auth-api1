@@ -4,7 +4,7 @@ import { validateBody } from "../middleware/validate.js";
 import { Errors } from "../lib/errors.js";
 import { suggestArchetype } from "../lib/projectArchetypes.js";
 import {
-  createTransactionSchema, updateTransactionSchema,
+  createTransactionSchema, updateTransactionSchema, renameCategorySchema,
   createTransactionFavoriteSchema, updateTransactionFavoriteSchema,
   createCategorySchema,
   upsertBudgetSchema,
@@ -161,10 +161,42 @@ businessRouter.post("/categories", validateBody(createCategorySchema), async (re
   const category = await categories.createCategory(req.auth!.userId, req.body.name);
   res.status(201).json({ category });
 });
+/**
+ * Ce qui porte ce nom de catégorie, table par table (maj35). Sert à l'annoncer
+ * AVANT de renommer ou de supprimer : « 1 budget et 3 échéances portent ce
+ * nom » vaut mieux qu'une surprise après coup.
+ */
+businessRouter.get("/categories/:id/usage", async (req, res) => {
+  const id = requireParamId(req.params.id);
+  const all = await categories.listCategories(req.auth!.userId);
+  const found = all.find((c) => c.id === id);
+  if (!found) throw Errors.categoryNotFound();
+  res.json({ usage: await categories.categoryUsage(req.auth!.userId, found.name) });
+});
+/**
+ * Renomme une catégorie personnelle ET toutes les lignes qui la portent
+ * (maj35), dans une seule transaction SQL. Refuse un nom déjà pris : pas de
+ * fusion.
+ */
+businessRouter.patch("/categories/:id", validateBody(renameCategorySchema), async (req, res) => {
+  const id = requireParamId(req.params.id);
+  res.json(await categories.renameCategory(req.auth!.userId, id, req.body.name));
+});
+/**
+ * Supprime une catégorie personnelle. `?reassignTo=<nom>` fait passer ses
+ * opérations, échéances et favoris à une autre catégorie ; sans ce paramètre,
+ * comportement d'origine — les lignes gardent le nom, il n'est simplement
+ * plus proposé à la saisie.
+ */
 businessRouter.delete("/categories/:id", async (req, res) => {
   const id = requireParamId(req.params.id);
-  await categories.deleteCategory(req.auth!.userId, id);
-  res.status(204).send();
+  const reassignTo = typeof req.query.reassignTo === "string" ? req.query.reassignTo : undefined;
+  const result = await categories.deleteCategoryWithReassign(req.auth!.userId, id, reassignTo);
+  // Sans réaffectation, la réponse reste celle d'avant maj35 : 204, sans
+  // corps. Un client plus ancien ne doit pas se mettre à recevoir du JSON là
+  // où il n'en attendait pas.
+  if (!result.reassignedTo) return res.status(204).send();
+  res.json(result);
 });
 
 // ---------------------------------------------------------------------------
