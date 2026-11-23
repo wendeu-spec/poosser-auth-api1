@@ -646,6 +646,19 @@
 
   #pinDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 380px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
   #pinDialog::backdrop { background: rgba(8,18,34,.55); }
+  /* Dialogues maison (maj34) : remplacent confirm() et prompt(), qui ne
+     savent ni se mettre aux couleurs de POOSSER, ni dire ce qu'une
+     suppression fait perdre, ni se laisser tester. */
+  #askDialog { border: 0; border-radius: 18px; padding: 22px; width: min(92vw, 420px); background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 60px -20px rgba(0,0,0,.45); }
+  #askDialog::backdrop { background: rgba(8,18,34,.55); }
+  #askDialog .field input { width: 100%; }
+  #askDialog .ask-body { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 6px 0 0; white-space: pre-line; }
+  #askDialog .ask-warn { font-size: 12.5px; color: var(--critical); font-weight: 600; margin-top: 10px; }
+  #askDialog .ask-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
+  /* .btn-danger est ailleurs un petit bouton de ligne de tableau : dans le
+     dialogue il doit avoir la taille d'un bouton d'action, et se voir. */
+  #askDialog .btn-danger { font-size: 13px; padding: 10px 18px; border-color: var(--critical); font-weight: 600; }
+  @media (max-width: 420px) { #askDialog .ask-actions button { flex: 1 1 auto; } }
   #pinDialog .field input { width: 100%; letter-spacing: .3em; }
 
   .sidebar .brand-mark { box-shadow: 0 0 0 1px rgba(255,255,255,.16); }
@@ -2285,6 +2298,30 @@
   </form>
 </dialog>
 
+<!-- Dialogue maison unique (maj34) : sert aux confirmations ET aux saisies
+     d'un texte court, là où l'application appelait confirm() et prompt().
+
+     Ce que les boîtes du navigateur ne savaient pas faire : se mettre aux
+     couleurs de POOSSER, laisser nommer les boutons (« Supprimer » plutôt
+     que « OK »), distinguer visuellement une action irréversible, valider la
+     saisie, et se laisser tester — Chrome finit d'ailleurs par proposer de
+     « bloquer les dialogues » quand plusieurs s'enchaînent. -->
+<dialog id="askDialog" aria-labelledby="askTitle">
+  <form id="askForm" method="dialog">
+    <h3 id="askTitle" style="margin:0;"></h3>
+    <p class="ask-body" id="askBody"></p>
+    <div class="field" id="askField" style="display:none; margin-top:14px;">
+      <label for="askInput" id="askLabel"></label>
+      <input type="text" id="askInput" autocomplete="off" maxlength="120">
+    </div>
+    <div class="ask-warn" id="askWarn" style="display:none;"></div>
+    <div class="ask-actions">
+      <button type="button" class="btn btn-ghost" id="askCancel">Annuler</button>
+      <button type="submit" class="btn btn-primary" id="askConfirm">Confirmer</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- Barre d'onglets du bas (petits écrans uniquement, voir « Barre d'onglets »
      dans le CSS) : les rubriques les plus utilisées au pouce, et le bouton
      « + » qui ouvre directement la saisie d'une opération. « Menu » ouvre le
@@ -2969,7 +3006,12 @@ async function bootstrapAfterAuth(){
     state.rubriques = rubRes.rubriques.map(mapRubriqueFromApi);
     state.customCategories = catRes.categories.map(mapCategoryFromApi);
   } catch (err) {
-    alert("Vos données n'ont pas pu être chargées : " + authErrorMessage(err) + " — vous pouvez continuer, mais certaines informations manqueront tant que le problème persiste.");
+    showToast({
+      title: '⚠️ Vos données n\'ont pas pu être chargées',
+      body: authErrorMessage(err) + " Vous pouvez continuer à saisir : ce qui manque réapparaîtra dès que la connexion sera rétablie.",
+      tone: 'alerte',
+      actions: [{ label: 'Réessayer', primary: true, onClick: () => bootstrapAfterAuth() }, { label: 'Plus tard' }],
+    });
   }
   // Ce qui attendait depuis la dernière coupure : on le remet à l'écran
   // AVANT tout rendu, puis on tente de l'envoyer en arrière-plan. Sans ce
@@ -3743,6 +3785,108 @@ function estPanneReseau(err){
   // rawApiFetch lève ApiError('NETWORK_ERROR', 0) quand fetch lui-même échoue.
   return !!err && (err.code === 'NETWORK_ERROR' || /Failed to fetch|NetworkError/i.test(err.message || ''));
 }
+/* =====================================================================
+   DIALOGUES MAISON (maj34)
+   =====================================================================
+   `confirm()` et `prompt()` du navigateur ne savent pas : porter les
+   couleurs de POOSSER, nommer leurs boutons (« Supprimer » plutôt que
+   « OK »), signaler qu'une action est irréversible, valider une saisie, ni
+   se laisser jouer par un test. Et Chrome propose de « bloquer les
+   dialogues » dès que plusieurs s'enchaînent — ce qui, sur un écran de
+   suppression, laisse l'utilisateur sans réponse possible.
+
+   Un SEUL dialogue sert aux deux usages, pour n'avoir qu'un comportement à
+   tenir : Échap annule, le clic hors du cadre annule, la touche Entrée
+   confirme, et la promesse se résout toujours — jamais de dialogue qui
+   laisse son appelant suspendu. */
+
+let askEnCours = null;
+
+function askFermer(valeur){
+  const dlg = document.getElementById('askDialog');
+  const resolve = askEnCours;
+  askEnCours = null;
+  if(dlg.open) dlg.close();
+  if(resolve) resolve(valeur);
+}
+
+(function wireAskDialog(){
+  const dlg = document.getElementById('askDialog');
+  if(!dlg) return;
+  document.getElementById('askCancel').addEventListener('click', ()=> askFermer(null));
+  // Échap : `cancel` part aussi quand l'utilisateur clique hors du cadre.
+  dlg.addEventListener('cancel', (e)=>{ e.preventDefault(); askFermer(null); });
+  dlg.addEventListener('click', (e)=>{ if(e.target === dlg) askFermer(null); });
+  document.getElementById('askForm').addEventListener('submit', (e)=>{
+    e.preventDefault();
+    const champ = document.getElementById('askField');
+    if(champ.style.display === 'none'){ askFermer(true); return; }
+    const valeur = document.getElementById('askInput').value.trim();
+    if(!valeur){ flashField('askField'); document.getElementById('askInput').focus(); return; }
+    askFermer(valeur);
+  });
+})();
+
+/**
+ * Ouvre le dialogue et attend la réponse.
+ *
+ * Renvoie `true` (confirmé), le texte saisi, ou `null` (annulé). `danger`
+ * met le bouton de confirmation en rouge et affiche l'avertissement :
+ * réservé à ce qui ne se défait pas.
+ */
+function demander({ titre, corps = '', confirmer = 'Confirmer', annuler = 'Annuler',
+                    danger = false, avertissement = '', saisie = null }){
+  const dlg = document.getElementById('askDialog');
+  // Un dialogue déjà ouvert : showModal() lèverait. On refuse plutôt que de
+  // fermer celui de l'utilisateur sous ses yeux.
+  if(!dlg || dlg.open) return Promise.resolve(null);
+  document.getElementById('askTitle').textContent = titre;
+  const corpsEl = document.getElementById('askBody');
+  corpsEl.textContent = corps;
+  corpsEl.style.display = corps ? '' : 'none';
+  const warn = document.getElementById('askWarn');
+  warn.textContent = avertissement || (danger ? 'Cette action est définitive.' : '');
+  warn.style.display = (danger || avertissement) ? '' : 'none';
+  const btn = document.getElementById('askConfirm');
+  btn.textContent = confirmer;
+  btn.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+  document.getElementById('askCancel').textContent = annuler;
+
+  const champ = document.getElementById('askField');
+  const input = document.getElementById('askInput');
+  if(saisie){
+    champ.style.display = '';
+    document.getElementById('askLabel').textContent = saisie.label || '';
+    input.placeholder = saisie.placeholder || '';
+    input.value = saisie.valeur || '';
+    input.maxLength = saisie.maxLength || 120;
+  } else {
+    champ.style.display = 'none';
+    input.value = '';
+  }
+
+  const attente = new Promise(resolve => { askEnCours = resolve; });
+  dlg.showModal();
+  if(saisie){ input.focus(); input.select(); }
+  // Sur une suppression, le focus part sur « Annuler » : la touche Entrée ne
+  // doit jamais détruire quelque chose par réflexe.
+  else if(danger) document.getElementById('askCancel').focus();
+  else btn.focus();
+  return attente;
+}
+
+/** Confirmation simple. Renvoie true seulement si l'utilisateur confirme. */
+async function demanderConfirmation(options){
+  return (await demander(options)) === true;
+}
+
+/** Saisie d'un texte court. Renvoie le texte, ou null si annulé. */
+async function demanderTexte(options){
+  const r = await demander(Object.assign({ confirmer: 'Valider' }, options,
+    { saisie: Object.assign({ label: '' }, options.saisie) }));
+  return typeof r === 'string' ? r : null;
+}
+
 function reportError(prefix, err, retry){
   if(handlePlanError(err)) return;
   if(estPanneReseau(err)){
@@ -3758,7 +3902,17 @@ function reportError(prefix, err, retry){
     });
     return;
   }
-  alert(prefix + authErrorMessage(err));
+  // Toutes les erreurs passent désormais par la notification maison (maj34) :
+  // elle ne bloque pas l'écran, se met aux couleurs de POOSSER, et peut
+  // porter un « Réessayer » quand l'appelant en fournit un.
+  showToast({
+    title: prefix ? prefix.replace(/\s*[:：]\s*$/, '') : 'Une erreur est survenue',
+    body: authErrorMessage(err),
+    tone: 'alerte',
+    actions: retry
+      ? [{ label: 'Réessayer', primary: true, onClick: retry }, { label: 'Fermer' }]
+      : [{ label: "J'ai compris", primary: true }],
+  });
 }
 
 document.getElementById('planDialogClose').addEventListener('click', () => document.getElementById('planDialog').close());
@@ -4243,7 +4397,11 @@ function wireAddCategoryOption(selectEl, refresh, onCreated){
   let previousValue = selectEl.value;
   selectEl.onchange = async ()=>{
     if(selectEl.value !== ADD_CATEGORY_OPTION_VALUE){ previousValue = selectEl.value; return; }
-    const name = (prompt('Nom de la nouvelle catégorie :') || '').trim();
+    const name = await demanderTexte({
+      titre: 'Nouvelle catégorie',
+      corps: "Elle s'ajoutera à vos catégories et sera proposée partout : opérations, budgets, planner.",
+      saisie: { label: 'Nom de la catégorie', placeholder: 'Ex: Scolarité, Carburant' },
+    });
     if(!name){ selectEl.value = previousValue; return; }
     try {
       const { category } = await apiFetch('/api/categories', { method: 'POST', auth: true, body: { name } });
@@ -4377,7 +4535,11 @@ function wireAddRubriqueOption(sel){
       sel.value = [...sel.options].some(o=>o.value===sel.dataset.lastValue) ? sel.dataset.lastValue : '';
     };
     if(!p){ retour(); return; }
-    const name = (prompt(`Nouvelle rubrique de « ${p.name} » :`) || '').trim();
+    const name = await demanderTexte({
+      titre: `Nouvelle rubrique de « ${p.name} »`,
+      corps: "Elle sera créée au premier niveau du projet. Pour en faire une sous-rubrique ou un frais d'approche, passez ensuite par la fiche du projet.",
+      saisie: { label: 'Nom de la rubrique', placeholder: 'Ex: Fondation, Transport' },
+    });
     if(!name){ retour(); return; }
     // Déjà créée entre-temps (depuis la fiche projet, ou deux saisies de
     // suite) : on la sélectionne au lieu d'en faire un doublon.
@@ -4523,8 +4685,12 @@ function applyFavoriteToForm(fav){
  * un point de friction répété comme la saisie elle-même).
  */
 async function saveTransactionAsFavorite(t){
-  const label = prompt('Nom du favori (ex: "Taxi", "Recharge crédit") :', txClassement(t));
-  if(!label || !label.trim()) return;
+  const label = await demanderTexte({
+    titre: 'Enregistrer comme favori',
+    corps: `${fmtExact(t.amount)} · ${t.category || 'projet'} · ${t.method}. Un tap sur ce favori remplira le formulaire avec ces valeurs.`,
+    saisie: { label: 'Nom du favori', valeur: txClassement(t), placeholder: 'Ex: Taxi, Recharge crédit' },
+  });
+  if(!label) return;
   try {
     const { transactionFavorite } = await apiFetch('/api/transaction-favorites', { method:'POST', auth:true, body:{
       label: label.trim(), type: t.type, category: t.category, amount: t.amount, method: t.method,
@@ -5283,7 +5449,12 @@ document.getElementById('txForm').addEventListener('submit', async (e)=>{
   // demande confirmation avant de créer un doublon.
   const ref = (note.match(/Réf\. ([A-Za-z0-9.\-]{6,})/) || [])[1];
   if(!editingTxId && ref && state.transactions.some(t => (t.note||'').includes('Réf. ' + ref))){
-    if(!confirm(`Une opération avec la référence ${ref} est déjà enregistrée.\nL'enregistrer quand même une seconde fois ?`)) return;
+    const quandMeme = await demanderConfirmation({
+      titre: 'Cette opération a peut-être déjà été enregistrée',
+      corps: `La référence ${ref} figure déjà dans votre historique. Cela arrive quand le même SMS est collé deux fois.`,
+      confirmer: 'Enregistrer quand même', annuler: 'Ne pas enregistrer',
+    });
+    if(!quandMeme) return;
   }
   const btn = e.target.querySelector('button[type="submit"]');
   if(btn) btn.disabled = true;
@@ -5542,8 +5713,14 @@ function renderTxTable(){
     btn.addEventListener('click', ()=> revealTxRow(btn.dataset.gotoParent));
   });
   document.querySelectorAll('#txTable [data-outbox-del]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      if(!confirm("Retirer cette opération de la file ?\nElle ne sera jamais envoyée et disparaîtra de vos totaux.")) return;
+    btn.addEventListener('click', async ()=>{
+      const ok = await demanderConfirmation({
+        titre: 'Retirer cette opération de la file ?',
+        corps: "Elle ne sera jamais envoyée au serveur et disparaîtra de vos totaux.",
+        confirmer: 'Retirer', danger: true,
+        avertissement: "Elle n'est enregistrée nulle part ailleurs : une fois retirée, elle est perdue.",
+      });
+      if(!ok) return;
       outboxRetirer(btn.dataset.outboxDel);
     });
   });
@@ -5602,8 +5779,8 @@ function transactionsTotals(rows){
 
 function exportTransactionsPDF(){
   const rows = filteredTransactionRows();
-  if(!rows.length){ alert('Aucun mouvement à exporter pour ce filtre.'); return; }
-  if(!window.jspdf){ alert("Le générateur PDF n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
+  if(!rows.length){ showToast({ title: 'Rien à exporter', body: "Aucun mouvement ne correspond aux filtres affichés. Retirez un filtre, puis relancez l'export.", timeout: 6000 }); return; }
+  if(!window.jspdf){ showToast({ title: "L'export PDF n'est pas disponible", body: "Le générateur n'a pas pu se charger : il vient d'Internet et votre connexion l'a manqué. Rouvrez POOSSER une fois connecté.", tone: 'alerte' }); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   const today = new Date().toLocaleDateString('fr-FR');
@@ -5644,8 +5821,8 @@ function exportTransactionsPDF(){
 
 function exportTransactionsExcel(){
   const rows = filteredTransactionRows();
-  if(!rows.length){ alert('Aucun mouvement à exporter pour ce filtre.'); return; }
-  if(!window.XLSX){ alert("Le générateur Excel n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
+  if(!rows.length){ showToast({ title: 'Rien à exporter', body: "Aucun mouvement ne correspond aux filtres affichés. Retirez un filtre, puis relancez l'export.", timeout: 6000 }); return; }
+  if(!window.XLSX){ showToast({ title: "L'export Excel n'est pas disponible", body: "Le générateur n'a pas pu se charger : il vient d'Internet et votre connexion l'a manqué. Rouvrez POOSSER une fois connecté.", tone: 'alerte' }); return; }
   const totals = transactionsTotals(rows);
 
   const aoa = [
@@ -6085,7 +6262,13 @@ async function toggleAccountArchived(id, btn){
 
 async function deleteAccountWithConfirm(id, btn){
   const account = accountById(id);
-  if(!account || !confirm(`Supprimer le compte « ${account.name} » ? Il n'a aucun mouvement.`)) return;
+  if(!account) return;
+  const ok = await demanderConfirmation({
+    titre: `Supprimer le compte « ${account.name} » ?`,
+    corps: "Ce compte n'a aucun mouvement : rien ne sera perdu de votre historique.",
+    confirmer: 'Supprimer le compte', danger: true,
+  });
+  if(!ok) return;
   btn.disabled = true;
   try {
     await apiFetch('/api/accounts/' + id, { method:'DELETE', auth:true });
@@ -6108,7 +6291,11 @@ document.getElementById('transferForm').addEventListener('submit', async (e)=>{
   const fee = feeRaw === '' ? 0 : parseFloat(feeRaw);
   const occurredOn = document.getElementById('transferDate').value || todayISO(0);
   const note = document.getElementById('transferNote').value.trim();
-  if(fromAccountId === toAccountId){ alert('Choisissez deux comptes différents.'); return; }
+  if(fromAccountId === toAccountId){
+    showToast({ title: 'Choisissez deux comptes différents', body: "Un virement va d'un compte vers un autre : le compte de départ et celui d'arrivée ne peuvent pas être le même.", tone: 'alerte', timeout: 7000 });
+    flashField('transferFrom'); flashField('transferTo');
+    return;
+  }
   if(!amount || amount <= 0 || Number.isNaN(fee) || fee < 0) return;
   const btn = document.getElementById('transferSubmit');
   btn.disabled = true;
@@ -6130,7 +6317,12 @@ document.getElementById('transferForm').addEventListener('submit', async (e)=>{
 });
 
 async function deleteTransfer(id, btn){
-  if(!confirm('Supprimer ce virement ? Ses frais éventuels seront supprimés avec lui.')) return;
+  const ok = await demanderConfirmation({
+    titre: 'Supprimer ce virement ?',
+    corps: 'Les frais qui lui sont attachés seront supprimés avec lui, et les soldes des deux comptes reviendront à leur état précédent.',
+    confirmer: 'Supprimer le virement', danger: true,
+  });
+  if(!ok) return;
   btn.disabled = true;
   try {
     await apiFetch('/api/transfers/' + id, { method:'DELETE', auth:true });
@@ -7704,7 +7896,14 @@ async function deleteRubriqueWithConfirm(id){
   const childNote = children.length
     ? ` Ses ${children.length} sous-rubrique(s) (${children.map(c=>c.name).join(', ')}) remonteront d'un niveau au lieu d'être supprimées.`
     : '';
-  if(!confirm(`Supprimer la rubrique "${r.name}" ? Les dépenses déjà enregistrées resteront dans le projet, seule l'étiquette de rubrique sera retirée.${childNote}`)) return;
+  const ok = await demanderConfirmation({
+    titre: `Supprimer la rubrique « ${r.name} » ?`,
+    corps: "Les dépenses déjà enregistrées restent dans le projet : seule l'étiquette de rubrique leur est retirée, elles deviennent « Non classé »."
+      + (childNote ? '\n' + childNote.trim() : ''),
+    confirmer: 'Supprimer la rubrique', danger: true,
+    avertissement: "La rubrique elle-même ne se récupère pas, mais aucune dépense n'est perdue.",
+  });
+  if(!ok) return;
   try {
     await apiFetch(`/api/projects/${p.id}/rubriques/${id}`, { method:'DELETE', auth:true });
     const grandparentId = r.parentId;
@@ -7858,7 +8057,13 @@ async function toggleProjectDone(id){
 async function deleteProjectWithConfirm(id){
   const p = projectById(id);
   if(!p) return;
-  if(!confirm(`Supprimer le projet "${p.name}" ? Les mouvements déjà enregistrés resteront dans votre historique général : seule l'étiquette "Projet" sera retirée.`)) return;
+  const ok = await demanderConfirmation({
+    titre: `Supprimer le projet « ${p.name} » ?`,
+    corps: "Les mouvements déjà enregistrés restent dans votre historique général : seule l'étiquette « Projet » leur est retirée. Ses rubriques, en revanche, disparaissent avec lui.",
+    confirmer: 'Supprimer le projet', danger: true,
+    avertissement: "Le projet et ses rubriques ne se récupèrent pas, mais aucun mouvement n'est perdu.",
+  });
+  if(!ok) return;
   try {
     await apiFetch('/api/projects/' + id, { method:'DELETE', auth:true });
     state.projects = state.projects.filter(x=>x.id!==id);
@@ -7904,7 +8109,7 @@ function buildRubriqueBreakdownRows(p, totalOut){
 }
 
 function exportProjectPDF(p, rows){
-  if(!window.jspdf){ alert("Le générateur PDF n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
+  if(!window.jspdf){ showToast({ title: "L'export PDF n'est pas disponible", body: "Le générateur n'a pas pu se charger : il vient d'Internet et votre connexion l'a manqué. Rouvrez POOSSER une fois connecté.", tone: 'alerte' }); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   const today = new Date().toLocaleDateString('fr-FR');
@@ -7974,7 +8179,7 @@ function exportProjectPDF(p, rows){
 }
 
 function exportProjectExcel(p, rows){
-  if(!window.XLSX){ alert("Le générateur Excel n'a pas pu se charger (vérifiez votre connexion internet) — réessayez."); return; }
+  if(!window.XLSX){ showToast({ title: "L'export Excel n'est pas disponible", body: "Le générateur n'a pas pu se charger : il vient d'Internet et votre connexion l'a manqué. Rouvrez POOSSER une fois connecté.", tone: 'alerte' }); return; }
   const stats = projectStats(p.id);
 
   // Même logique (arborescence indentée, montants roulés) que
@@ -8089,7 +8294,11 @@ document.getElementById('tontineForm').addEventListener('submit', async (e)=>{
   const amount = parseFloat(document.getElementById('tonAmount').value);
   const freqLabel = document.getElementById('tonFreq').value;
   const members = document.getElementById('tonMembers').value.split(',').map(s=>s.trim()).filter(Boolean);
-  if(!name || !amount || members.length<2) { alert('Ajoutez au moins 2 membres.'); return; }
+  if(!name || !amount || members.length<2) {
+    showToast({ title: 'Il manque quelque chose', body: "Un groupe a besoin d'un nom, d'un montant de cotisation et d'au moins deux membres séparés par des virgules.", tone: 'alerte', timeout: 8000 });
+    if(!name) flashField('tonName'); else if(!amount) flashField('tonAmount'); else flashField('tonMembers');
+    return;
+  }
   // Réglages « argent réel » (migrations/034). Position vide = je ne me
   // désigne pas : le groupe reste un simple pointage.
   const myPos = parseInt(document.getElementById('tonMyMember').value, 10);
@@ -8648,7 +8857,13 @@ function renderTontines(){
   document.querySelectorAll('[data-del-tontine]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const t = state.tontines.find(x=>x.id===btn.dataset.delTontine);
-      if(!confirm(`Supprimer définitivement le groupe "${t.name}" ? Les membres, les cotisations et tout l'historique des tours seront perdus — contrairement à la suppression d'un projet, cette action ne se contente pas de détacher des données, elle les efface.`)) return;
+      const ok = await demanderConfirmation({
+        titre: `Supprimer définitivement le groupe « ${t.name} » ?`,
+        corps: "Les membres, les cotisations et tout l'historique des tours seront effacés. Contrairement à la suppression d'un projet, celle-ci ne détache pas des données : elle les supprime.",
+        confirmer: 'Supprimer le groupe', danger: true,
+        avertissement: 'Rien de ce groupe ne pourra être retrouvé.',
+      });
+      if(!ok) return;
       btn.disabled = true;
       try {
         await apiFetch('/api/tontines/' + t.id, { method:'DELETE', auth:true });
@@ -9034,7 +9249,10 @@ function wizardDateForDay(day){
 document.getElementById('wizardValidate').addEventListener('click', async ()=>{
   if(!wizardRows.length) return;
   const invalid = wizardRows.find(r=>!r.titre.trim() || !r.montant);
-  if(invalid){ alert('Chaque ligne doit avoir un intitulé et un montant supérieur à 0.'); return; }
+  if(invalid){
+    showToast({ title: 'Une ligne est incomplète', body: `« ${invalid.titre.trim() || 'Ligne sans intitulé'} » : chaque ligne a besoin d'un intitulé et d'un montant supérieur à 0.`, tone: 'alerte', timeout: 8000 });
+    return;
+  }
   const btn = document.getElementById('wizardValidate');
   btn.disabled = true;
   const msgEl = document.getElementById('wizardResultMsg');
@@ -9145,7 +9363,11 @@ function renderBudgetProposalBanner(){
         if(result.autoApplied){
           state.budgetProposal = null;
           renderBudgetProposalBanner();
-          alert(`Le budget de ${monthLabelFr(result.proposal.target_month)} n'a pas été validé à temps : il a été appliqué automatiquement (modifiable à tout moment dans Planner financier et Budget).`);
+          showToast({
+            title: `Le budget de ${monthLabelFr(result.proposal.target_month)} a été appliqué`,
+            body: "Il n'avait pas été validé à temps. Vous pouvez le modifier à tout moment dans Planner financier et Budget.",
+            actions: [{ label: 'Voir le budget', primary: true, onClick: () => switchToView('budget') }, { label: 'Plus tard' }],
+          });
           bootstrapAfterAuth();
         }
       })
