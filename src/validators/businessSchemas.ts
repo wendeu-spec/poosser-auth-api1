@@ -83,6 +83,12 @@ export const updateTransactionFavoriteSchema = createTransactionFavoriteSchema.p
 export const createCategorySchema = z.object({
   name: z.string().trim().min(1).max(60),
 });
+// Renommer une catégorie personnelle (maj35) : mêmes bornes qu'à la création.
+// Le renommage réécrit le nom dans les quatre tables qui le recopient, donc
+// un nom vide ou démesuré y ferait autant de dégâts qu'ailleurs.
+export const renameCategorySchema = z.object({
+  name: z.string().trim().min(1).max(60),
+});
 
 // ---------------------------------------------------------------------------
 // Budgets — définir une limite sur une catégorie existante la met à jour (upsert).
