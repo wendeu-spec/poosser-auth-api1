@@ -23,6 +23,11 @@ export const Errors = {
   rateLimited: (retryAfterSeconds: number) =>
     new AppError("RATE_LIMITED", 429, { retryAfterSeconds }),
   otpInvalid: () => new AppError("OTP_INVALID", 400),
+  // L'envoi du SMS a échoué chez le fournisseur (maj36). 502 et non 500 :
+  // POOSSER va bien, c'est l'intermédiaire qui n'a pas pris le message. Le
+  // détail (crédit épuisé, sender ID refusé) reste dans les journaux serveur,
+  // jamais dans la réponse — il ne regarde pas celui qui s'inscrit.
+  smsSendFailed: () => new AppError("SMS_SEND_FAILED", 502),
   otpTicketInvalid: () => new AppError("OTP_TICKET_INVALID", 400),
   phoneAlreadyRegistered: () => new AppError("PHONE_ALREADY_REGISTERED", 409),
   pinTooWeak: () => new AppError("PIN_TOO_WEAK", 400),
