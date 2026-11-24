@@ -37,6 +37,13 @@ const envSchema = z.object({
   AFRICASTALKING_USERNAME: z.string().optional().default(""),
   AFRICASTALKING_API_KEY: z.string().optional().default(""),
   AFRICASTALKING_SENDER_ID: z.string().optional().default(""),
+  // Adresse de l'API (maj36). Par défaut la production ; le bac à sable
+  // d'Africa's Talking s'utilise avec https://api.sandbox.africastalking.com
+  // et le nom d'utilisateur « sandbox », pour essayer sans dépenser.
+  AFRICASTALKING_BASE_URL: z.string().url().default("https://api.africastalking.com"),
+  // Un fournisseur lent ne doit pas bloquer une inscription indéfiniment :
+  // fetch() n'a aucun délai maximum par défaut.
+  AFRICASTALKING_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(10_000),
   TWILIO_ACCOUNT_SID: z.string().optional().default(""),
   TWILIO_AUTH_TOKEN: z.string().optional().default(""),
   TWILIO_VERIFY_SERVICE_SID: z.string().optional().default(""),
