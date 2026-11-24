@@ -7,6 +7,7 @@ import { checkRateLimit } from "./rateLimiter.js";
 import { smsProvider } from "./sms/index.js";
 import { logSecurityEvent } from "./securityEventService.js";
 import { Errors } from "../lib/errors.js";
+import { logger } from "../lib/logger.js";
 
 export type OtpPurpose = "registration" | "account_recovery";
 
@@ -80,7 +81,24 @@ export async function requestOtp(
       [phoneE164, purpose, codeHash, env.OTP_MAX_ATTEMPTS, expiresAt, ip, userAgent],
     );
 
-    await smsProvider.sendOtp(phoneE164, code, purpose);
+    // Un échec d'envoi doit remonter à l'utilisateur : sans cela il reste
+    // devant l'écran « saisissez votre code » à attendre un SMS qui ne
+    // viendra pas (maj36).
+    //
+    // SAUF pour la récupération de compte. Ce chemin répond volontairement la
+    // MÊME chose que le compte existe ou non (voir shouldActuallySend
+    // au-dessus) : faire remonter l'erreur ici révélerait, pendant une panne
+    // d'envoi, quels numéros ont un compte chez POOSSER. On journalise, et
+    // l'utilisateur redemande un code.
+    try {
+      await smsProvider.sendOtp(phoneE164, code, purpose);
+    } catch (err) {
+      if (purpose === "registration") throw err;
+      logger.error(
+        { purpose, code: (err as { code?: string }).code },
+        "[otpService] envoi du code de récupération échoué — réponse volontairement identique",
+      );
+    }
     await logSecurityEvent({ type: "otp_requested", ip, userAgent, metadata: { purpose } });
   }
 
