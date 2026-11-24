@@ -2575,6 +2575,10 @@ const AUTH_ERROR_MESSAGES = {
   ACCOUNT_LOCKED: "Trop de tentatives : ce compte est temporairement bloqué, réessayez plus tard.",
   PHONE_ALREADY_REGISTERED: "Ce numéro est déjà associé à un compte — essayez de vous connecter plutôt.",
   OTP_INVALID: "Code incorrect ou expiré. Réessayez ou redemandez un code.",
+  // L'envoi du SMS a échoué chez le fournisseur (maj36). On ne dit pas
+  // pourquoi : crédit épuisé ou sender ID refusé ne regardent pas celui qui
+  // s'inscrit, et le détail est dans les journaux du serveur.
+  SMS_SEND_FAILED: "Le code n'a pas pu être envoyé par SMS. Réessayez dans un instant ; si cela persiste, prévenez-nous.",
   OTP_TICKET_INVALID: "La vérification a expiré, merci de redemander un code.",
   PIN_TOO_WEAK: "Ce PIN est trop simple (évitez 123456, une date de naissance, etc.).",
   RATE_LIMITED: "Trop de tentatives, merci de patienter avant de réessayer.",
