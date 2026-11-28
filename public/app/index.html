@@ -3635,7 +3635,12 @@ function openQuickAdd(){
   card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
   setTimeout(()=> document.getElementById('txAmount')?.focus({ preventScroll: true }), 350);
 }
-document.querySelectorAll('#mobileTabbar [data-tab-view]').forEach(t=> t.addEventListener('click', ()=> switchToView(t.dataset.tabView)));
+// Même règle pour la barre d'onglets du bas : « Comptes » y ramène aussi à la
+// liste, sinon le téléphone et l'ordinateur ne se comporteraient pas pareil.
+document.querySelectorAll('#mobileTabbar [data-tab-view]').forEach(t=> t.addEventListener('click', ()=> {
+  retourAccueilDeSection(t.dataset.tabView);
+  switchToView(t.dataset.tabView);
+}));
 document.getElementById('tabQuickAdd').addEventListener('click', openQuickAdd);
 document.getElementById('dashQuickAdd').addEventListener('click', openQuickAdd);
 document.getElementById('tabMenu').addEventListener('click', ()=> setMobileNavOpen(true));
@@ -4223,8 +4228,34 @@ function setMobileNavOpen(open){
 document.getElementById('menuToggle').addEventListener('click', ()=> setMobileNavOpen(!document.body.classList.contains('nav-open')));
 document.getElementById('sidebarOverlay').addEventListener('click', ()=> setMobileNavOpen(false));
 document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && document.body.classList.contains('nav-open')) setMobileNavOpen(false); });
+/**
+ * Cliquer une entrée du menu ramène TOUJOURS à l'accueil de sa section.
+ *
+ * Comptes et Projets sont les deux seules sections à avoir une fiche de
+ * détail. Une fois dedans, on en sortait uniquement par « ← Tous les
+ * comptes » / « ← Tous les projets ». Cliquer « Comptes » dans le menu ne
+ * faisait rien de visible : la vue était déjà active, et la fiche restait
+ * ouverte. Le menu paraissait donc cassé, alors qu'il obéissait.
+ *
+ * La règle est désormais sans exception : une entrée de menu mène à l'accueil
+ * de sa section, qu'on vienne d'ailleurs ou qu'on y soit déjà. Le bouton de
+ * retour reste là pour qui le préfère.
+ *
+ * Volontairement posé sur le CLIC et non dans switchToView() : plusieurs
+ * endroits du code naviguent par programme en ouvrant ensuite une fiche
+ * précise (goToTransactionForm, ouverture d'un projet depuis le tableau de
+ * bord…). Refermer les fiches à l'intérieur de switchToView() irait contre
+ * ces intentions-là.
+ */
+function retourAccueilDeSection(view){
+  if(view === 'comptes' && selectedAccountId) backToAccountList();
+  if(view === 'projets' && selectedProjectId) backToProjectList();
+}
 document.querySelectorAll('.nav-btn').forEach(btn=>{
-  btn.addEventListener('click', ()=>switchToView(btn.dataset.view));
+  btn.addEventListener('click', ()=>{
+    retourAccueilDeSection(btn.dataset.view);
+    switchToView(btn.dataset.view);
+  });
 });
 
 document.getElementById('themeBtn').addEventListener('click', ()=>{
