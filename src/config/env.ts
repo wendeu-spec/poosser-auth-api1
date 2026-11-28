@@ -30,7 +30,11 @@ const envSchema = z.object({
   ARGON2_PIN_PARALLELISM: z.coerce.number().int().positive().default(1),
 
   OTP_LENGTH: z.coerce.number().int().min(4).max(8).default(6),
-  OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // 15 minutes, et non 5 : à l'usage, les personnes peu habituées au
+  // téléphone n'ont pas le temps de passer dans les SMS, lire le code et
+  // revenir. Le risque ne s'allonge pas pour autant — le nombre d'essais est
+  // plafonné par OTP_MAX_ATTEMPTS, pas par la durée.
+  OTP_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
 
   SMS_PROVIDER: z.enum(["console", "africastalking", "twilio"]).default("console"),
