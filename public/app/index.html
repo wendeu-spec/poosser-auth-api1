@@ -248,6 +248,36 @@
   }
   .field input:focus, .field select:focus { outline: 2px solid var(--s1); outline-offset: 1px; }
 
+  /* ---- Formulaire de saisie d'un mouvement ----------------------------
+     Les autres formulaires gardent `align-items: end` : leurs champs ont
+     tous la même hauteur, et le bouton d'envoi se retrouve ainsi aligné sur
+     les contrôles. Celui-ci est le seul dont des cellules sont PLUS HAUTES
+     que les autres — le montant relu sous « Montant », l'explication sous
+     « Rubrique ». Avec `end`, c'est le BAS de la cellule entière qui
+     s'aligne : une cellule plus haute fait donc remonter son contrôle et son
+     libellé au-dessus de ses voisins. D'où la désorganisation visible dès
+     qu'on choisit un projet, car la rubrique apparaît avec son explication.
+
+     On aligne donc par le HAUT : les libellés se retrouvent sur une même
+     ligne, les contrôles aussi, et le texte d'aide descend dans le vide sous
+     sa cellule sans rien déplacer. */
+  #txForm { align-items: start; }
+  /* Sans hauteur minimale, un libellé absent ou replié décalerait son
+     contrôle d'une ligne par rapport aux voisins. */
+  #txForm > .field > label { min-height: 15px; line-height: 1.25; }
+  /* Note et bouton occupent toute la largeur : le nombre de champs visibles
+     change (frais, catégorie, rubrique apparaissent et disparaissent), et
+     sans cette règle la fin du formulaire se retrouvait tantôt au milieu
+     d'une ligne, tantôt à côté d'une cellule vide. */
+  #txForm > .field.tx-full { grid-column: 1 / -1; }
+  #txForm > .field.tx-actions { grid-column: 1 / -1; margin-top: 2px; }
+  /* `align-self` et non `justify-self` : le bouton est l'enfant d'une
+     cellule en flex-column, pas un élément de la grille. */
+  #txForm > .field.tx-actions .btn { align-self: flex-start; min-width: 240px; }
+  @media (max-width: 640px) {
+    #txForm > .field.tx-actions .btn { align-self: stretch; min-width: 0; }
+  }
+
   .filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
   .chip {
     font-size: 12.5px; padding: 6px 12px; border-radius: 100px; border: 1px solid var(--border);
@@ -1143,11 +1173,11 @@
           <select id="txRubrique"><option value="">Aucune rubrique</option></select>
           <div class="sub" style="margin:4px 0 0;">Dans un projet, c'est la rubrique qui classe la dépense — pas la catégorie.</div>
         </div>
-        <div class="field" style="grid-column: span 2;">
+        <div class="field tx-full">
           <label>Note (optionnel)</label>
           <input type="text" id="txNote" placeholder="Ex: Marché du dimanche">
         </div>
-        <div class="field">
+        <div class="field tx-actions">
           <button type="submit" class="btn btn-primary" id="txSubmitBtn">Ajouter le mouvement</button>
         </div>
       </form>
@@ -4727,7 +4757,13 @@ function populateRubriqueSelectForProject(projectId, keepCurrent){
   // classé » : classer doit être le geste naturel, ne pas classer le choix
   // délibéré.
   if(options.length) sel.selectedIndex = 1;
-  if([...sel.options].some(o=>o.value===current)) sel.value = current;
+  // Garde `keepCurrent` et non la valeur elle-même : au changement de projet,
+  // `current` vaut '' — or '' est AUSSI la valeur de « — Non classé — ».
+  // Tester l'appartenance de '' aux options réussissait donc toujours et
+  // écrasait la pré-sélection ci-dessus : l'intention « proposer la première
+  // rubrique » n'avait jamais eu le moindre effet. Avec `keepCurrent`, un
+  // « Non classé » choisi exprès est respecté, et seul lui.
+  if(keepCurrent && [...sel.options].some(o=>o.value===current)) sel.value = current;
   rememberRubriqueChoice(sel);
   wireAddRubriqueOption(sel);
 }
